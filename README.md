@@ -74,6 +74,8 @@ emu-system-i386 -full-screen \
 * Timer-driven scheduling
 * File system experiments
 * Primitive process model
+* Signaling
+* Syscalls
 
 ## Why This Exists
 
