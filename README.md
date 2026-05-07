@@ -17,7 +17,7 @@ If something works, it’s because the CPU executed exactly what was written —
 * Keyboard input via direct hardware handling
 * Command parsing (no libc, no excuses)
 * Command arguments support
-* Fixed command history (256 × 64-byte entries)
+* Fixed command history (128 × 64-byte entries)
 * History navigation (up/down, no wrap-around hacks)
 * Duplicate and empty command filtering
 * Basic memory allocation (manual, predictable, unforgiving)
