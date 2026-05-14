@@ -17,12 +17,13 @@ If something works, it’s because the CPU executed exactly what was written —
 * Keyboard input via direct hardware handling
 * Command parsing (no libc, no excuses)
 * Command arguments support
-* Fixed command history (128 × 64-byte entries)
+* Fixed command history (64 × 64-byte entries)
 * History navigation (up/down, no wrap-around hacks)
 * Duplicate and empty command filtering
-* Basic memory allocation (manual, predictable, unforgiving)
+* Memory (de)allocation
 * Paging (page tables, virtual memory groundwork)
 * Timer interrupt handling (PIT-driven)
+* IDT and "full" interrupt coverage 
 
 ## Design Philosophy
 
@@ -44,8 +45,6 @@ If something works, it’s because the CPU executed exactly what was written —
 ```id="z91kdp"
 /boot        - Bootloader (real mode → protected mode jump)
 /kernel      - Core kernel logic
-/drivers     - Keyboard, display, and future hardware control
-/build       - Binary output
 ```
 
 ## Build & Run
@@ -70,11 +69,8 @@ emu-system-i386 -full-screen \
 
 * Expanded command system
 * Paging and real memory management
-* IDT and full interrupt coverage
+* Full interrupt coverage
 * Timer-driven scheduling
-* File system experiments
-* Primitive process model
-* Signaling
 
 ## Why This Exists
 
