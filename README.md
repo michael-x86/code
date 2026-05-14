@@ -65,13 +65,6 @@ emu-system-i386 -full-screen \
 -device isa-debug-exit,iobase=0xf4,iosize=0x04
 ```
 
-## Roadmap
-
-* Expanded command system
-* Paging and real memory management
-* Full interrupt coverage
-* Timer-driven scheduling
-
 ## Why This Exists
 
 Because understanding modern systems requires going below them. 
