@@ -38,8 +38,7 @@ If something works, it is because the processor executed exactly the instruction
 
 # Filesystem                                                              
                                                                               
-  • **Simple Inode-based FS** - Directory structure with file abstraction     
-  • **File Operations** - Read, list, navigate directories                    
+                
   • **Program Loading** - Execute binaries from disk                          
   • **Path Resolution** - Absolute and relative path support
 ---
@@ -116,7 +115,8 @@ The project is experimental and intentionally low-level.
 
 # Planned Work
 
-- Networking stack
+- Directory structure with file abstraction     
+- Read, list, navigate directories      
 
 ---
 
