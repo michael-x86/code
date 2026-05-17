@@ -1,6 +1,7 @@
 
 
 If you are looking for clean APIs and high-level comfort, this is not it.
+
 If you want to see what the machine is actually doing — instruction by instruction — you're in the right place.
 # x86 Assembly Kernel
 
