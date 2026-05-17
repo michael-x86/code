@@ -91,6 +91,7 @@ The kernel is designed around CPU behavior and hardware constraints rather than 
 ```text
 /boot        - Bootloader and mode transition code
 /kernel      - Core kernel systems
+/bin         - Raw flat binary commands
 ```
 
 ---
