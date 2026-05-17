@@ -100,7 +100,7 @@ The kernel is designed around CPU behavior and hardware constraints rather than 
 ## Requirements
 
 - NASM
-- QEMU```
+- QEMU
 
 ---
 
