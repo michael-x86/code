@@ -32,6 +32,7 @@ The system currently includes:
 - Memory Management - Page-based with bitmap tracking
 - Full IDT setup with IRQ remapping
 - Syscalls (0x80 interface)
+- BuzyBox ~12 commands 
 
 No hidden layers exist between the code and the CPU.
 If something works, it is because the processor executed exactly the instructions written for it.
