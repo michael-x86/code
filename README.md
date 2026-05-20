@@ -40,7 +40,7 @@ If something works, it is because the processor executed exactly the instruction
 # Filesystem                                                              
                                                                               
                 
-  • **Program Loading** - Execute binaries from disk located in /bin
+  • **Program Loading** - Execute binaries from disk
   
   
   • **Path Resolution** - Absolute and relative path support
