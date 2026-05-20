@@ -42,7 +42,6 @@ If something works, it is because the processor executed exactly the instruction
                 
   • **Program Loading** - Execute binaries from disk located in /bin
   
-     ls, cat, cd, pwd
   
   • **Path Resolution** - Absolute and relative path support
 ---
@@ -79,7 +78,7 @@ The kernel is designed around CPU behavior and hardware constraints rather than 
 
 ---
 
-# Technical Notes
+# Technical Notes 
 
 - Language: x86 Assembly (NASM syntax)
 - Architecture: IA-32 / x86
@@ -95,7 +94,8 @@ The kernel is designed around CPU behavior and hardware constraints rather than 
 ```text
 /boot        - Bootloader and mode transition code
 /kernel      - Core kernel systems
-/bin         - Raw flat binary commands
+/bin         - Raw flat binary commands: ls, cat, cd, pwd
+               
 ```
 
 ---
