@@ -40,8 +40,9 @@ If something works, it is because the processor executed exactly the instruction
 # Filesystem                                                              
                                                                               
                 
-  • **Program Loading** - Execute binaries from disk /bin/
-      ls, cat, cd, pwd  
+  • **Program Loading** - Execute binaries from disk located in /bin
+  
+     ls, cat, cd, pwd
   
   • **Path Resolution** - Absolute and relative path support
 ---
