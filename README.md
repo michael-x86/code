@@ -40,7 +40,9 @@ If something works, it is because the processor executed exactly the instruction
 # Filesystem                                                              
                                                                               
                 
-  • **Program Loading** - Execute binaries from disk                          
+  • **Program Loading** - Execute binaries from disk located in /bin
+  
+  
   • **Path Resolution** - Absolute and relative path support
 ---
 
@@ -76,7 +78,7 @@ The kernel is designed around CPU behavior and hardware constraints rather than 
 
 ---
 
-# Technical Notes
+# Technical Notes 
 
 - Language: x86 Assembly (NASM syntax)
 - Architecture: IA-32 / x86
@@ -90,9 +92,9 @@ The kernel is designed around CPU behavior and hardware constraints rather than 
 # Project Structure
 
 ```text
-/boot        - Bootloader and mode transition code
-/kernel      - Core kernel systems
-/bin         - Raw flat binary commands
+/root        - Home directory for the root user
+/etc         - System-wide configuration files
+/bin         - Raw flat binary commands: ls, cat, cd, pwd               
 ```
 
 ---
@@ -116,8 +118,7 @@ The project is experimental and intentionally low-level.
 
 # Planned Work
 
-- Directory structure with file abstraction     
-- Read, list, navigate directories      
+- Directory structure with file abstraction         
 
 ---
 
