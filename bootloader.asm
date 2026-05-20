@@ -1,18 +1,19 @@
 [org 0x7C00]
 
-KERNEL_SECTORS    equ 0x12
+; Constants for memory management and segments
+KERNEL_SECTORS  equ 0x12
 KERNEL_LOAD_SEG   equ 0x1000     
 KERNEL_LOAD_ADDR  equ 0x00100000  ; 1 MB (safe, below 4 MB)
 CODE_SEG          equ 0x08        ; Offset - code segment in GDT
 DATA_SEG          equ 0x10        ; Offset - data segment in GDT
 
 start:
-    cli                         
-    xor ax, ax                    ; Initialize segments to 0
+    cli                         ; Disable interrupts
+    xor ax, ax                  ; Initialize segments to 0
     mov ss, ax
     mov ds, ax
     mov es, ax
-    mov sp, 0x9000                ; safe real-mode stack
+    mov sp, 0x9000              ; safe real-mode stack
 
     mov [BOOT_DRIVE], dl       
 
@@ -23,7 +24,7 @@ start:
     out 0x92, al
     
     ; ---- Load Kernel from Disk ----
-    mov ax,KERNEL_LOAD_SEG      ; Destination segment
+    mov ax,KERNEL_LOAD_SEG     ; Destination segment
     mov es, ax
     xor bx, bx                  ; Destination offset (0)
 
@@ -91,7 +92,7 @@ protected_mode:
     mov fs, ax
     mov gs, ax
     
-    mov esp, 0x90000         ; stack in high memory
+    mov esp, 0x90000      ; stack in high memory
 
     mov esi, 0x00010000      ; source (loaded kernel)
     mov edi, 0x00100000      ; destination (1 MB)
