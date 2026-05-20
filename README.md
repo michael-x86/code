@@ -118,8 +118,7 @@ The project is experimental and intentionally low-level.
 
 # Planned Work
 
-- Directory structure with file abstraction     
-- Read, list, navigate directories      
+- Directory structure with file abstraction         
 
 ---
 
