@@ -92,10 +92,9 @@ The kernel is designed around CPU behavior and hardware constraints rather than 
 # Project Structure
 
 ```text
-/boot        - Bootloader and mode transition code
-/kernel      - Core kernel systems
-/bin         - Raw flat binary commands: ls, cat, cd, pwd
-               
+/root        - Home directory for the root user
+/etc         - System-wide configuration files
+/bin         - Raw flat binary commands: ls, cat, cd, pwd               
 ```
 
 ---
