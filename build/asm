@@ -31,6 +31,7 @@ EOF
 done
 
 mkdir -p etc bin proc var/log usr dev lib
+mkdir -p commands
 
 echo "[1/6] Building commands..."
 for p in "${COMMANDS[@]}"; do
