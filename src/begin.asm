@@ -1,0 +1,138 @@
+[org 0xC0100000]
+
+CODE_SEG          equ 0x08        ; Offset - code seg in GDT
+DATA_SEG          equ 0x10        ; Offset - data seg in GDT
+
+PROG_LOAD_ADDR equ 0xC0700000
+
+%define V2P(x) (x-0xC0000000)
+
+kernel_phys_start equ V2P(start)
+kernel_phys_end   equ V2P(page_bitmap+32768)
+
+global start
+
+bits 32
+
+start:
+    cli
+    mov ax,DATA_SEG
+    mov ds,ax
+    mov es,ax
+    mov ss,ax
+    mov fs,ax
+    mov gs,ax
+
+    mov esp,V2P(stack_top)
+    mov ebp,esp
+    call setup_paging   ;Building the matrix
+    
+; -----------------------------------------
+; page directory entries
+; MUST be PHYSICAL addresses
+; -----------------------------------------
+
+setup_paging:
+    pushad
+    ; clear page directory
+    mov edi,V2P(page_directory)
+    xor eax,eax
+    mov ecx,1024
+.clear_pd:
+    mov [edi],eax
+    add edi,4
+    loop .clear_pd
+
+    mov edi,V2P(second_page_table)
+    mov eax,0x00400000
+    mov ecx,1024
+.loop2:
+    mov ebx,eax
+    or ebx,3
+    mov [edi],ebx
+    add eax,0x1000
+    add edi,4
+    loop .loop2
+
+    ; identity map first 4MB
+    mov edi,V2P(first_page_table)
+    xor ebx,ebx
+    mov ecx,1024
+    
+.make_identity:
+    mov eax,ebx
+    or eax,3
+    mov [edi],eax
+    add ebx,4096
+    add edi,4
+    loop .make_identity
+    
+    ; PDE[0] -> first PT
+    mov eax,V2P(first_page_table)
+    or  eax,3
+    mov [V2P(page_directory)+(0*4)],eax
+    mov [V2P(page_directory)+(768*4)],eax
+
+    ; PDE[1] -> second PT
+    mov eax,V2P(second_page_table)
+    or  eax,3
+    mov [V2P(page_directory)+(1*4)],eax
+    mov [V2P(page_directory)+(769*4)],eax
+
+    ; PDE[2] -> page_table_0
+    mov eax,V2P(page_table_0)
+    or  eax,3
+    mov [V2P(page_directory)+(2*4)],eax
+    mov [V2P(page_directory)+(770*4)],eax
+
+    ; PDE[3] -> page_table_1
+    mov eax,V2P(page_table_1)
+    or  eax,3
+    mov [V2P(page_directory)+(3*4)],eax
+    mov [V2P(page_directory)+(771*4)],eax
+
+    ; PDE[4] -> page_table_2
+    mov eax,V2P(page_table_2)
+    or  eax,3
+    mov [V2P(page_directory)+(4*4)],eax
+    mov [V2P(page_directory)+(772*4)],eax
+    mov eax,V2P(page_directory)
+    mov cr3,eax
+    
+    ; enable paging
+    mov eax,cr0
+    or eax,0x80000000
+    mov cr0,eax
+    
+    mov eax, higher_half
+    jmp eax
+
+;Ascending to 3GB+ heaven where kernel gods reside
+higher_half:
+    call reserve_kernel_pages
+    popad
+    mov esp,stack_top
+    mov ebp,esp
+    jmp kernel_main
+
+;Saving our own soul from the page allocator's greed
+reserve_kernel_pages:
+    push eax
+    push ebx
+    mov eax,kernel_phys_start
+    and eax,0FFFFF000h
+    mov ebx,kernel_phys_end
+    add ebx,0FFFh
+    and ebx,0FFFFF000h
+.reserve_loop:
+    cmp eax,ebx
+    jae .done
+    push eax
+    call set_page_used
+    pop eax
+    add eax,4096
+    jmp .reserve_loop
+.done:
+    pop ebx
+    pop eax
+    ret
