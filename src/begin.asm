@@ -1,4 +1,3 @@
-;### part 1 ###
 [org 0xC0100000]
 
 CODE_SEG          equ 0x08        ; Offset - code seg in GDT
