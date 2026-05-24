@@ -2687,6 +2687,108 @@ sys_unlink:
     mov eax, -1
     ret
 
+sys_mkdir:
+    push esi
+    push edi
+    push ebx
+    push ecx
+    mov edi, resolve_buf
+    call fs_resolve
+    mov esi, resolve_buf
+    call fs_lookup
+    test eax, eax
+    jnz .err                     ; already exists
+    mov edi, fs_entries
+    mov ecx, FS_COUNT
+.scan:
+    test ecx, ecx
+    jz .err
+    cmp byte [edi], 0
+    je .got
+    add edi, FS_REC_SIZE
+    dec ecx
+    jmp .scan
+.got:
+    mov ebx, edi
+    mov esi, resolve_buf
+.cp:
+    lodsb
+    stosb
+    test al, al
+    jnz .cp
+    mov dword [ebx + FS_NAME_LEN],     0   ; type = dir
+    mov dword [ebx + FS_NAME_LEN + 8], 0   ; size = 0
+    mov eax, ebx
+    call persist_entry
+    pop ecx
+    pop ebx
+    pop edi
+    pop esi
+    xor eax, eax
+    ret
+.err:
+    pop ecx
+    pop ebx
+    pop edi
+    pop esi
+    mov eax, -1
+    ret
+
+
+sys_rmdir:
+    push esi
+    push edi
+    push ebx
+    push ecx
+    mov edi, resolve_buf
+    call fs_resolve
+    mov esi, resolve_buf
+    call fs_lookup
+    test eax, eax
+    jz .err
+    cmp dword [eax + FS_NAME_LEN], 0    ; must be type dir
+    jne .err
+    ; check empty: no entry in fs_entries has resolved path as parent
+    push eax
+    mov edi, resolve_buf                 ; use as cwd for check
+    mov esi, fs_entries
+    mov ecx, FS_COUNT
+.chk:
+    test ecx, ecx
+    jz .empty
+    call basename_if_child
+    test eax, eax
+    jnz .notempty
+    add esi, FS_REC_SIZE
+    dec ecx
+    jmp .chk
+.notempty:
+    pop eax
+    pop ecx
+    pop ebx
+    pop edi
+    pop esi
+    mov eax, -1
+    ret
+.empty:
+    pop eax                              ; eax = entry ptr
+    mov byte [eax], 0
+    mov dword [eax + FS_NAME_LEN], 0
+    call persist_entry
+    pop ecx
+    pop ebx
+    pop edi
+    pop esi
+    xor eax, eax
+    ret
+.err:
+    pop ecx
+    pop ebx
+    pop edi
+    pop esi
+    mov eax, -1
+    ret
+
 ; ---------------------------------------------------------
 ;  VFS helpers
 ; ---------------------------------------------------------
@@ -3189,6 +3291,8 @@ syscall_table:
     dd sys_create        ; 17: esi = path -> eax = 0/-1
     dd sys_write         ; 18: esi = path, ebx = buf, ecx = n -> eax = 0/-1
     dd sys_unlink        ; 19: esi = path -> eax = 0/-1
+    dd sys_mkdir         ; 20: esi = path -> eax = 0/-1
+    dd sys_rmdir         ; 20: esi = path -> eax=n 0/-1
 SYSCALL_COUNT equ ($-syscall_table)/4
 
 section .rodata
