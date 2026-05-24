@@ -199,7 +199,7 @@ If it is not explicitly written, it does not exist.
 
 ## Instruction-Level Control
 
-Every register, flag, interrupt frame, and memory mapping is intentional.
+Every register, flag, interrupt frame, and memory mapping is what it is...
 
 ## Hardware-First Engineering
 
