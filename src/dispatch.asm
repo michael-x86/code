@@ -225,36 +225,55 @@ scroll:
 get_key:
     mov eax,[kbd_tail]
     cmp eax,[kbd_head]
-    je .empty            ; buffer
+    je .empty
     mov bl,[kbd_buf+eax]
     inc eax
-    and eax,255          
+    and eax,255
     mov [kbd_tail],eax
     mov al,bl
     test al,al
-    jz  .done
-
-    cmp al,0x48   ;up
-    jne .nxt
+    jz .empty
+    ; -------------------------
+    ; arrow up
+    ; -------------------------
+    cmp al,0x48
+    jne .check_down
     call hist_back
     xor al,al
     ret
-.nxt:
-    cmp al,0x50   ;down
-    jne .cont
+.check_down:
+    ; -------------------------
+    ; arrow down
+    ; -------------------------
+    cmp al,0x50
+    jne .translate
     call hist_frwd
     xor al,al
     ret
-
-.cont:
-    jae .invalid 
+.translate:
+    cmp al,0x01
+    je  shutdown         ;escape key
+    ; reject invalid scancodes
+    cmp al,128
+    jae .invalid
     movzx eax,al
-    mov al,[keymap+eax]   ; convert to ASCII
-    ret                   ; need for improvment
+    ; -------------------------
+    ; choose keymap
+    ; -------------------------
+    cmp byte [kbd_shift],0
+    jne .shifted
+.normal:
+    mov al,[keymap+eax]
+    ret
+.shifted:
+    mov al,[keymap_shift+eax]
+    ret
 .empty:
     xor al,al
-.done:
     ret
 .invalid:
-    mov al,'?'  ;Sucks
-    jmp .done
+    mov al,'?'
+    ret
+
+
+    
