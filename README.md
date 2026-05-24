@@ -148,17 +148,24 @@ The build script backs up the FS region before reassembling the kernel and resto
 
 ## Userland programs (`/bin/`)
 
-| Program | Description                                                |
-|---------|------------------------------------------------------------|
+| Program | Description                                                | 
+|---------|------------------------------------------------------------| 
 | `pwd`   | print working directory                                    |
 | `ls`    | list current directory                                     |
-| `cd <path>` | absolute, `.`, `..`, or a single relative name         |
-| `cat <file>` | print file contents (renders `\n` and `\t`)           |
+| `cd <path>` | absolute, `.`, `..`, or a single relative name         | 
+| `cat <file>` | print file contents (renders `\n` and `\t`)           | 
+| `write <file> <text...>`                                             |                                                                      
+| `mkdir <name>` | creates an empty directory                          | 
+| `rmdir <name>` | removes an empty directory                            |
+| `cp <src> <dest>` | copy a file src dest                             | 
+| `mv <src> <dest>` | a file src dest                                  |
 | `touch <file>` | create an empty file                                |
 | `write <file> <text...>` | join args with spaces, append `\n`, write |
 | `rm <file>` | unlink a regular file                                  |
 | `ping`  | int 0x80 liveness test                                     |
 | `vi <file>` | minimal editor — `HJKL` as in the good ol' days  |
+
+
 
 ## Debugging with GDB
 
