@@ -1,24 +1,20 @@
-; -----------------------------------
-;  ping - calls kernel via int 0x80
-;  loaded at 0xC0700000 by try_disk_load
-; -----------------------------------
 [bits 32]
 [org 0xC0700000]
 
 _start:
-    mov esi, msg
-    mov eax, 2           ; sys_print_cr
+    mov esi,msg
+    mov eax,2           ; sys_print_cr
     int 0x80
 
-    mov eax, 8           ; sys_get_tick -> eax
-    int 0x80
-    mov ebx, eax
-    mov esi, tick_msg
-    mov eax, 1           ; sys_print
-    int 0x80
-    mov eax, 5           ; sys_print_hex (ebx)
-    int 0x80
-    mov eax, 3           ; sys_newline
+    ;mov eax,8           ; sys_get_tick -> eax
+    ;int 0x80
+    ;mov ebx,eax
+    ;mov esi,tick_msg
+    ;mov eax,1           ; sys_print
+    ;int 0x80
+    ;mov eax,5           ; sys_print_hex (ebx)
+    ;int 0x80
+    mov eax,3           ; sys_newline
     int 0x80
     ret
 
