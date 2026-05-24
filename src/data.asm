@@ -6,7 +6,7 @@ deadbeef  db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF
 help_lbl db 13," ---     BuzyBox     ---",13,13
         db "peek  -  at 16 bytes @ esi",13
         db "regs  -  cpu registers",13
-        db "stack -  16 longwords",13
+        db "stack -  top of stack",13
         db "alloc -  4KB chunks",13
         db "free  -  relase a chunk",13
         db "heap  -  current heap",13
@@ -102,16 +102,31 @@ SYSCALL_COUNT equ ($-syscall_table)/4
 
 ;---- Keycode -> ASCII Convertion ----
 section .rodata
-keymap:                    ;terrible 
-    db 0,27,'1','2','3','4','5','6','7','8','9','0','-','=',8,9
-    db 'q','w','e','r','t','y','u','i','o','p','[',']',13,0
-    db 'a','s','d','f','g','h','j','k','l',';',39,'`',0,'\'
-    db 'z','x','c','v','b','n','m',',','.','/',0,'*',0,' '
-    times 0x3B-($-keymap) db 0     ; F1 - really bad choice
-    db '<' 
-    times 0x3C-($-keymap) db 0     ; F2
-    db '>'                        
-    times 256-($-keymap)  db 0      ;
+keymap:
+    db 0,27,'1','2','3','4','5','6','7','8'
+    db '9','0','-','=',8,9
+    db 'q','w','e','r','t','y','u','i'
+    db 'o','p','[',']',13,0
+    db 'a','s','d','f','g','h','j','k'
+    db 'l',';',39,'`',0,'\'
+    db 'z','x','c','v','b','n','m'
+    db ',','.','/',0,'*',0,' '
+    times 0x3B-($-keymap) db 0     ; F1
+    db '<'
+    times 256-($-keymap) db 0
+
+keymap_shift:
+    db 0,27,'!','@','#','$','%','^','&','*'
+    db '(' ,')','_','+',8,9
+    db 'Q','W','E','R','T','Y','U','I'
+    db 'O','P','{','}',13,0
+    db 'A','S','D','F','G','H','J','K'
+    db 'L',':','"', '~',0,'|'
+    db 'Z','X','C','V','B','N','M'
+    db '<','>','?',0,'*',0,' '
+    times 0x3B-($-keymap_shift) db 0     ; F1
+    db '<'
+    times 256-($-keymap_shift) db 0
 
 ; --------------------------------------------------
 ; format: db "command",0 
