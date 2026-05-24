@@ -45,17 +45,44 @@ irq0:
 
 irq1:
     pushad
-    in   al,0x60             ; read scancode 
-    test al,0x80             ; break code?
-    jnz  .done         
-    mov  ebx,[kbd_head]
-    mov  [kbd_buf+ebx],al
-    inc  ebx
-    and  ebx,255             
-    mov  [kbd_head],ebx
+    in al,0x60
+    mov bl,al
+    ; -------------------------
+    ; left/right shift press
+    ; -------------------------
+    cmp bl,0x2A
+    je .shift_on
+    cmp bl,0x36
+    je .shift_on
+    ; -------------------------
+    ; left/right shift release
+    ; -------------------------
+    cmp bl,0xAA
+    je .shift_off
+    cmp bl,0xB6
+    je .shift_off
+    ; -------------------------
+    ; ignore all key releases
+    ; -------------------------
+    test bl,0x80
+    jnz .done
+    ; -------------------------
+    ; store key press
+    ; -------------------------
+    mov eax,[kbd_head]
+    mov [kbd_buf+eax],bl
+    inc eax
+    and eax,255
+    mov [kbd_head],eax
+    jmp .done
+.shift_on:
+    mov byte [kbd_shift],1
+    jmp .done
+.shift_off:
+    mov byte [kbd_shift],0
 .done:
-    mov  al,0x20
-    out  0x20,al             ; send EOI to master
+    mov al,0x20
+    out 0x20,al
     popad
     iretd
 
