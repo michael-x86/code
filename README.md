@@ -62,7 +62,7 @@ Requires `nasm`, `python3`, `qemu-system-i386`.
 ├── commands/                # userland program sources
 │   ├── pwd.asm  ls.asm  cd.asm  cat.asm
 │   ├── touch.asm  write.asm  rm.asm
-│   ├── ping.asm  vi.asm
+│   ├── ping.asm  vi.asm mkdir.asm (and then some...)
 ├── bin/                     # compiled userland (no extension)
 ├── proc/    var/log/        # /proc, /var/log content (host-side mirror)
 └── etc/  usr/  dev/  lib/
@@ -105,7 +105,8 @@ Programs are capped at 4 KB. Larger scratch buffers should live at fixed virtual
 | 17 | create    | esi = path                 | 0 / -1                           |
 | 18 | write     | esi = path, ebx = buf, ecx = n | 0 / -1                       |
 | 19 | unlink    | esi = path                 | 0 / -1                           |
-
+| 20 | sys_mkdir | esi = path                 | 0 / -1                           |
+| 21 | sys_rmdir | esi = path                 | 0 / -1                           |
 Syscalls run with interrupts off (interrupt gate), so the PIT cannot preempt them.
 
 ## How persistence "works" ;-)
@@ -147,17 +148,24 @@ The build script backs up the FS region before reassembling the kernel and resto
 
 ## Userland programs (`/bin/`)
 
-| Program | Description                                                |
-|---------|------------------------------------------------------------|
+| Program | Description                                                | 
+|---------|------------------------------------------------------------| 
 | `pwd`   | print working directory                                    |
 | `ls`    | list current directory                                     |
-| `cd <path>` | absolute, `.`, `..`, or a single relative name         |
-| `cat <file>` | print file contents (renders `\n` and `\t`)           |
+| `cd <path>` | absolute, `.`, `..`, or a single relative name         | 
+| `cat <file>` | print file contents (renders `\n` and `\t`)           | 
+| `write <file> <text...>`                                             |                                                                      
+| `mkdir <name>` | creates an empty directory                          | 
+| `rmdir <name>` | removes an empty directory                            |
+| `cp <src> <dest>` | copy a file src dest                             | 
+| `mv <src> <dest>` | a file src dest                                  |
 | `touch <file>` | create an empty file                                |
 | `write <file> <text...>` | join args with spaces, append `\n`, write |
 | `rm <file>` | unlink a regular file                                  |
 | `ping`  | int 0x80 liveness test                                     |
 | `vi <file>` | minimal editor — `HJKL` as in the good ol' days  |
+
+
 
 ## Debugging with GDB
 
@@ -191,7 +199,7 @@ If it is not explicitly written, it does not exist.
 
 ## Instruction-Level Control
 
-Every register, flag, interrupt frame, and memory mapping is intentional.
+Every register, flag, interrupt frame, and memory mapping is what it is...
 
 ## Hardware-First Engineering
 
