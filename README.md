@@ -62,7 +62,7 @@ Requires `nasm`, `python3`, `qemu-system-i386`.
 ├── commands/                # userland program sources
 │   ├── pwd.asm  ls.asm  cd.asm  cat.asm
 │   ├── touch.asm  write.asm  rm.asm
-│   ├── ping.asm  vi.asm
+│   ├── ping.asm  vi.asm (and the some...)
 ├── bin/                     # compiled userland (no extension)
 ├── proc/    var/log/        # /proc, /var/log content (host-side mirror)
 └── etc/  usr/  dev/  lib/
