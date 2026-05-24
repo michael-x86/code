@@ -605,7 +605,7 @@ banner:
 cls:                       
     mov edi,0xC00B8000     ; VGA text memory
     mov ecx,80*25/2        ; 80x25 characters
-    mov eax,0x07200720     ; green+space
+    mov eax,0x00200020
     rep stosd
     xor eax,eax
     mov [cursor_pos],eax
