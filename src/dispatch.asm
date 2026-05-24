@@ -275,5 +275,14 @@ get_key:
     mov al,'?'
     ret
 
+; --- The final curtain call    ---
+; --- powering down the theater ---
+shutdown:
+    cli
+    mov dx,0xF4
+    mov al,0
+    out dx,al
+    hlt
+    ret
 
     
