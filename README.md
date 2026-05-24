@@ -105,7 +105,8 @@ Programs are capped at 4 KB. Larger scratch buffers should live at fixed virtual
 | 17 | create    | esi = path                 | 0 / -1                           |
 | 18 | write     | esi = path, ebx = buf, ecx = n | 0 / -1                       |
 | 19 | unlink    | esi = path                 | 0 / -1                           |
-
+| 20 | sys_mkdir | esi = path                 | 0 / -1                           |
+| 21 | sys_rmdir | esi = path                 | 0 / -1                           |
 Syscalls run with interrupts off (interrupt gate), so the PIT cannot preempt them.
 
 ## How persistence "works" ;-)
