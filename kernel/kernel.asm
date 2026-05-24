@@ -176,9 +176,8 @@ kernel_main:
 
     call init_tasks
     sti 
-    mov [task0_esp], esp
-    mov esp, [task0_esp]
-    mov dword [current_task], 0
+    mov esp,[task0_esp]
+    mov dword [current_task],0
     popad
     iretd           ; jumps to task0_entry
 
@@ -674,8 +673,8 @@ get_key:
     xor al,al
     ret
 .translate:
-    cmp al,0x01
-    je  shutdown         ;escape key
+    ;cmp al,0x01          ; breaks vi
+    ;je  shutdown         ;escape key
     ; reject invalid scancodes
     cmp al,128
     jae .invalid   ; Work to be done...
@@ -3292,13 +3291,12 @@ syscall_table:
     dd sys_write         ; 18: esi = path, ebx = buf, ecx = n -> eax = 0/-1
     dd sys_unlink        ; 19: esi = path -> eax = 0/-1
     dd sys_mkdir         ; 20: esi = path -> eax = 0/-1
-    dd sys_rmdir         ; 20: esi = path -> eax=n 0/-1
+    dd sys_rmdir         ; 21: esi = path -> eax=n 0/-1
 SYSCALL_COUNT equ ($-syscall_table)/4
 
 section .rodata
 
 ;---- Keycode -> ASCII Convertion ----
-
 
 ; -----------------------------------------
 ; normal keymap
