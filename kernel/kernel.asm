@@ -22,10 +22,16 @@ start:
     mov ss,ax
     mov fs,ax
     mov gs,ax
+
     mov esp,V2P(stack_top)
     mov ebp,esp
+    
+; -----------------------------------------
+; page directory entries
+; MUST be PHYSICAL addresses
+; -----------------------------------------
 
-    ; clear page directory
+    pushad
     mov edi,V2P(page_directory)
     xor eax,eax
     mov ecx,1024
@@ -34,7 +40,7 @@ start:
     add edi,4
     loop .clear_pd
 
-    mov edi,V2P(kernel_low_page_table) 
+    mov edi,V2P(kernel_low_page_table)
     mov eax,0x00400000
     mov ecx,1024
 .loop2:
@@ -46,7 +52,7 @@ start:
     loop .loop2
 
     ; identity map first 4MB
-    mov edi,V2P(identity_page_table)  
+    mov edi,V2P(identity_page_table) 
     xor ebx,ebx
     mov ecx,1024
     
@@ -58,26 +64,31 @@ start:
     add edi,4
     loop .make_identity
     
+    ; PDE[0] 
     mov eax,V2P(identity_page_table) 
     or  eax,3
     mov [V2P(page_directory)+(0*4)],eax
     mov [V2P(page_directory)+(768*4)],eax
 
+    ; PDE[1] 
     mov eax,V2P(kernel_low_page_table)
     or  eax,3
     mov [V2P(page_directory)+(1*4)],eax
     mov [V2P(page_directory)+(769*4)],eax
 
+    ; PDE[2] 
     mov eax,V2P(heap_page_table_0)
     or  eax,3
     mov [V2P(page_directory)+(2*4)],eax
     mov [V2P(page_directory)+(770*4)],eax
 
+    ; PDE[3] 
     mov eax,V2P(heap_page_table_1)
     or  eax,3
     mov [V2P(page_directory)+(3*4)],eax
     mov [V2P(page_directory)+(771*4)],eax
 
+    ; PDE[4] 
     mov eax,V2P(heap_page_table_2)
     or  eax,3
     mov [V2P(page_directory)+(4*4)],eax
@@ -93,14 +104,16 @@ start:
     mov eax,higher_half
     jmp eax
 
-;Ascending to 3GB+ heaven where kernel gods reside
 higher_half:
     call reserve_kernel_pages
+    popad
     mov esp,stack_top
     mov ebp,esp
     jmp kernel_main
 
+
 ;Saving our own soul from the page allocator's greed
+;----------------------.-----------------------------
 reserve_kernel_pages:
     push eax
     push ebx
@@ -131,11 +144,11 @@ kernel_main:
     call set_syscall
     lidt [idt_descriptor]
     call pic_remap
-    call set_freq       ; 100 hz.
+    call set_freq       ; 100 hz. 
 
-    mov edi,cwd_buf
-    mov ecx,128
-    xor eax,eax
+    mov edi, cwd_buf
+    mov ecx, 128
+    xor eax, eax
     rep stosb
     mov byte [cwd_buf],'/'
 
@@ -149,24 +162,29 @@ kernel_main:
 
     call init_tasks
     sti 
+    mov [task0_esp],esp
     mov esp,[task0_esp]
     mov dword [current_task],0
     popad
-    iretd     ; jumps to task0_entry
+    iretd           ; jumps to task0_entry
 
 ; task 0
-; Zombie task that mostly sleeps and waits for glory
+; Zombie that sleeps and waits for glory
 ; -------------------------------------
 task0_entry:
+    .loop:
     ;call task0_stuff
     hlt
+    jmp .loop
 
 ; task 1
-; Another sleeping beauty 
+; Another Zombie
 ; -------------------------------------
 task1_entry:
+    .loop:
     ;call task1_stuff
     hlt
+    jmp .loop
 
 ; -------------------------------------
 ;       The real worker bee - 
@@ -196,7 +214,6 @@ main_loop:
     inc ebx
     mov [cmd_len],ebx
     jmp .done
-
 .enter:
     mov ebx,[cmd_len]         
     mov byte [cmd_buf+ebx],0
@@ -206,9 +223,9 @@ main_loop:
     call dispatch_command
     mov dword [cmd_len],0     ;reset buffer
     mov byte [cmd_buf],0
-    call prompt 
+    call prompt
     hlt
-    
+    jmp main_loop
 .tab:
     call tab_complete
     xor al,al
@@ -220,7 +237,7 @@ main_loop:
     call delchar
 .done:
     hlt
-    jmp main_loop  
+    jmp main_loop
 
 
 ;---  Parse ARGS  ---
@@ -442,8 +459,7 @@ delchar:
     jb .rt
     mov edx,0xC00B8000
     lea edi,[edx+ebx*2]
-    ;mov ax,0x0020   
-    mov ax,0x0720
+    mov ax,0x0020   
     mov [edi],ax
     mov [cursor_pos],ebx
     call cursor
@@ -575,8 +591,7 @@ banner:
 cls:                       
     mov edi,0xC00B8000     ; VGA text memory
     mov ecx,80*25/2        ; 80x25 characters
-    mov eax,0x00200020
-    mov eax,0x07200720
+    mov eax,0x07200720     ; green+space
     rep stosd
     xor eax,eax
     mov [cursor_pos],eax
@@ -610,12 +625,10 @@ scroll:
     ret
 
 ; -----------------------------------------
-; get_key
 ; returns:
 ;   al = ascii char
 ;   al = 0 if no key
 ; -----------------------------------------
-
 get_key:
     mov eax,[kbd_tail]
     cmp eax,[kbd_head]
@@ -645,8 +658,8 @@ get_key:
     xor al,al
     ret
 .translate:
-    cmp al,0x01          ; breaks vi
-    je  shutdown         ;escape key
+    ;cmp al,0x01          ; breaks vi
+    ;je  shutdown         ;escape key
     ; reject invalid scancodes
     cmp al,128
     jae .invalid   ; Work to be done...
@@ -685,7 +698,7 @@ shutdown:
 print_tick:
     pushad
     mov eax,[tick_count]
-    mov edi,0xC00B8000 + (0*80+72)*2     ; row 0, col 72
+    mov edi,0xC00B8000+(0*80+72)*2  
     mov ecx,8
 .next:
     mov edx,eax
@@ -696,7 +709,7 @@ print_tick:
     jbe .store
     add dl,7
 .store:
-    mov dh,0x07     ;white
+    mov dh,0x07
     mov [edi],dx
     shl eax,4
     add edi,2
@@ -750,16 +763,16 @@ init_tasks:
     sub eax,4
     mov dword [eax],0x08
     sub eax, 4
-    mov dword [eax],main_loop  ; ← entry point
+    mov dword [eax],main_loop  ; entry point
     sub eax,32
-    mov edi, eax
-    mov ecx, 8
-    xor ebx, ebx
+    mov edi,eax
+    mov ecx,8
+    xor ebx,ebx
 .clear2:
-    mov [edi], ebx
-    add edi, 4
+    mov [edi],ebx
+    add edi,4
     loop .clear2
-    mov [task2_esp], eax
+    mov [task2_esp],eax
     ret
 
 ;-----------------------------------------------------
@@ -957,7 +970,6 @@ free_cmd:
 ;   eax = virtual base
 ;   ebx = page count
 ;---------------------------
-; Secretary keeping track of 
 ; who borrowed what memory
 ;---------------------------
 register_allocation:
@@ -1105,13 +1117,14 @@ virt2phys:
     je .pt0
     cmp ebx,769
     je .pt1
+    clc
     stc
     jmp .fail
 .pt0:
-    mov ecx,V2P(identity_page_table) 
+    mov ecx,V2P(identity_page_table) ;first_page_table)
     jmp .walk
 .pt1:
-    mov ecx,V2P(kernel_low_page_table) 
+    mov ecx,V2P(kernel_low_page_table)  ;second_page_table)
 .walk:
     mov ebx,edx
     shr ebx,12
@@ -1134,12 +1147,14 @@ virt2phys:
     pop ebx
     ret
 
+
 ;HEAP_BASE equ 0xC0800000
 ;HEAP_MAX  equ 0xC1000000
 
 ;----------------------------
 ; in:
 ;   eax = physical page addr
+;   marks page allocated
 ;----------------------------
 ;     Marking territory - 
 ; "this page belongs to us"
@@ -1193,7 +1208,7 @@ alloc_page:
 .scan_dword:
     cmp ebx,8192            ; 8192 dwords = 1GB bitmap
     jae .fail
-    mov eax,[page_bitmap+ebx*4]
+    mov eax,[page_bitmap + ebx*4]
     cmp eax,0FFFFFFFFh
     jne .found_space
     inc ebx
@@ -1253,10 +1268,10 @@ map_page:
     stc
     jmp .fail
 .pt0:
-    mov edi,V2P(identity_page_table)
+    mov edi,V2P(identity_page_table) 
     jmp .map
 .pt1:
-    mov edi,V2P(kernel_low_page_table) 
+    mov edi,V2P(kernel_low_page_table)
     jmp .map
 .pt2:
     mov edi,V2P(heap_page_table_0)
@@ -1288,8 +1303,6 @@ map_page:
 ; -----------------------------
 peek_cmd:
     mov esi,deadbeef     
-    ;mov esi,peek_cmd
-    ;mov [peek_cmd],esi
 
     push eax 
     call newline
@@ -1305,7 +1318,6 @@ peek_cmd:
     pop eax 
     ret
 
-;---  prints different parts ---
 print_hex_byte:
     push eax
     shr al,4
@@ -1350,8 +1362,8 @@ print_hex_dword:
     ret
 
 ;----------------------------
-; in:  eax=unsigned 32-bit 
-; out: decimal digits 
+; in:  
+;  eax=unsigned 32-bit 
 ;----------------------------      
 print_int_decimal:
     push eax
@@ -1385,7 +1397,6 @@ print_int_decimal:
     pop eax
     ret
 
-;------  stack dump  ----- 
 show_stack:
     pushad
     call newline
@@ -1402,7 +1413,6 @@ show_stack:
     call newline
     ret
 
-;------  print registers  ----- 
 show_regs:
     pushad
     mov ebp,esp
@@ -1472,6 +1482,7 @@ echo_cmd:
 sys_cmd:
     mov eax,3                ; sys_newline
     int 0x80
+    ; peek dword at sys_peek_msg
     mov esi,sys_peek_msg
     mov eax,1
     int 0x80
@@ -1487,7 +1498,7 @@ sys_cmd:
 
 ;------------------------------------
 ; out:     
-;  pointers in heap 
+;  pointers to malloc street
 ;------------------------------------
 ; Real estate agent for malloc street
 ;------------------------------------
@@ -1525,8 +1536,10 @@ heap_cmd:
     ret
 
 ;------------------------------
-;  in:  eax = virtual address
-;  out: eax = physical address
+;  in:  
+;     eax = virtual address
+;  out: 
+;     eax = physical address
 ;------------------------------
 space_cmd:
     mov eax,0xC0100000 ; -> 0x00100000
@@ -1669,23 +1682,25 @@ ata_write:
     ret
 
 ;-----------------------------------------------------
-; persist_entry - in: eax = fs_entries entry ptr
-;   Writes the slot to disk if it's a spare slot; no-op otherwise.
+;   in: 
+;      eax = fs_entries entry ptr
+;   writes the slot to disk if it's a spare slot; 
+;   no-op otherwise.
 ;-----------------------------------------------------
 persist_entry:
     pushad
-    ; slot_idx = (eax - fs_entries) / FS_REC_SIZE
+    ; slot_idx = (eax-fs_entries)/FS_REC_SIZE
     sub eax,fs_entries
     xor edx,edx
     mov ebx,FS_REC_SIZE
-    div ebx                       ; eax = slot_idx
-    cmp eax,FS_COUNT - FS_SPARE_COUNT
+    div ebx                       ; eax=slot_idx
+    cmp eax,FS_COUNT-FS_SPARE_COUNT
     jb .skip
-    sub eax,FS_COUNT - FS_SPARE_COUNT
-    mov ebp,eax                  ; ebp = spare_idx
+    sub eax,FS_COUNT-FS_SPARE_COUNT
+    mov ebp,eax                  ; ebp=spare_idx
 
     ; re-derive entry ptr
-    add eax,FS_COUNT - FS_SPARE_COUNT
+    add eax,FS_COUNT-FS_SPARE_COUNT
     imul eax,FS_REC_SIZE
     add eax,fs_entries
     mov ebx,eax                  ; ebx = entry ptr
@@ -1703,7 +1718,7 @@ persist_entry:
     mov ecx,FS_CAPACITY
     rep movsb
 
-    ; --- ata_write 3 sectors at FS_BASE_LBA+spare_idx*3 ---
+    ; --- ata_write 3 sectors at FS_BASE_LBA + spare_idx*3 ---
     mov eax,ebp
     imul eax,SECTORS_PER_SLOT
     add eax,FS_BASE_LBA
@@ -1771,15 +1786,13 @@ load_fs_persist:
     ret
 
 ; --------------------------------
-; -------- TAB completion --------
-; --------------------------------
 tab_complete:
     pushad
-    mov ecx,[cmd_len]
-    test ecx,ecx
+    mov ecx, [cmd_len]
+    test ecx, ecx
     jz .out           
     ; ---- first pass: count matches, remember last one ----
-    xor edx,edx                  ; edx = match counter
+    xor edx, edx                  ; edx = match counter
     mov dword [tab_match_count],0
     mov dword [tab_single_ptr],0
     ; --- scan built-in cmd_table ---
@@ -1790,7 +1803,7 @@ tab_complete:
     push esi
     call tab_prefix_match     ; eax=1 match, 0 no match; esi unchanged
     pop esi
-    test eax,eax
+    test eax, eax
     jz .bi_next
     inc edx
     mov [tab_single_ptr],esi  
@@ -1803,7 +1816,7 @@ tab_complete:
     jmp .bi_skip
 .bi_skip_end:
     inc esi                       ; skip null
-    add esi,4                    ; skip dd handler
+    add esi,4                   ; skip dd handler
     jmp .bi_loop
 .bi_done:
 
@@ -1819,14 +1832,14 @@ tab_complete:
     call tab_basename             ; eax = ptr to basename, 0 if not /bin/
     test eax,eax
     jz .fs_next
-    ; check type == 2 (exec)
+    ; check type==2 (exec)
     cmp dword [esi+FS_NAME_LEN],2
     jne .fs_next
     ; prefix match against basename
     push eax                     ; save basename ptr
     mov esi,eax                  ; tab_prefix_match reads from esi
     call tab_prefix_match
-    pop esi                      ; esi = basename ptr (name to display)
+    pop esi                       ; esi = basename ptr (name to display)
     test eax,eax
     jz .fs_next_pop
     inc edx
@@ -1847,20 +1860,17 @@ tab_complete:
 .fs_done:
 
     mov [tab_match_count],edx
-
     ; ---- decide what to do ----
     test edx,edx
     jz .out                       ; 0 matches do nothing
 
     cmp edx,1
-    je .do_complete               ; 1 match  â†’ complete in place
+    je .do_complete               ; 1 match complete in place
 
     ; ---- multiple matches: list them ----
     call newline
-    ; re-scan and print each match
     call tab_print_all_matches
     call prompt
-    ; reprint current cmd_buf
     mov esi,cmd_buf
     mov ecx,[cmd_len]
 .reprint:
@@ -1911,12 +1921,11 @@ tab_complete:
     popad
     ret
 
-
 ; -------------------------------------------------------------
 ;  in:  
-;    esi = candidate name (null-terminated)
+;    esi = name (null-terminated)
 ; out: 
-;    eax = 1 if candidate starts with typed prefix, else 0
+;    eax = 1 if starts with typed prefix, else 0
 ; -------------------------------------------------------------
 tab_prefix_match:
     push esi
@@ -1925,14 +1934,14 @@ tab_prefix_match:
     mov edi,cmd_buf
     mov ecx,[cmd_len]
     test ecx,ecx
-    jz .match                     ; empty prefix matches everything
+    jz .match             ; empty prefix matches everything
 .cmp_loop:
     mov al,[esi]
     mov ah,[edi]
     cmp al,ah
     jne .no
     test al,al
-    jz .match                     ; both ended simultaneously
+    jz .match             ; both ended simultaneously
     inc esi
     inc edi
     dec ecx
@@ -1972,16 +1981,16 @@ tab_basename:
     cmp byte [esi+4],'/'
     jne .no
     ; make sure there's something after it and no further '/'
-    lea esi,[esi+5]
+    lea esi, [esi+5]
     cmp byte [esi],0
     je .no
-    mov eax,esi                  ; candidate basename start
+    mov eax,esi                  ; name start
 .scan:
     mov al,[esi]
     test al,al
     jz .ok
     cmp al,'/'
-    je .no                        ; nested dir skip
+    je .no                       ; nested dir skip
     inc esi
     jmp .scan
 .ok:
@@ -2000,7 +2009,7 @@ tab_basename:
 ; -------------------------------------------------------------
 tab_print_all_matches:
     ; --- built-ins ---
-    mov esi,cmd_table
+    mov esi, cmd_table
 .pbi_loop:
     cmp byte [esi],0
     je .pbi_done
@@ -2049,7 +2058,7 @@ tab_print_all_matches:
     cmp dword [esi+FS_NAME_LEN],2
     jne .pfs_next
     push eax
-    mov esi,eax
+    mov esi, eax
     call tab_prefix_match
     pop esi
     test eax,eax
@@ -2129,14 +2138,14 @@ page_fault_handler:
     push ebp
     mov ebp,esp
     mov esi,pf_msg
-    call print_cr    
+    call print_cr    ;CR2
     mov esi,pf_addr
     call print
-    mov eax,cr2
+    ;mov eax,cr2
     call print_hex_dword
     call newline
     
-    mov edx,0x7777      ; outer loop (adjust for time)
+    mov edx,0x7777       ; outer loop (adjust for time)
 .outer:
     mov ecx,0xFFFF        ; inner loop
 .inner:
@@ -2587,6 +2596,7 @@ sys_unlink:
     mov eax, -1
     ret
 
+
 sys_mkdir:
     push esi
     push edi
@@ -2633,7 +2643,6 @@ sys_mkdir:
     pop esi
     mov eax, -1
     ret
-
 
 sys_rmdir:
     push esi
@@ -3052,6 +3061,7 @@ irq1:
     popad
     iretd
 
+
 ; -------------------------------------------
 ;  Intel 8259A 
 ;  IRQ lines -> CPU IRQ vectors
@@ -3098,7 +3108,7 @@ deadbeef  db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF
 help_lbl db 13," ---     BuzyBox     ---",13,13
         db "peek  -  at 16 bytes @ esi",13
         db "regs  -  cpu registers",13
-        db "stack -  top of stack",13
+        db "stack -  16 longwords",13
         db "alloc -  4KB chunks",13
         db "free  -  relase a chunk",13
         db "heap  -  current heap",13
@@ -3161,8 +3171,6 @@ hist_count  dd 0
 hist_index  dd 0
 ; hist_buf in .bss
 
-kbd_shift db 0
-
 ;---- INTERRUPT DESC TABLE ----
 ; idt_start / idt_end in .bss
 idt_descriptor:
@@ -3191,14 +3199,14 @@ syscall_table:
     dd sys_create        ; 17: esi = path -> eax = 0/-1
     dd sys_write         ; 18: esi = path, ebx = buf, ecx = n -> eax = 0/-1
     dd sys_unlink        ; 19: esi = path -> eax = 0/-1
-    dd sys_mkdir         ; 20: esi = path -> eax = 0/-1
+    dd sys_mkdir         ; 20: esi = path -> eax = 0/-1 
     dd sys_rmdir         ; 21: esi = path -> eax=n 0/-1
 SYSCALL_COUNT equ ($-syscall_table)/4
 
-section .rodata
-
 ;---- Keycode -> ASCII Convertion ----
+kbd_shift db 0
 
+section .rodata
 ; -----------------------------------------
 ; normal keymap
 ; -----------------------------------------
@@ -3213,7 +3221,7 @@ keymap:
     db 'z','x','c','v','b','n','m'
     db ',','.','/',0,'*',0,' '
     times 0x3B-($-keymap) db 0     ; F1
-    db '<' 
+    db '<'
     times 256-($-keymap) db 0
 
 
@@ -3231,7 +3239,7 @@ keymap_shift:
     db 'Z','X','C','V','B','N','M'
     db '<','>','?',0,'*',0,' '
     times 0x3B-($-keymap_shift) db 0     ; F1
-    db '<' 
+    db '<'
     times 256-($-keymap_shift) db 0
 
 ; --------------------------------------------------
@@ -3330,15 +3338,15 @@ page_directory:
     resd 1024
 
 alignb 4096
-identity_page_table: 
-    resd 1024
-
-alignb 4096
-kernel_low_page_table:
-    resd 1024
-
-alignb 4096
 heap_page_table_0:
+    resd 1024
+
+alignb 4096
+identity_page_table:
+    resd 1024
+
+alignb 4096
+kernel_low_page_table: ;second_page_table:
     resd 1024
 
 alignb 4096
