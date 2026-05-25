@@ -25,13 +25,12 @@ start:
 
     mov esp,V2P(stack_top)
     mov ebp,esp
-    
+    pushad
+
 ; -----------------------------------------
 ; page directory entries
 ; MUST be PHYSICAL addresses
 ; -----------------------------------------
-
-    pushad
     mov edi,V2P(page_directory)
     xor eax,eax
     mov ecx,1024
@@ -40,22 +39,28 @@ start:
     add edi,4
     loop .clear_pd
 
+; -----------------------------------------
+; kernel_low_page_table
+; physical 0x00400000 - 0x007FFFFF
+; -----------------------------------------
     mov edi,V2P(kernel_low_page_table)
     mov eax,0x00400000
     mov ecx,1024
-.loop2:
+.fill_kernel:
     mov ebx,eax
     or ebx,3
     mov [edi],ebx
     add eax,0x1000
     add edi,4
-    loop .loop2
+    loop .fill_kernel
 
-    ; identity map first 4MB
-    mov edi,V2P(identity_page_table) 
+
+; ------------------------------------------
+; identity map first 4MB
+; ------------------------------------------
+    mov edi,V2P(identity_page_table)
     xor ebx,ebx
     mov ecx,1024
-    
 .make_identity:
     mov eax,ebx
     or eax,3
@@ -63,44 +68,108 @@ start:
     add ebx,4096
     add edi,4
     loop .make_identity
-    
-    ; PDE[0] 
-    mov eax,V2P(identity_page_table) 
-    or  eax,3
+
+; ------------------------------------------
+; heap_page_table_0
+; physical 0x00800000 - 0x00BFFFFF
+; ------------------------------------------
+    mov edi,V2P(heap_page_table_0)
+    mov eax,0x00800000
+    mov ecx,1024
+.fill_heap0:
+    mov ebx,eax
+    or ebx,3
+    mov [edi],ebx
+    add eax,4096
+    add edi,4
+    loop .fill_heap0
+
+
+; ------------------------------------------
+; heap_page_table_1
+; physical 0x00C00000 - 0x00FFFFFF
+; ------------------------------------------
+    mov edi,V2P(heap_page_table_1)
+    mov eax,0x00C00000
+    mov ecx,1024
+.fill_heap1:
+    mov ebx,eax
+    or ebx,3
+    mov [edi],ebx
+    add eax,4096
+    add edi,4
+    loop .fill_heap1
+
+
+; ------------------------------------------
+; heap_page_table_2
+; physical 0x01000000 - 0x013FFFFF
+; ------------------------------------------
+    mov edi,V2P(heap_page_table_2)
+    mov eax,0x01000000
+    mov ecx,1024
+.fill_heap2:
+    mov ebx,eax
+    or ebx,3
+    mov [edi],ebx
+    add eax,4096
+    add edi,4
+    loop .fill_heap2
+
+
+; -------------------------------------------
+; PDE[0]
+; -------------------------------------------
+    mov eax,V2P(identity_page_table)
+    or eax,3
     mov [V2P(page_directory)+(0*4)],eax
     mov [V2P(page_directory)+(768*4)],eax
 
-    ; PDE[1] 
+; -------------------------------------------
+; PDE[1]
+; -------------------------------------------
     mov eax,V2P(kernel_low_page_table)
-    or  eax,3
+    or eax,3
     mov [V2P(page_directory)+(1*4)],eax
     mov [V2P(page_directory)+(769*4)],eax
 
-    ; PDE[2] 
+; -------------------------------------------
+; PDE[2]
+; -------------------------------------------
     mov eax,V2P(heap_page_table_0)
-    or  eax,3
+    or eax,3
     mov [V2P(page_directory)+(2*4)],eax
     mov [V2P(page_directory)+(770*4)],eax
 
-    ; PDE[3] 
+; -------------------------------------------
+; PDE[3]
+; -------------------------------------------
     mov eax,V2P(heap_page_table_1)
-    or  eax,3
+    or eax,3
     mov [V2P(page_directory)+(3*4)],eax
     mov [V2P(page_directory)+(771*4)],eax
 
-    ; PDE[4] 
+; -------------------------------------------
+; PDE[4]
+; -------------------------------------------
     mov eax,V2P(heap_page_table_2)
-    or  eax,3
+    or eax,3
     mov [V2P(page_directory)+(4*4)],eax
     mov [V2P(page_directory)+(772*4)],eax
+
+; -------------------------------------------
+; load CR3
+; -------------------------------------------
     mov eax,V2P(page_directory)
     mov cr3,eax
-    
-    ; enable paging
+
+; -------------------------------------------
+; enable paging
+; -------------------------------------------
     mov eax,cr0
     or eax,0x80000000
     mov cr0,eax
-    
+
     mov eax,higher_half
     jmp eax
 
@@ -694,7 +763,6 @@ shutdown:
 
 ; --- print 8 hex digits at top-right ----
 ; Counting heartbeats of the system clock
-; ----------------------------------------
 print_tick:
     pushad
     mov eax,[tick_count]
@@ -776,13 +844,14 @@ init_tasks:
     ret
 
 ;-----------------------------------------------------
-; find_free_virt
-; first-fit scan of [heap_start, heap_end) for a
+; first-fit scan of [heap_start,heap_end) for a
 ; contiguous run of pages not overlapping any
 ; alloc_table entry.
-; in:  ecx = page count (>0)
-; out: CF=0, eax = virtual base on success
-;      CF=1 on failure
+; in:  
+;   ecx = page count (>0)
+; out: 
+;   CF=0, eax = virtual base on success
+;   CF=1 on failure
 ;-----------------------------------------------------
 find_free_virt:
     push ebx
@@ -834,8 +903,9 @@ find_free_virt:
     ret
 
 ;---------------------------------------------------
-; out: eax =
-; (heap_end-heap_start)-sum(alloc_table pages)*4096
+; out: 
+;   eax =
+;  (heap_end-heap_start)-sum(alloc_table pages)*4096
 ;---------------------------------------------------
 calc_free_heap:
     push ebx
@@ -857,9 +927,7 @@ calc_free_heap:
     pop ebx
     ret
 
-;-----------------------
-; -- BuzyBox Commands --
-;-----------------------
+; -- Kernel Commands --
 help_cmd:
     push esi
     mov esi,help_lbl
@@ -1102,52 +1170,6 @@ hex2int:
 .done_hex:
     ret
 
-;-------------------
-; out:     
-;  physical address
-;-------------------
-virt2phys:
-    push ebx
-    push ecx
-    push edx
-    mov edx,eax
-    mov ebx,eax
-    shr ebx,22
-    cmp ebx,768
-    je .pt0
-    cmp ebx,769
-    je .pt1
-    clc
-    stc
-    jmp .fail
-.pt0:
-    mov ecx,V2P(identity_page_table) ;first_page_table)
-    jmp .walk
-.pt1:
-    mov ecx,V2P(kernel_low_page_table)  ;second_page_table)
-.walk:
-    mov ebx,edx
-    shr ebx,12
-    and ebx,03FFh
-    mov eax,[ecx+ebx*4]
-    test eax,1
-    jz .not_present
-    and eax,0FFFFF000h
-    mov ebx,edx
-    and ebx,0FFFh
-    add eax,ebx
-    clc
-    jmp .done
-.not_present:
-    stc
-.done:
-.fail:
-    pop edx
-    pop ecx
-    pop ebx
-    ret
-
-
 ;HEAP_BASE equ 0xC0800000
 ;HEAP_MAX  equ 0xC1000000
 
@@ -1206,9 +1228,9 @@ alloc_page:
 
     xor ebx,ebx
 .scan_dword:
-    cmp ebx,8192            ; 8192 dwords = 1GB bitmap
+    cmp ebx,8192          ; 8192 dwords=1GB bitmap
     jae .fail
-    mov eax,[page_bitmap + ebx*4]
+    mov eax,[page_bitmap+ebx*4]
     cmp eax,0FFFFFFFFh
     jne .found_space
     inc ebx
@@ -1558,7 +1580,46 @@ space_cmd:
     call newline
     ret  
 
-cmd_nf_msg   db 13,"command not found",13,0
+virt2phys:
+    push ebx
+    push ecx
+    push edx
+    mov edx,eax
+    mov ebx,eax
+    shr ebx,22
+    cmp ebx,768
+    je .pt0
+    cmp ebx,769
+    je .pt1
+    clc
+    stc
+    jmp .fail
+.pt0:
+    mov ecx,V2P(identity_page_table) 
+    jmp .walk
+.pt1:
+    mov ecx,V2P(kernel_low_page_table)  
+.walk:
+    mov ebx,edx
+    shr ebx,12
+    and ebx,03FFh
+    mov eax,[ecx+ebx*4]
+    test eax,1
+    jz .not_present
+    and eax,0FFFFF000h
+    mov ebx,edx
+    and ebx,0FFFh
+    add eax,ebx
+    clc
+    jmp .done
+.not_present:
+    stc
+.done:
+.fail:
+    pop edx
+    pop ecx
+    pop ebx
+    ret
 
 ;-----------------------------------------------------
 ; Persistence layout: FS region starts at LBA 256.
@@ -2967,7 +3028,7 @@ exec_bin:
     call PROG_LOAD_ADDR
     ret
 .nf:
-    mov esi, cmd_nf_msg
+    mov esi,command_nf_msg
     call print_cr
 .silent:
     ret
@@ -3105,19 +3166,16 @@ sys_msg   db "*** x86 Operating System ***", 0
 deadbeef  db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF
           db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF 
 
-help_lbl db 13," ---     BuzyBox     ---",13,13
-        db "peek  -  at 16 bytes @ esi",13
+help_lbl 
+        db 13,"peek  -  at 16 bytes @ esi",13
         db "regs  -  cpu registers",13
-        db "stack -  16 longwords",13
+        db "stack -  top of stack",13
         db "alloc -  4KB chunks",13
         db "free  -  relase a chunk",13
         db "heap  -  current heap",13
-        db "space -  virtual memory",13
         db "clear -  clear screen",13
-        db "echo  -  echo <argument>",13
-        db "sys   -  int 0x80 (syscall)",13
-        db "exit  -  shutdown",13
-        db 13," ---  Binaries: /bin ---",13,13
+        db "sys   -  int 0x80 (syscall test)",13
+        db "exit  -  shutdown",13,13
         db 0
 
 eax_lbl db "EAX: ",0
@@ -3166,6 +3224,8 @@ argv        times 16 dd 0
 cmd_len     dd 0
 cmd_exec    dd 0
 ; cmd_buf in .bss
+
+command_nf_msg   db 13,"command not found",13,0
 
 hist_count  dd 0
 hist_index  dd 0
@@ -3338,15 +3398,15 @@ page_directory:
     resd 1024
 
 alignb 4096
-heap_page_table_0:
-    resd 1024
-
-alignb 4096
 identity_page_table:
     resd 1024
 
 alignb 4096
 kernel_low_page_table: ;second_page_table:
+    resd 1024
+
+alignb 4096
+heap_page_table_0:
     resd 1024
 
 alignb 4096
@@ -3359,7 +3419,7 @@ heap_page_table_2:
 
 alignb 4
 heap_start:
-    resb 1024*1024     ;  1 MB heap
+    resb 12*1024*1024    
 heap_end:
 
 alignb 4
