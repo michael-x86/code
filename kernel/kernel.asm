@@ -22,18 +22,8 @@ start:
     mov ss,ax
     mov fs,ax
     mov gs,ax
-
     mov esp,V2P(stack_top)
     mov ebp,esp
-    call setup_paging   ;Building the matrix
-    
-; -----------------------------------------
-; page directory entries
-; MUST be PHYSICAL addresses
-; -----------------------------------------
-
-setup_paging:
-    pushad
 
     ; clear page directory
     mov edi,V2P(page_directory)
@@ -44,7 +34,7 @@ setup_paging:
     add edi,4
     loop .clear_pd
 
-    mov edi,V2P(second_page_table)
+    mov edi,V2P(kernel_low_page_table) 
     mov eax,0x00400000
     mov ecx,1024
 .loop2:
@@ -56,7 +46,7 @@ setup_paging:
     loop .loop2
 
     ; identity map first 4MB
-    mov edi,V2P(first_page_table)
+    mov edi,V2P(identity_page_table)  
     xor ebx,ebx
     mov ecx,1024
     
@@ -68,32 +58,27 @@ setup_paging:
     add edi,4
     loop .make_identity
     
-    ; PDE[0] -> first PT
-    mov eax,V2P(first_page_table)
+    mov eax,V2P(identity_page_table) 
     or  eax,3
     mov [V2P(page_directory)+(0*4)],eax
     mov [V2P(page_directory)+(768*4)],eax
 
-    ; PDE[1] -> second PT
-    mov eax,V2P(second_page_table)
+    mov eax,V2P(kernel_low_page_table)
     or  eax,3
     mov [V2P(page_directory)+(1*4)],eax
     mov [V2P(page_directory)+(769*4)],eax
 
-    ; PDE[2] -> page_table_0
-    mov eax,V2P(page_table_0)
+    mov eax,V2P(heap_page_table_0)
     or  eax,3
     mov [V2P(page_directory)+(2*4)],eax
     mov [V2P(page_directory)+(770*4)],eax
 
-    ; PDE[3] -> page_table_1
-    mov eax,V2P(page_table_1)
+    mov eax,V2P(heap_page_table_1)
     or  eax,3
     mov [V2P(page_directory)+(3*4)],eax
     mov [V2P(page_directory)+(771*4)],eax
 
-    ; PDE[4] -> page_table_2
-    mov eax,V2P(page_table_2)
+    mov eax,V2P(heap_page_table_2)
     or  eax,3
     mov [V2P(page_directory)+(4*4)],eax
     mov [V2P(page_directory)+(772*4)],eax
@@ -105,27 +90,17 @@ setup_paging:
     or eax,0x80000000
     mov cr0,eax
     
-    mov eax, higher_half
+    mov eax,higher_half
     jmp eax
 
 ;Ascending to 3GB+ heaven where kernel gods reside
 higher_half:
     call reserve_kernel_pages
-    popad
     mov esp,stack_top
     mov ebp,esp
     jmp kernel_main
 
 ;Saving our own soul from the page allocator's greed
-;----------------------------
-; Saves:
-;   kernel image
-;   page tables
-;   stack
-;   bitmap
-;   bss
-;----------------------------
-
 reserve_kernel_pages:
     push eax
     push ebx
@@ -156,21 +131,19 @@ kernel_main:
     call set_syscall
     lidt [idt_descriptor]
     call pic_remap
-    call set_freq       ; 100 hz. (downsample to 50 fps in irq0)
-    ;mov byte [cwd_buf],'/'
-    ;mov byte [cwd_buf+1],0
+    call set_freq       ; 100 hz.
 
-    mov edi, cwd_buf
-    mov ecx, 128
-    xor eax, eax
+    mov edi,cwd_buf
+    mov ecx,128
+    xor eax,eax
     rep stosb
-    mov byte [cwd_buf], '/'
+    mov byte [cwd_buf],'/'
 
     call load_fs_persist
     call cls
     call banner
-    mov eax, 80*4
-    mov [cursor_pos], eax
+    mov eax,80*4
+    mov [cursor_pos],eax
     call newline
     call prompt
 
@@ -179,25 +152,21 @@ kernel_main:
     mov esp,[task0_esp]
     mov dword [current_task],0
     popad
-    iretd           ; jumps to task0_entry
+    iretd     ; jumps to task0_entry
 
 ; task 0
 ; Zombie task that mostly sleeps and waits for glory
 ; -------------------------------------
 task0_entry:
-    .loop:
     ;call task0_stuff
     hlt
-    jmp .loop
 
 ; task 1
-; Another sleeping beauty waiting for a scheduler kiss
+; Another sleeping beauty 
 ; -------------------------------------
 task1_entry:
-    .loop:
     ;call task1_stuff
     hlt
-    jmp .loop
 
 ; -------------------------------------
 ;       The real worker bee - 
@@ -227,6 +196,7 @@ main_loop:
     inc ebx
     mov [cmd_len],ebx
     jmp .done
+
 .enter:
     mov ebx,[cmd_len]         
     mov byte [cmd_buf+ebx],0
@@ -236,9 +206,9 @@ main_loop:
     call dispatch_command
     mov dword [cmd_len],0     ;reset buffer
     mov byte [cmd_buf],0
-    call prompt
+    call prompt 
     hlt
-    jmp main_loop
+    
 .tab:
     call tab_complete
     xor al,al
@@ -250,7 +220,7 @@ main_loop:
     call delchar
 .done:
     hlt
-    jmp main_loop
+    jmp main_loop  
 
 
 ;---  Parse ARGS  ---
@@ -472,7 +442,8 @@ delchar:
     jb .rt
     mov edx,0xC00B8000
     lea edi,[edx+ebx*2]
-    mov ax,0x0020   
+    ;mov ax,0x0020   
+    mov ax,0x0720
     mov [edi],ax
     mov [cursor_pos],ebx
     call cursor
@@ -605,6 +576,7 @@ cls:
     mov edi,0xC00B8000     ; VGA text memory
     mov ecx,80*25/2        ; 80x25 characters
     mov eax,0x00200020
+    mov eax,0x07200720
     rep stosd
     xor eax,eax
     mov [cursor_pos],eax
@@ -724,7 +696,7 @@ print_tick:
     jbe .store
     add dl,7
 .store:
-    mov dh,0x07
+    mov dh,0x07     ;white
     mov [edi],dx
     shl eax,4
     add edi,2
@@ -1034,19 +1006,19 @@ get_pte_ptr:
     stc
     jmp .fail
 .pt0:
-    mov edi,V2P(first_page_table)
+    mov edi,V2P(identity_page_table) 
     jmp .walk
 .pt1:
-    mov edi,V2P(second_page_table)
+    mov edi,V2P(kernel_low_page_table) 
     jmp .walk
 .pt2:
-    mov edi,V2P(page_table_0)
+    mov edi,V2P(heap_page_table_0)
     jmp .walk
 .pt3:
-    mov edi,V2P(page_table_1)
+    mov edi,V2P(heap_page_table_1)
     jmp .walk
 .pt4:
-    mov edi,V2P(page_table_2)
+    mov edi,V2P(heap_page_table_2)
 .walk:
     mov ebx,eax
     shr ebx,12
@@ -1187,10 +1159,10 @@ virt2phys:
     stc
     jmp .fail
 .pt0:
-    mov ecx,V2P(first_page_table)
+    mov ecx,V2P(identity_page_table) 
     jmp .walk
 .pt1:
-    mov ecx,V2P(second_page_table)
+    mov ecx,V2P(kernel_low_page_table) 
 .walk:
     mov ebx,edx
     shr ebx,12
@@ -1336,19 +1308,19 @@ map_page:
     stc
     jmp .fail
 .pt0:
-    mov edi,V2P(first_page_table)
+    mov edi,V2P(identity_page_table)
     jmp .map
 .pt1:
-    mov edi,V2P(second_page_table)
+    mov edi,V2P(kernel_low_page_table) 
     jmp .map
 .pt2:
-    mov edi,V2P(page_table_0)
+    mov edi,V2P(heap_page_table_0)
     jmp .map
 .pt3:
-    mov edi,V2P(page_table_1)
+    mov edi,V2P(heap_page_table_1)
     jmp .map
 .pt4:
-    mov edi,V2P(page_table_2)
+    mov edi,V2P(heap_page_table_2)
 .map:
     mov edx,eax
     shr edx,12
@@ -3429,23 +3401,23 @@ page_directory:
     resd 1024
 
 alignb 4096
-page_table_0:
+identity_page_table: 
     resd 1024
 
 alignb 4096
-first_page_table:
+kernel_low_page_table:
     resd 1024
 
 alignb 4096
-second_page_table:
+heap_page_table_0:
     resd 1024
 
 alignb 4096
-page_table_1:
+heap_page_table_1:
     resd 1024
 
 alignb 4096
-page_table_2:
+heap_page_table_2:
     resd 1024
 
 alignb 4
