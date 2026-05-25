@@ -645,8 +645,8 @@ get_key:
     xor al,al
     ret
 .translate:
-    ;cmp al,0x01          ; breaks vi
-    ;je  shutdown         ;escape key
+    cmp al,0x01          ; breaks vi
+    je  shutdown         ;escape key
     ; reject invalid scancodes
     cmp al,128
     jae .invalid   ; Work to be done...
@@ -979,57 +979,6 @@ register_allocation:
     pop ecx
     ret
 
-; ------------------------------
-; in:
-;   eax = virtual address
-; out:
-;   edi = PTE address
-;   CF=0 success CF=1 fail
-; ------------------------------
-; Like GPS for virtual addresses
-; ------------------------------
-get_pte_ptr:
-    push ebx
-    push edx
-    mov edx,eax
-    shr edx,22
-    cmp edx,768
-    je .pt0
-    cmp edx,769
-    je .pt1
-    cmp edx,770
-    je .pt2
-    cmp edx,771
-    je .pt3
-    cmp edx,772
-    je .pt4
-    stc
-    jmp .fail
-.pt0:
-    mov edi,V2P(identity_page_table) 
-    jmp .walk
-.pt1:
-    mov edi,V2P(kernel_low_page_table) 
-    jmp .walk
-.pt2:
-    mov edi,V2P(heap_page_table_0)
-    jmp .walk
-.pt3:
-    mov edi,V2P(heap_page_table_1)
-    jmp .walk
-.pt4:
-    mov edi,V2P(heap_page_table_2)
-.walk:
-    mov ebx,eax
-    shr ebx,12
-    and ebx,03FFh
-    lea edi,[edi+ebx*4]
-    clc
-.fail:
-    pop edx
-    pop ebx
-    ret
-
 ; -----------------------
 ; in:
 ;   eax = virtual base
@@ -1044,7 +993,7 @@ free_pages:
     test ecx,ecx
     jz .done
     push eax
-    call get_pte_ptr
+    call map_page
     jc .next
     mov edx,[edi]
     test edx,1
@@ -1185,15 +1134,12 @@ virt2phys:
     pop ebx
     ret
 
-
-HEAP_BASE equ 0xC0800000
-HEAP_MAX  equ 0xC1000000
-
+;HEAP_BASE equ 0xC0800000
+;HEAP_MAX  equ 0xC1000000
 
 ;----------------------------
 ; in:
 ;   eax = physical page addr
-;   marks page allocated
 ;----------------------------
 ;     Marking territory - 
 ; "this page belongs to us"
@@ -1214,7 +1160,6 @@ set_page_used:
 ;------------------------------
 ; in:
 ;   eax = physical page address
-;   marks page free
 ; -----------------------------
 set_page_free:
     push ebx
@@ -1248,7 +1193,7 @@ alloc_page:
 .scan_dword:
     cmp ebx,8192            ; 8192 dwords = 1GB bitmap
     jae .fail
-    mov eax,[page_bitmap + ebx*4]
+    mov eax,[page_bitmap+ebx*4]
     cmp eax,0FFFFFFFFh
     jne .found_space
     inc ebx
@@ -1342,19 +1287,9 @@ map_page:
 ;   print 16 bytes 
 ; -----------------------------
 peek_cmd:
-    ;mov dword [0x00000000],0x11111111
-    ;mov dword [0x00100000],0x22222222
-    ;mov eax,[0x00000000]
-    ;call print_hex_dword
-    ;mov eax,[0x00100000]
-    ;call newline
-    ;call print_hex_dword
-    
-    mov esi,sys_peek_msg
-    ;mov esi,deadbeef     
-    mov esi,peek_cmd
-    mov [peek_cmd],esi
-
+    mov esi,deadbeef     
+    ;mov esi,peek_cmd
+    ;mov [peek_cmd],esi
 
     push eax 
     call newline
@@ -1469,7 +1404,6 @@ show_stack:
 
 ;------  print registers  ----- 
 show_regs:
-    ;mov eax,0xea31        ; eax,ebx,ecx,edx,esi,edi 
     pushad
     mov ebp,esp
     call newline
@@ -1538,7 +1472,6 @@ echo_cmd:
 sys_cmd:
     mov eax,3                ; sys_newline
     int 0x80
-    ; peek dword at sys_peek_msg
     mov esi,sys_peek_msg
     mov eax,1
     int 0x80
@@ -1554,7 +1487,7 @@ sys_cmd:
 
 ;------------------------------------
 ; out:     
-;  addrs for `free`
+;  pointers in heap 
 ;------------------------------------
 ; Real estate agent for malloc street
 ;------------------------------------
@@ -1613,8 +1546,6 @@ space_cmd:
     ret  
 
 cmd_nf_msg   db 13,"command not found",13,0
-load_err_msg db 13,"disk read failed",13,0
-ata_drive    db 0  ; 0=master 16=slave
 
 ;-----------------------------------------------------
 ; Persistence layout: FS region starts at LBA 256.
@@ -1625,51 +1556,51 @@ ata_drive    db 0  ; 0=master 16=slave
 FS_BASE_LBA       equ 256
 SECTORS_PER_SLOT  equ 3
 
-; ata_read - PIO read of `ecx` sectors from LBA `eax` into [edi]
+; ata_read - PIO read of ecx sectors from LBA eax into [edi]
 ata_read:
     pushad
-    mov ebx, eax                  ; LBA
-    mov ebp, ecx                  ; sector count
-    mov dx, 0x1F7
+    mov ebx,eax                  ; LBA
+    mov ebp,ecx                  ; sector count
+    mov dx,0x1F7
 .wb:
-    in al, dx
-    test al, 0x80
+    in al,dx
+    test al,0x80
     jnz .wb
-    mov dx, 0x1F6
-    mov eax, ebx
-    shr eax, 24
-    and al, 0x0F
-    or  al, 0xE0
-    out dx, al
-    mov dx, 0x1F2
-    mov eax, ebp
-    out dx, al
-    mov dx, 0x1F3
-    mov eax, ebx
-    out dx, al
-    mov dx, 0x1F4
-    mov eax, ebx
-    shr eax, 8
-    out dx, al
-    mov dx, 0x1F5
-    mov eax, ebx
-    shr eax, 16
-    out dx, al
-    mov dx, 0x1F7
-    mov al, 0x20                  ; READ SECTORS
-    out dx, al
-    mov ecx, ebp
+    mov dx,0x1F6
+    mov eax,ebx
+    shr eax,24
+    and al,0x0F
+    or  al,0xE0
+    out dx,al
+    mov dx,0x1F2
+    mov eax,ebp
+    out dx,al
+    mov dx,0x1F3
+    mov eax,ebx
+    out dx,al
+    mov dx,0x1F4
+    mov eax,ebx
+    shr eax,8
+    out dx,al
+    mov dx,0x1F5
+    mov eax,ebx
+    shr eax,16
+    out dx,al
+    mov dx,0x1F7
+    mov al,0x20                  ; READ SECTORS
+    out dx,al
+    mov ecx,ebp
 .nxs:
-    mov dx, 0x1F7
+    mov dx,0x1F7
 .wd:
-    in al, dx
-    test al, 0x80
+    in al,dx
+    test al,0x80
     jnz .wd
-    test al, 0x08
+    test al,0x08
     jz .wd
-    mov dx, 0x1F0
+    mov dx,0x1F0
     push ecx
-    mov ecx, 256
+    mov ecx,256
     rep insw
     pop ecx
     dec ecx
@@ -1677,62 +1608,62 @@ ata_read:
     popad
     ret
 
-; ata_write - PIO write of `ecx` sectors to LBA `eax` from [esi]
+; ata_write - PIO write of ecx sectors to LBA eax from [esi]
 ata_write:
     pushad
-    mov ebx, eax
-    mov ebp, ecx
-    mov dx, 0x1F7
+    mov ebx,eax
+    mov ebp,ecx
+    mov dx,0x1F7
 .wb:
-    in al, dx
-    test al, 0x80
+    in al,dx
+    test al,0x80
     jnz .wb
-    mov dx, 0x1F6
-    mov eax, ebx
-    shr eax, 24
-    and al, 0x0F
-    or  al, 0xE0
-    out dx, al
-    mov dx, 0x1F2
-    mov eax, ebp
-    out dx, al
-    mov dx, 0x1F3
-    mov eax, ebx
-    out dx, al
-    mov dx, 0x1F4
-    mov eax, ebx
-    shr eax, 8
-    out dx, al
-    mov dx, 0x1F5
-    mov eax, ebx
-    shr eax, 16
-    out dx, al
-    mov dx, 0x1F7
-    mov al, 0x30                  ; WRITE SECTORS
-    out dx, al
-    mov ecx, ebp
+    mov dx,0x1F6
+    mov eax,ebx
+    shr eax,24
+    and al,0x0F
+    or  al,0xE0
+    out dx,al
+    mov dx,0x1F2
+    mov eax,ebp
+    out dx,al
+    mov dx,0x1F3
+    mov eax,ebx
+    out dx,al
+    mov dx,0x1F4
+    mov eax,ebx
+    shr eax,8
+    out dx,al
+    mov dx,0x1F5
+    mov eax,ebx
+    shr eax,16
+    out dx,al
+    mov dx,0x1F7
+    mov al,0x30                  ; WRITE SECTORS
+    out dx,al
+    mov ecx,ebp
 .nxs:
-    mov dx, 0x1F7
+    mov dx,0x1F7
 .wd:
-    in al, dx
-    test al, 0x80
+    in al,dx
+    test al,0x80
     jnz .wd
-    test al, 0x08
+    test al,0x08
     jz .wd
-    mov dx, 0x1F0
+    mov dx,0x1F0
     push ecx
-    mov ecx, 256
+    mov ecx,256
     rep outsw
     pop ecx
     dec ecx
     jnz .nxs
     ; flush cache
-    mov dx, 0x1F7
-    mov al, 0xE7
-    out dx, al
+    mov dx,0x1F7
+    mov al,0xE7
+    out dx,al
 .wf:
-    in al, dx
-    test al, 0x80
+    in al,dx
+    test al,0x80
     jnz .wf
     popad
     ret
@@ -1744,40 +1675,40 @@ ata_write:
 persist_entry:
     pushad
     ; slot_idx = (eax - fs_entries) / FS_REC_SIZE
-    sub eax, fs_entries
-    xor edx, edx
-    mov ebx, FS_REC_SIZE
+    sub eax,fs_entries
+    xor edx,edx
+    mov ebx,FS_REC_SIZE
     div ebx                       ; eax = slot_idx
-    cmp eax, FS_COUNT - FS_SPARE_COUNT
+    cmp eax,FS_COUNT - FS_SPARE_COUNT
     jb .skip
-    sub eax, FS_COUNT - FS_SPARE_COUNT
-    mov ebp, eax                  ; ebp = spare_idx
+    sub eax,FS_COUNT - FS_SPARE_COUNT
+    mov ebp,eax                  ; ebp = spare_idx
 
     ; re-derive entry ptr
-    add eax, FS_COUNT - FS_SPARE_COUNT
-    imul eax, FS_REC_SIZE
-    add eax, fs_entries
-    mov ebx, eax                  ; ebx = entry ptr
+    add eax,FS_COUNT - FS_SPARE_COUNT
+    imul eax,FS_REC_SIZE
+    add eax,fs_entries
+    mov ebx,eax                  ; ebx = entry ptr
 
     ; --- build persist_buf (1536 B) ---
-    mov esi, ebx
-    mov edi, persist_buf
-    mov ecx, FS_REC_SIZE
+    mov esi,ebx
+    mov edi,persist_buf
+    mov ecx,FS_REC_SIZE
     cld
     rep movsb
-    mov ecx, 512 - FS_REC_SIZE
-    xor eax, eax
+    mov ecx,512-FS_REC_SIZE
+    xor eax,eax
     rep stosb
-    mov esi, [ebx + FS_NAME_LEN + 4]
-    mov ecx, FS_CAPACITY
+    mov esi,[ebx+FS_NAME_LEN+4]
+    mov ecx,FS_CAPACITY
     rep movsb
 
-    ; --- ata_write 3 sectors at FS_BASE_LBA + spare_idx*3 ---
-    mov eax, ebp
-    imul eax, SECTORS_PER_SLOT
-    add eax, FS_BASE_LBA
-    mov ecx, SECTORS_PER_SLOT
-    mov esi, persist_buf
+    ; --- ata_write 3 sectors at FS_BASE_LBA+spare_idx*3 ---
+    mov eax,ebp
+    imul eax,SECTORS_PER_SLOT
+    add eax,FS_BASE_LBA
+    mov ecx,SECTORS_PER_SLOT
+    mov esi,persist_buf
     call ata_write
 .skip:
     popad
@@ -1789,48 +1720,48 @@ persist_entry:
 ;-----------------------------------------------------
 load_fs_persist:
     pushad
-    xor ebx, ebx
+    xor ebx,ebx
 .lp:
-    cmp ebx, FS_SPARE_COUNT
+    cmp ebx,FS_SPARE_COUNT
     jae .done
-    mov eax, ebx
-    imul eax, SECTORS_PER_SLOT
-    add eax, FS_BASE_LBA
-    mov ecx, SECTORS_PER_SLOT
-    mov edi, persist_buf
+    mov eax,ebx
+    imul eax,SECTORS_PER_SLOT
+    add eax,FS_BASE_LBA
+    mov ecx,SECTORS_PER_SLOT
+    mov edi,persist_buf
     call ata_read
 
-    cmp byte [persist_buf], 0
+    cmp byte [persist_buf],0
     je .next                      ; empty on-disk slot
 
-    ; entry ptr = fs_entries + (FS_COUNT - FS_SPARE_COUNT + ebx) * FS_REC_SIZE
-    mov eax, FS_COUNT
-    sub eax, FS_SPARE_COUNT
-    add eax, ebx
-    imul eax, FS_REC_SIZE
-    add eax, fs_entries
-    mov edx, eax                  ; edx = entry ptr
+    ; entry ptr=fs_entries+(FS_COUNT-FS_SPARE_COUNT+ebx)*FS_REC_SIZE
+    mov eax,FS_COUNT
+    sub eax,FS_SPARE_COUNT
+    add eax,ebx
+    imul eax,FS_REC_SIZE
+    add eax,fs_entries
+    mov edx,eax                  ; edx = entry ptr
 
     ; preserve the in-memory data ptr that gen_fs assigned
-    mov eax, [edx + FS_NAME_LEN + 4]
+    mov eax,[edx+FS_NAME_LEN+4]
     push eax
     push edx
 
     ; copy on-disk record into entry (overwriting data ptr too)
-    mov esi, persist_buf
-    mov edi, edx
-    mov ecx, FS_REC_SIZE
+    mov esi,persist_buf
+    mov edi,edx
+    mov ecx,FS_REC_SIZE
     cld
     rep movsb
 
     pop edx
     pop eax
-    mov [edx + FS_NAME_LEN + 4], eax  ; restore real data ptr
+    mov [edx+FS_NAME_LEN+4],eax  ; restore real data ptr
 
     ; copy content from persist_buf+512 to entry's data buffer
-    mov edi, eax
-    mov esi, persist_buf + 512
-    mov ecx, FS_CAPACITY
+    mov edi,eax
+    mov esi,persist_buf+512
+    mov ecx,FS_CAPACITY
     rep movsb
 .next:
     inc ebx
@@ -1839,18 +1770,16 @@ load_fs_persist:
     popad
     ret
 
-
-
 ; --------------------------------
 ; -------- TAB completion --------
 ; --------------------------------
 tab_complete:
     pushad
-    mov ecx, [cmd_len]
-    test ecx, ecx
+    mov ecx,[cmd_len]
+    test ecx,ecx
     jz .out           
     ; ---- first pass: count matches, remember last one ----
-    xor edx, edx                  ; edx = match counter
+    xor edx,edx                  ; edx = match counter
     mov dword [tab_match_count],0
     mov dword [tab_single_ptr],0
     ; --- scan built-in cmd_table ---
@@ -1861,69 +1790,69 @@ tab_complete:
     push esi
     call tab_prefix_match     ; eax=1 match, 0 no match; esi unchanged
     pop esi
-    test eax, eax
+    test eax,eax
     jz .bi_next
     inc edx
     mov [tab_single_ptr],esi  
 .bi_next:
     ; skip to end of name (find null)
 .bi_skip:
-    cmp byte [esi], 0
+    cmp byte [esi],0
     je .bi_skip_end
     inc esi
     jmp .bi_skip
 .bi_skip_end:
     inc esi                       ; skip null
-    add esi, 4                    ; skip dd handler
+    add esi,4                    ; skip dd handler
     jmp .bi_loop
 .bi_done:
 
     ; --- scan fs_entries for executables (type == 2) ---
-    mov esi, fs_entries
-    mov ecx, FS_COUNT
+    mov esi,fs_entries
+    mov ecx,FS_COUNT
 .fs_loop:
-    test ecx, ecx
+    test ecx,ecx
     jz .fs_done
     ; extract basename from full vpath  "/bin/ls"
     push esi
     push ecx
     call tab_basename             ; eax = ptr to basename, 0 if not /bin/
-    test eax, eax
+    test eax,eax
     jz .fs_next
     ; check type == 2 (exec)
-    cmp dword [esi + FS_NAME_LEN], 2
+    cmp dword [esi+FS_NAME_LEN],2
     jne .fs_next
     ; prefix match against basename
-    push eax                      ; save basename ptr
-    mov esi, eax                  ; tab_prefix_match reads from esi
+    push eax                     ; save basename ptr
+    mov esi,eax                  ; tab_prefix_match reads from esi
     call tab_prefix_match
-    pop esi                       ; esi = basename ptr (name to display)
-    test eax, eax
+    pop esi                      ; esi = basename ptr (name to display)
+    test eax,eax
     jz .fs_next_pop
     inc edx
-    mov [tab_single_ptr], esi
+    mov [tab_single_ptr],esi
     jmp .fs_next_pop
 .fs_next_pop:
     pop ecx
     pop esi
-    add esi, FS_REC_SIZE
+    add esi,FS_REC_SIZE
     dec ecx
     jmp .fs_loop
 .fs_next:
     pop ecx
     pop esi
-    add esi, FS_REC_SIZE
+    add esi,FS_REC_SIZE
     dec ecx
     jmp .fs_loop
 .fs_done:
 
-    mov [tab_match_count], edx
+    mov [tab_match_count],edx
 
     ; ---- decide what to do ----
-    test edx, edx
-    jz .out                       ; 0 matches â†’ do nothing
+    test edx,edx
+    jz .out                       ; 0 matches do nothing
 
-    cmp edx, 1
+    cmp edx,1
     je .do_complete               ; 1 match  â†’ complete in place
 
     ; ---- multiple matches: list them ----
@@ -1932,10 +1861,10 @@ tab_complete:
     call tab_print_all_matches
     call prompt
     ; reprint current cmd_buf
-    mov esi, cmd_buf
-    mov ecx, [cmd_len]
+    mov esi,cmd_buf
+    mov ecx,[cmd_len]
 .reprint:
-    test ecx, ecx
+    test ecx,ecx
     jz .out
     lodsb
     call putchar
@@ -1944,13 +1873,13 @@ tab_complete:
 
 .do_complete:
     ; --- append missing suffix from tab_single_ptr ---
-    mov esi, [tab_single_ptr]
-    mov ecx, [cmd_len]
-    ; skip 'ecx' chars of the matched name (the prefix already typed)
+    mov esi,[tab_single_ptr]
+    mov ecx,[cmd_len]
+    ; skip ecx chars of the matched name (the prefix already typed)
 .skip_prefix:
-    test ecx, ecx
+    test ecx,ecx
     jz .append_rest
-    cmp byte [esi], 0
+    cmp byte [esi],0
     je .out                       ; shouldn't happen
     inc esi
     dec ecx
@@ -1958,24 +1887,24 @@ tab_complete:
 .append_rest:
     ; copy remaining chars of name into cmd_buf and echo them
 .copy_rest:
-    mov al, [esi]
-    test al, al
+    mov al,[esi]
+    test al,al
     jz .add_space
     ; bounds check: cmd_buf is 64 bytes
-    mov ebx, [cmd_len]
-    cmp ebx, 62
+    mov ebx,[cmd_len]
+    cmp ebx,62
     jae .out
-    mov [cmd_buf + ebx], al
+    mov [cmd_buf+ebx],al
     inc dword [cmd_len]
     call putchar
     inc esi
     jmp .copy_rest
 .add_space:
-    mov ebx, [cmd_len]
-    cmp ebx, 63
+    mov ebx,[cmd_len]
+    cmp ebx,63
     jae .out
-    mov al, ' '
-    mov [cmd_buf + ebx], al
+    mov al,' '
+    mov [cmd_buf+ebx],al
     inc dword [cmd_len]
     call putchar
 .out:
@@ -1993,16 +1922,16 @@ tab_prefix_match:
     push esi
     push edi
     push ecx
-    mov edi, cmd_buf
-    mov ecx, [cmd_len]
-    test ecx, ecx
+    mov edi,cmd_buf
+    mov ecx,[cmd_len]
+    test ecx,ecx
     jz .match                     ; empty prefix matches everything
 .cmp_loop:
-    mov al, [esi]
-    mov ah, [edi]
-    cmp al, ah
+    mov al,[esi]
+    mov ah,[edi]
+    cmp al,ah
     jne .no
-    test al, al
+    test al,al
     jz .match                     ; both ended simultaneously
     inc esi
     inc edi
@@ -2012,13 +1941,13 @@ tab_prefix_match:
     pop ecx
     pop edi
     pop esi
-    mov eax, 1
+    mov eax,1
     ret
 .no:
     pop ecx
     pop edi
     pop esi
-    xor eax, eax
+    xor eax,eax
     ret
 
 
@@ -2032,37 +1961,37 @@ tab_prefix_match:
 tab_basename:
     push esi
     ; check "/bin/" prefix
-    cmp byte [esi],   '/'
+    cmp byte [esi],'/'
     jne .no
-    cmp byte [esi+1], 'b'
+    cmp byte [esi+1],'b'
     jne .no
-    cmp byte [esi+2], 'i'
+    cmp byte [esi+2],'i'
     jne .no
-    cmp byte [esi+3], 'n'
+    cmp byte [esi+3],'n'
     jne .no
-    cmp byte [esi+4], '/'
+    cmp byte [esi+4],'/'
     jne .no
     ; make sure there's something after it and no further '/'
-    lea esi, [esi+5]
-    cmp byte [esi], 0
+    lea esi,[esi+5]
+    cmp byte [esi],0
     je .no
-    mov eax, esi                  ; candidate basename start
+    mov eax,esi                  ; candidate basename start
 .scan:
-    mov al, [esi]
-    test al, al
+    mov al,[esi]
+    test al,al
     jz .ok
-    cmp al, '/'
+    cmp al,'/'
     je .no                        ; nested dir skip
     inc esi
     jmp .scan
 .ok:
-    mov eax, [esp]                ; restore esi from stack
-    lea eax, [eax+5]              ; /bin/ offset
+    mov eax,[esp]                ; restore esi from stack
+    lea eax,[eax+5]              ; /bin/ offset
     pop esi
     ret
 .no:
     pop esi
-    xor eax, eax
+    xor eax,eax
     ret
 
 ; -------------------------------------------------------------
@@ -2071,20 +2000,20 @@ tab_basename:
 ; -------------------------------------------------------------
 tab_print_all_matches:
     ; --- built-ins ---
-    mov esi, cmd_table
+    mov esi,cmd_table
 .pbi_loop:
-    cmp byte [esi], 0
+    cmp byte [esi],0
     je .pbi_done
     push esi
     call tab_prefix_match
     pop esi
-    test eax, eax
+    test eax,eax
     jz .pbi_skip
     ; print name
     push esi
 .pbi_print:
     lodsb
-    test al, al
+    test al,al
     jz .pbi_after
     call putchar
     jmp .pbi_print
@@ -2096,7 +2025,7 @@ tab_print_all_matches:
     pop esi
 .pbi_skip:
 .pbi_find_end:
-    cmp byte [esi], 0
+    cmp byte [esi],0
     je .pbi_end
     inc esi
     jmp .pbi_find_end
@@ -2120,16 +2049,16 @@ tab_print_all_matches:
     cmp dword [esi+FS_NAME_LEN],2
     jne .pfs_next
     push eax
-    mov esi, eax
+    mov esi,eax
     call tab_prefix_match
     pop esi
-    test eax, eax
+    test eax,eax
     jz .pfs_next
     ; print basename
     push esi
 .pfs_print:
     lodsb
-    test al, al
+    test al,al
     jz .pfs_sep
     call putchar
     jmp .pfs_print
