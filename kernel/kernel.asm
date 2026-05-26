@@ -26,29 +26,11 @@ start:
     mov esp,V2P(stack_top)
     mov ebp,esp
     pushad
-   
-    call page_mapping
-
-    mov eax,V2P(page_directory)
-    mov cr3,eax
-    mov eax,cr0
-    or eax,0x80000000
-    mov cr0,eax
-    mov eax,higher_half
-    jmp eax
-
-higher_half:
-    call reserve_kernel_pages
-    popad
-    mov esp,stack_top
-    mov ebp,esp
-    jmp kernel_main
 
 ; -----------------------------------------
 ; page directory entries
 ; MUST be PHYSICAL addresses
 ; -----------------------------------------
-page_mapping:
     mov edi,V2P(page_directory)
     xor eax,eax
     mov ecx,1024
@@ -56,6 +38,7 @@ page_mapping:
     mov [edi],eax
     add edi,4
     loop .clear_pd
+
 ; -----------------------------------------
 ; kernel_low_page_table
 ; physical 0x00400000 - 0x007FFFFF
@@ -70,6 +53,8 @@ page_mapping:
     add eax,0x1000
     add edi,4
     loop .fill_kernel
+
+
 ; ------------------------------------------
 ; identity map first 4MB
 ; ------------------------------------------
@@ -83,6 +68,7 @@ page_mapping:
     add ebx,4096
     add edi,4
     loop .make_identity
+
 ; ------------------------------------------
 ; heap_page_table_0
 ; physical 0x00800000 - 0x00BFFFFF
@@ -97,6 +83,8 @@ page_mapping:
     add eax,4096
     add edi,4
     loop .fill_heap0
+
+
 ; ------------------------------------------
 ; heap_page_table_1
 ; physical 0x00C00000 - 0x00FFFFFF
@@ -111,6 +99,8 @@ page_mapping:
     add eax,4096
     add edi,4
     loop .fill_heap1
+
+
 ; ------------------------------------------
 ; heap_page_table_2
 ; physical 0x01000000 - 0x013FFFFF
@@ -125,6 +115,8 @@ page_mapping:
     add eax,4096
     add edi,4
     loop .fill_heap2
+
+
 ; -------------------------------------------
 ; PDE[0]
 ; -------------------------------------------
@@ -132,6 +124,7 @@ page_mapping:
     or eax,3
     mov [V2P(page_directory)+(0*4)],eax
     mov [V2P(page_directory)+(768*4)],eax
+
 ; -------------------------------------------
 ; PDE[1]
 ; -------------------------------------------
@@ -139,6 +132,7 @@ page_mapping:
     or eax,3
     mov [V2P(page_directory)+(1*4)],eax
     mov [V2P(page_directory)+(769*4)],eax
+
 ; -------------------------------------------
 ; PDE[2]
 ; -------------------------------------------
@@ -146,6 +140,7 @@ page_mapping:
     or eax,3
     mov [V2P(page_directory)+(2*4)],eax
     mov [V2P(page_directory)+(770*4)],eax
+
 ; -------------------------------------------
 ; PDE[3]
 ; -------------------------------------------
@@ -153,6 +148,7 @@ page_mapping:
     or eax,3
     mov [V2P(page_directory)+(3*4)],eax
     mov [V2P(page_directory)+(771*4)],eax
+
 ; -------------------------------------------
 ; PDE[4]
 ; -------------------------------------------
@@ -160,11 +156,33 @@ page_mapping:
     or eax,3
     mov [V2P(page_directory)+(4*4)],eax
     mov [V2P(page_directory)+(772*4)],eax
-    ret
 
-; ----------------------------------------------------
+; -------------------------------------------
+; load CR3
+; -------------------------------------------
+    mov eax,V2P(page_directory)
+    mov cr3,eax
+
+; -------------------------------------------
+; enable paging
+; -------------------------------------------
+    mov eax,cr0
+    or eax,0x80000000
+    mov cr0,eax
+
+    mov eax,higher_half
+    jmp eax
+
+higher_half:
+    call reserve_kernel_pages
+    popad
+    mov esp,stack_top
+    mov ebp,esp
+    jmp kernel_main
+
+
 ;Saving our own soul from the page allocator's greed
-; ----------------------.-----------------------------
+;----------------------.-----------------------------
 reserve_kernel_pages:
     push eax
     push ebx
