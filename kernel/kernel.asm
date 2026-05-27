@@ -3,8 +3,6 @@
 CODE_SEG          equ 0x08        ; Offset - code seg in GDT
 DATA_SEG          equ 0x10        ; Offset - data seg in GDT
 
-PROG_LOAD_ADDR equ 0xC0700000
-
 %define V2P(x) (x-0xC0000000)
 
 kernel_phys_start equ V2P(start)
@@ -26,11 +24,29 @@ start:
     mov esp,V2P(stack_top)
     mov ebp,esp
     pushad
+   
+    call page_mapping
+
+    mov eax,V2P(page_directory)
+    mov cr3,eax
+    mov eax,cr0
+    or eax,0x80000000
+    mov cr0,eax
+    mov eax,higher_half
+    jmp eax
+
+higher_half:
+    call reserve_kernel_pages
+    popad
+    mov esp,stack_top
+    mov ebp,esp
+    jmp kernel_main
 
 ; -----------------------------------------
 ; page directory entries
 ; MUST be PHYSICAL addresses
 ; -----------------------------------------
+page_mapping:
     mov edi,V2P(page_directory)
     xor eax,eax
     mov ecx,1024
@@ -38,7 +54,6 @@ start:
     mov [edi],eax
     add edi,4
     loop .clear_pd
-
 ; -----------------------------------------
 ; kernel_low_page_table
 ; physical 0x00400000 - 0x007FFFFF
@@ -53,8 +68,6 @@ start:
     add eax,0x1000
     add edi,4
     loop .fill_kernel
-
-
 ; ------------------------------------------
 ; identity map first 4MB
 ; ------------------------------------------
@@ -68,7 +81,6 @@ start:
     add ebx,4096
     add edi,4
     loop .make_identity
-
 ; ------------------------------------------
 ; heap_page_table_0
 ; physical 0x00800000 - 0x00BFFFFF
@@ -83,8 +95,6 @@ start:
     add eax,4096
     add edi,4
     loop .fill_heap0
-
-
 ; ------------------------------------------
 ; heap_page_table_1
 ; physical 0x00C00000 - 0x00FFFFFF
@@ -99,8 +109,6 @@ start:
     add eax,4096
     add edi,4
     loop .fill_heap1
-
-
 ; ------------------------------------------
 ; heap_page_table_2
 ; physical 0x01000000 - 0x013FFFFF
@@ -115,8 +123,6 @@ start:
     add eax,4096
     add edi,4
     loop .fill_heap2
-
-
 ; -------------------------------------------
 ; PDE[0]
 ; -------------------------------------------
@@ -124,7 +130,6 @@ start:
     or eax,3
     mov [V2P(page_directory)+(0*4)],eax
     mov [V2P(page_directory)+(768*4)],eax
-
 ; -------------------------------------------
 ; PDE[1]
 ; -------------------------------------------
@@ -132,7 +137,6 @@ start:
     or eax,3
     mov [V2P(page_directory)+(1*4)],eax
     mov [V2P(page_directory)+(769*4)],eax
-
 ; -------------------------------------------
 ; PDE[2]
 ; -------------------------------------------
@@ -140,7 +144,6 @@ start:
     or eax,3
     mov [V2P(page_directory)+(2*4)],eax
     mov [V2P(page_directory)+(770*4)],eax
-
 ; -------------------------------------------
 ; PDE[3]
 ; -------------------------------------------
@@ -148,7 +151,6 @@ start:
     or eax,3
     mov [V2P(page_directory)+(3*4)],eax
     mov [V2P(page_directory)+(771*4)],eax
-
 ; -------------------------------------------
 ; PDE[4]
 ; -------------------------------------------
@@ -156,33 +158,11 @@ start:
     or eax,3
     mov [V2P(page_directory)+(4*4)],eax
     mov [V2P(page_directory)+(772*4)],eax
+    ret
 
-; -------------------------------------------
-; load CR3
-; -------------------------------------------
-    mov eax,V2P(page_directory)
-    mov cr3,eax
-
-; -------------------------------------------
-; enable paging
-; -------------------------------------------
-    mov eax,cr0
-    or eax,0x80000000
-    mov cr0,eax
-
-    mov eax,higher_half
-    jmp eax
-
-higher_half:
-    call reserve_kernel_pages
-    popad
-    mov esp,stack_top
-    mov ebp,esp
-    jmp kernel_main
-
-
+; ----------------------------------------------------
 ;Saving our own soul from the page allocator's greed
-;----------------------.-----------------------------
+; ----------------------.-----------------------------
 reserve_kernel_pages:
     push eax
     push ebx
@@ -930,7 +910,7 @@ calc_free_heap:
 ; -- Kernel Commands --
 help_cmd:
     push esi
-    mov esi,help_lbl
+    mov esi,help_me
     call print_cr
     pop esi
     ret  
@@ -2990,42 +2970,144 @@ fs_resolve:
     ret
 
 ; ---------------------------------------------------------
-;  exec_bin — fallback for unknown commands
-;  builds /bin/<argv0>, looks up in fs_entries, copies the
-;  blob to PROG_LOAD_ADDR, calls it.
+;  exec_bin — fallback from devops commands
 ; ---------------------------------------------------------
-exec_bin:
+exec_bin: 
     cmp dword [argc], 0
-    je .silent               ; empty line — say nothing
-    mov edi, path_buf
-    mov esi, bin_prefix
+    je .silent
+    ; --- build path "/bin/<cmd>" ---
+    mov edi,path_buf
+    mov esi,bin_prefix
 .cp_pref:
     lodsb
     stosb
     test al,al
     jnz .cp_pref
-    dec edi                  ; back over trailing null
-    mov esi, [argv]
+    dec edi                         ; back over null
+    mov esi,[argv]
 .cp_cmd:
-    lodsb
+    lodsb 
     stosb
     test al,al
     jnz .cp_cmd
 
-    mov esi, path_buf
+    ; --- FS lookup ---
+    mov esi,path_buf
     call fs_lookup
     test eax,eax
     jz .nf
-    cmp dword [eax + FS_NAME_LEN], 2
+    cmp dword [eax+FS_NAME_LEN],2   ; type must be 2 (exec)
     jne .nf
 
-    mov esi, [eax + FS_NAME_LEN + 4]
-    mov ecx, [eax + FS_NAME_LEN + 8]
-    mov edi, PROG_LOAD_ADDR
+    ; --- save data ptr + size ---
+    mov esi,[eax+FS_NAME_LEN+4]     ; esi = binary data ptr
+    mov ebx,[eax+FS_NAME_LEN+8]     ; ebx = byte count
+
+    ; --- compute page count (round up) ---
+    mov ecx,ebx
+    add ecx,4095
+    shr ecx,12                      ; ecx = page count
+
+    ; --- find a free virtual range ---
+    push esi
+    push ebx
+    push ecx
+    call find_free_virt             ; eax = vbase, CF=1 on fail
+    pop ecx
+    pop ebx
+    pop esi
+    jc .oom
+     
+    ; --- save vbase and page count for cleanup ---
+    mov [exec_vbase],eax
+    mov [exec_pages],ecx
+
+    ; --- map pages one by one ---
+    push esi                        ; save data src ptr
+    push ebx                        ; save byte count
+    mov edi,eax                     ; edi = current virt addr
+.map_loop:
+    test ecx,ecx
+    jz .map_done
+    push ecx
+    push edi
+    call alloc_page                 ; eax = phys frame, CF=1 fail
+    pop edi  
+    pop ecx  
+    jc .oom_mapped
+    
+    mov ebx,eax                     ; ebx = phys
+    mov eax,edi                     ; eax = virt
+    push ecx
+    push edi
+    push esi
+    mov ecx,3                       ; flags: present | rw
+    call map_page
+    pop esi
+    pop edi
+    pop ecx
+    jc .oom_mapped
+
+    add edi,4096
+    dec ecx
+
+    jmp .map_loop
+.map_done:
+    pop ecx                         ; byte count
+    pop esi                         ; data src
+
+    ; --- copy binary into mapped region ---
+    mov edi,[exec_vbase]
     cld
     rep movsb
 
-    call PROG_LOAD_ADDR
+    ; --- register in alloc_table ---
+    mov eax,[exec_vbase]
+    mov ebx,[exec_pages]
+    call register_allocation
+
+    ; --- call binary entry point ---
+    mov eax, [exec_vbase]
+    call eax
+   
+    ; --- free pages after return ---
+    mov eax,[exec_vbase]
+    mov ebx,[exec_pages]
+    call free_pages
+
+    ; --- clear alloc_table entry ---
+    push eax
+    push ecx
+    mov ecx,alloc_table_count
+    mov edi,alloc_table
+    mov eax,[exec_vbase]
+.find_slot:
+    cmp [edi],eax
+    je .clear_slot
+    add edi,8
+    loop .find_slot
+    jmp .cleanup_done
+.clear_slot:
+    mov dword [edi],0
+    mov dword [edi+4],0
+.cleanup_done:
+    pop ecx
+    pop eax
+    ret
+
+.oom_mapped:
+    ; partial map: free whatever was mapped, fall through to oom msg
+    pop ebx
+    pop esi
+    mov eax,[exec_vbase]
+    mov ebx,[exec_pages]
+    sub ebx,ecx                     ; pages successfully mapped
+    test ebx,ebx
+    jz .oom
+    call free_pages
+.oom:
+    mov esi,out_mem
+    call print_cr
     ret
 .nf:
     mov esi,command_nf_msg
@@ -3033,6 +3115,7 @@ exec_bin:
 .silent:
     ret
 
+;------------------------------------
 
 irq0:
     pushad
@@ -3166,7 +3249,7 @@ sys_msg   db "*** x86 Operating System ***", 0
 deadbeef  db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF
           db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF 
 
-help_lbl 
+help_me:
         db 13,"peek  -  at 16 bytes @ esi",13
         db "regs  -  cpu registers",13
         db "stack -  top of stack",13
@@ -3217,6 +3300,8 @@ real_mem: db "reality : $",0
 sys_peek_msg db "peek = 0x",0
 
 bin_prefix   db "/bin/",0
+exec_vbase   dd 0
+exec_pages   dd 0
 
 argc        dd 0
 argv        times 16 dd 0
