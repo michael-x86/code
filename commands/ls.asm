@@ -1,27 +1,29 @@
 ; ls - list entries in current working directory
 [bits 32]
-[org 0xC0700000]
+[org 0x00000000]
+
 
 _start:
     xor ebx, ebx                 ; index = 0
 .loop:
     push ebx
-    mov edi, name
+    mov edi,name
+    mov word [edi],0
     mov eax, 13                  ; sys_list_dir(ebx, edi) -> eax = type or -1
     int 0x80
     pop ebx
-    cmp eax, -1
+    cmp eax,-1
     je .done
 
     push ebx
-    push eax                     ; save type
-    mov esi, name
-    mov eax, 1                   ; sys_print(esi)
+    push eax                    ; save type
+    mov esi,name
+    mov eax,1                   ; sys_print(esi)
     int 0x80
     pop eax
-    test eax, eax                ; type 0 = dir → append '/'
+    test eax,eax                ; type 0 = dir → append '/'
     jnz .nodir
-    mov ebx, '/'
+    mov ebx,'/'
     mov eax, 0                   ; sys_putchar
     int 0x80
 .nodir:
@@ -33,4 +35,7 @@ _start:
 .done:
     ret
 
-name: times 64 db 0
+section .bss
+;----------------------------
+alignb 16
+name: resb 64 

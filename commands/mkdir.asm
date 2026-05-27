@@ -1,32 +1,43 @@
 [bits 32]
-[org 0xC0700000]
+[org 0x00000000]            ; Base is relative to whatever exec_bin allocates
 
 _start:
+    call .get_base
+.get_base:
+    pop ebp                 ; ebp now contains the absolute runtime address of .get_base
+    sub ebp, .get_base      ; ebp now contains the delta/base load address
+
+    ; --- Fetch global argument 1 ---
     mov ebx, 1
-    mov edi, arg
-    mov eax, 14                 ; sys_get_arg(1, arg)
+    lea edi, [ebp + arg]    ; Calculate absolute runtime address of arg buffer
+    mov eax, 14             ; sys_get_arg
     int 0x80
     cmp eax, -1
     je .usage
 
-    mov esi, arg
-    mov eax, 20                 ; sys_mkdir(esi) -> 0/-1
+    ; --- Create Directory ---
+    lea esi, [ebp + arg]
+    mov eax, 20             ; sys_mkdir
     int 0x80
     cmp eax, -1
-    jne .done
+    je .err
+    ret                     ; Returns directly back into exec_bin for cleanup
 
-    mov esi, err_mkdir
-    mov eax, 2
-    int 0x80
-    ret
 .usage:
-    mov esi, usage_mkdir
-    mov eax, 2
+    lea esi, [ebp + usage_msg]
+    mov eax, 2              ; sys_print
     int 0x80
-.done:
     ret
 
-err_mkdir:   db "mkdir: cannot create directory", 13, 0
-usage_mkdir: db "usage: mkdir <name>", 13, 0
-arg:         times 128 db 0
+.err:
+    lea esi, [ebp + err_msg]
+    mov eax, 2              ; sys_print
+    int 0x80
+    ret
 
+; --- Data Section ---
+usage_msg db "usage: mkdir <path>", 13, 0
+err_msg   db "mkdir: cannot create directory (exists or FS full)", 13, 0
+
+; --- Buffer Section ---
+arg:      times 128 db 0

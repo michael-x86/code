@@ -1,6 +1,7 @@
 ; cat - print file contents.  usage:  cat <path>
 [bits 32]
-[org 0xC0700000]
+[org 0x00000000]            ; Base is relative to whatever exec_bin allocates
+
 
 _start:
     mov ebx, 1

@@ -1,6 +1,7 @@
 ; touch - create an empty file.  usage:  touch <path>
 [bits 32]
-[org 0xC0700000]
+[org 0x00000000]
+
 
 %define arg  0xC0700400
 

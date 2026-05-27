@@ -1,8 +1,6 @@
-; rm - unlink a regular file.  usage:  rm <path>
 [bits 32]
-[org 0xC0700000]
+[org 0x00000000]
 
-%define arg  0xC0700400
 
 _start:
     mov ebx, 1
@@ -12,23 +10,45 @@ _start:
     cmp eax, -1
     je .usage
 
+    ; refuse to rm a directory or executable
     mov esi, arg
-    mov eax, 19              ; sys_unlink
+    mov edi, stat_buf
+    mov eax, 15
     int 0x80
     cmp eax, -1
-    je .err
-    ret
+    je .noent
+    cmp dword [stat_buf], 1     ; type must be 1 (regular file)
+    jne .notfile
+    mov esi, arg
+    mov eax, 19                 ; sys_unlink
+    int 0x80
+    cmp eax, -1
+    jne .done
 
+    mov esi, err_rm
+    mov eax, 2
+    int 0x80
+    ret
+.noent:
+    mov esi, err_noent
+    mov eax, 2
+    int 0x80
+    ret
+.notfile:
+    mov esi, err_notfile
+    mov eax, 2
+    int 0x80
+    ret
 .usage:
-    mov esi, usage_msg
+    mov esi, usage_rm
     mov eax, 2
     int 0x80
-    ret
-.err:
-    mov esi, err_msg
-    mov eax, 2
-    int 0x80
+.done:
     ret
 
-usage_msg db "usage: rm <file>", 13, 0
-err_msg   db "rm: no such file", 13, 0
+err_noent:   db "rm: no such file", 13, 0
+err_notfile: db "rm: not a regular file (use rmdir for directories)", 13, 0
+err_rm:      db "rm: cannot remove file", 13, 0
+usage_rm:    db "usage: rm <name>", 13, 0
+arg:         times 128 db 0
+stat_buf:    times 12  db 0
