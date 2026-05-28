@@ -173,7 +173,7 @@ gdb
 (gdb) continue
 ```
 
-No debug symbols (flat binary). Use raw addresses: `0x7C00` (bootloader), `0xC0100000` (kernel), `0xC0700000` (current program).
+No debug symbols (flat binary). Use raw addresses: `0x7C00` (bootloader), `0xC0100000` (kernel).
 
 ## Known limitations
 
