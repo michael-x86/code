@@ -5,7 +5,7 @@ Thanks for your interest in contributing! This is a low-level, instruction-centr
 ## Getting Started
 
 1. **Fork** the repository
-2. **Clone** your fork: `git clone https://github.com/YOUR_USERNAME/code.git`
+2. **Clone** your fork: `git clone https://github.com/michael-x86/code.git`
 3. **Create a branch** for your change: `git checkout -b feature/my-feature` or `git checkout -b fix/my-bug`
 4. **Make your changes**
 5. **Test thoroughly** (see below)
@@ -41,7 +41,7 @@ You'll need:
 ### Assembly (NASM)
 
 - **Labels:** lowercase with underscores (e.g., `setup_paging`, `.check_loop`)
-- **Constants:** UPPERCASE with underscores (e.g., `CODE_SEG`, `PROG_LOAD_ADDR`)
+- **Constants:** UPPERCASE with underscores (e.g., `CODE_SEG`, `DATA_SEG`)
 - **Registers:** Use meaningful register names in comments
 - **Comments:** 
   - Document non-obvious logic
@@ -125,7 +125,7 @@ Before submitting:
 
 ## Questions?
 
-Open an **issue** with the `question` label, and we'll help.
+Open an **issue** with the `question` label.
 
 ## License
 
