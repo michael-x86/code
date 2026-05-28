@@ -133,4 +133,4 @@ All contributions are licensed under the MIT License (see `LICENSE`).
 
 ---
 
-**Happy coding!** Remember: every register, flag, and interrupt is intentional. Comments that explain hardware behavior are worth their weight in silicon.
+**Happy coding!** Remember: Comments that explain hardware behavior are worth their weight in silicon.
