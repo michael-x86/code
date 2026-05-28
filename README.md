@@ -181,7 +181,7 @@ No debug symbols (flat binary). Use raw addresses: `0x7C00` (bootloader), `0xC01
 - Path resolver handles absolute paths, `.`, `..`, and a single relative name. `cd foo/bar` is not supported.
 - File content capped at 1024 bytes (`FS_CAPACITY`).
 - 16 runtime-creatable files (`FS_SPARE_COUNT`).
-- BIOS boot reads everything in one call, so the kernel is capped at ~127 sectors (~63 KB). Currently around 88.
+- BIOS boot reads everything in one call. 
 - `ls` ignores arguments — always lists the current directory.
 - `vi` has no scroll; files longer than 24 lines get the top scrolled off during render.
 - Persistence assumes the primary IDE master is the boot disk.
