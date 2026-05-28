@@ -8,7 +8,7 @@ A small 32-bit operating system written entirely in NASM assembly. Boots from BI
 Built from scratch on Linux with no libc, no runtime, and no external abstractions.
 ```
 $ ls
-bin/  proc/  var/  usr/  dev/  lib/  etc/
+bin/  proc/  var/ etc/
 $ cd /proc
 $ cat cpuinfo
 processor      : 0
@@ -54,7 +54,7 @@ Requires `nasm`, `python3`, `qemu-system-i386`.
 ## Layout
 
 ```
-.
+
 ├── bootloader.asm           # 16→32 bit boot stub
 ├── kernel.asm               # the kernel
 ├── gen_fs.py                # walks build dir, emits fs.inc
@@ -63,9 +63,10 @@ Requires `nasm`, `python3`, `qemu-system-i386`.
 │   ├── pwd.asm  ls.asm  cd.asm  cat.asm
 │   ├── touch.asm  write.asm  rm.asm
 │   ├── vi.asm  mkdir.asm  (and then some...)
-├── bin/                     # compiled userland (no extension)
-├── proc/    var/log/        # /proc, /var/log content (host-side mirror)
-└── etc/  usr/  dev/  lib/
+├── bin/                     # compiled userland
+├── proc/                    # content (host-side mirror)
+├── var/log/                 # content (host-side mirror)
+└── etc/                     # content (host-side mirror)
 ```
 
 Whatever sits in `bin/`, `proc/`, `var/log/`, `etc/`, `usr/`, `dev/`, `lib/` on the host shows up at the matching path inside the OS. Rebuilding picks up changes automatically.
