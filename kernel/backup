@@ -1,8 +1,0 @@
-scp kernel.asm nordstedt.eu:KERNEL/ 
-scp bootloader.asm nordstedt.eu:KERNEL/ 
-scp commands/*.asm nordstedt.eu:KERNEL/commands/
-scp gen_fs.py nordstedt.eu:KERNEL/
-scp -rp var nordstedt.eu:KERNEL/
-scp -rp bin nordstedt.eu:KERNEL/
-scp -rp etc nordstedt.eu:KERNEL/
-scp -rp proc nordstedt.eu:KERNEL/
