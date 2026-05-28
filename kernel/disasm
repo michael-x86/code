@@ -1,0 +1,14 @@
+#!/bin/bash
+
+if [[ $# -gt 0 ]]
+then
+    echo "Header bytes:"
+    xxd -g1 -l8 -o0x08000000  "$1"
+
+    echo
+    echo "Code:"
+
+    ndisasm -b32 -e8 -o0x08000008 "$1" |head -27
+    #ndisasm -b32 -e8 "$1" | head -10
+    #xxd -g1 -l8 -o0x08000049  "$1"
+fi

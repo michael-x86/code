@@ -1,12 +1,7 @@
 [org 0xC0100000]
 
-CODE_SEG          equ 0x08        ; Offset - code seg in GDT
-DATA_SEG          equ 0x10        ; Offset - data seg in GDT
-
-%define V2P(x) (x-0xC0000000)
-
-kernel_phys_start equ V2P(start)
-kernel_phys_end   equ V2P(page_bitmap+32768)
+CODE_SEG equ 0x08   ; Offset - code seg in GDT
+DATA_SEG equ 0x10   ; Offset - data seg in GDT
 
 global start
 
@@ -21,44 +16,66 @@ start:
     mov fs,ax
     mov gs,ax
 
-    mov esp,V2P(stack_top)
-    mov ebp,esp
+    call .get_pc
+.get_pc:
+    pop ebp            
+    sub ebp,.get_pc   ; nice
+
+    ; --- physical stack ---
+    lea esp,[stack_top+ebp] 
+    push ebp                 
     pushad
    
     call page_mapping
 
-    mov eax,V2P(page_directory)
+    lea eax, [page_directory+ebp]
     mov cr3,eax
+
+    ; Enable Paging
     mov eax,cr0
     or eax,0x80000000
     mov cr0,eax
+
+    ; Jump to virtual memory
     mov eax,higher_half
     jmp eax
 
 higher_half:
+    ; Paging is now active!
+    ; We are now in virtual memory space.
+    ; (Aren't we living in a virtual reality anyway?)
+
+    mov ebp,[esp+32]    
+    lea eax,[start+ebp]
+    mov [kernel_phys_start_var],eax
+    lea eax,[page_bitmap+32768+ebp]
+    mov [kernel_phys_end_var],eax
+
     call reserve_kernel_pages
+
     popad
+    add esp,4             
     mov esp,stack_top
     mov ebp,esp
     jmp kernel_main
 
 ; -----------------------------------------
 ; page directory entries
-; MUST be PHYSICAL addresses
 ; -----------------------------------------
 page_mapping:
-    mov edi,V2P(page_directory)
+    lea edi,[page_directory+ebp]
     xor eax,eax
     mov ecx,1024
 .clear_pd:
     mov [edi],eax
     add edi,4
     loop .clear_pd
+
 ; -----------------------------------------
 ; kernel_low_page_table
 ; physical 0x00400000 - 0x007FFFFF
 ; -----------------------------------------
-    mov edi,V2P(kernel_low_page_table)
+    lea edi,[kernel_low_page_table+ebp]
     mov eax,0x00400000
     mov ecx,1024
 .fill_kernel:
@@ -68,10 +85,11 @@ page_mapping:
     add eax,0x1000
     add edi,4
     loop .fill_kernel
+
 ; ------------------------------------------
 ; identity map first 4MB
 ; ------------------------------------------
-    mov edi,V2P(identity_page_table)
+    lea edi,[identity_page_table+ebp]
     xor ebx,ebx
     mov ecx,1024
 .make_identity:
@@ -81,11 +99,12 @@ page_mapping:
     add ebx,4096
     add edi,4
     loop .make_identity
+
 ; ------------------------------------------
 ; heap_page_table_0
-; physical 0x00800000 - 0x00BFFFFF
+; physical 0x00800000-0x00BFFFFF
 ; ------------------------------------------
-    mov edi,V2P(heap_page_table_0)
+    lea edi,[heap_page_table_0+ebp]
     mov eax,0x00800000
     mov ecx,1024
 .fill_heap0:
@@ -95,11 +114,12 @@ page_mapping:
     add eax,4096
     add edi,4
     loop .fill_heap0
+
 ; ------------------------------------------
 ; heap_page_table_1
-; physical 0x00C00000 - 0x00FFFFFF
+; physical 0x00C00000-0x00FFFFFF
 ; ------------------------------------------
-    mov edi,V2P(heap_page_table_1)
+    lea edi,[heap_page_table_1+ebp]
     mov eax,0x00C00000
     mov ecx,1024
 .fill_heap1:
@@ -109,11 +129,12 @@ page_mapping:
     add eax,4096
     add edi,4
     loop .fill_heap1
+
 ; ------------------------------------------
 ; heap_page_table_2
-; physical 0x01000000 - 0x013FFFFF
+; physical 0x01000000-0x013FFFFF
 ; ------------------------------------------
-    mov edi,V2P(heap_page_table_2)
+    lea edi,[heap_page_table_2+ebp]
     mov eax,0x01000000
     mov ecx,1024
 .fill_heap2:
@@ -123,54 +144,55 @@ page_mapping:
     add eax,4096
     add edi,4
     loop .fill_heap2
+
 ; -------------------------------------------
-; PDE[0]
+; Map PDEs 
 ; -------------------------------------------
-    mov eax,V2P(identity_page_table)
+    lea edx, [page_directory+ebp]
+
+    ; PDE[0] & PDE[768] -> identity_page_table
+    lea eax, [identity_page_table + ebp]
     or eax,3
-    mov [V2P(page_directory)+(0*4)],eax
-    mov [V2P(page_directory)+(768*4)],eax
-; -------------------------------------------
-; PDE[1]
-; -------------------------------------------
-    mov eax,V2P(kernel_low_page_table)
+    mov [edx+(0*4)],eax
+    mov [edx+(768*4)],eax
+
+    ; PDE[1] & PDE[769] -> kernel_low_page_table
+    lea eax, [kernel_low_page_table + ebp]
     or eax,3
-    mov [V2P(page_directory)+(1*4)],eax
-    mov [V2P(page_directory)+(769*4)],eax
-; -------------------------------------------
-; PDE[2]
-; -------------------------------------------
-    mov eax,V2P(heap_page_table_0)
+    mov [edx+(1*4)],eax
+    mov [edx+(769*4)],eax
+
+    ; PDE[2] & PDE[770] -> heap_page_table_0
+    lea eax, [heap_page_table_0 + ebp]
     or eax,3
-    mov [V2P(page_directory)+(2*4)],eax
-    mov [V2P(page_directory)+(770*4)],eax
-; -------------------------------------------
-; PDE[3]
-; -------------------------------------------
-    mov eax,V2P(heap_page_table_1)
+    mov [edx+(2*4)],eax
+    mov [edx+(770*4)],eax
+
+    ; PDE[3] & PDE[771] -> heap_page_table_1
+    lea eax, [heap_page_table_1 + ebp]
     or eax,3
-    mov [V2P(page_directory)+(3*4)],eax
-    mov [V2P(page_directory)+(771*4)],eax
-; -------------------------------------------
-; PDE[4]
-; -------------------------------------------
-    mov eax,V2P(heap_page_table_2)
+    mov [edx+(3*4)],eax
+    mov [edx+(771*4)],eax
+
+    ; PDE[4] & PDE[772] -> heap_page_table_2
+    lea eax, [heap_page_table_2 + ebp]
     or eax,3
-    mov [V2P(page_directory)+(4*4)],eax
-    mov [V2P(page_directory)+(772*4)],eax
+    mov [edx+(4*4)],eax
+    mov [edx+(772*4)],eax
     ret
 
 ; ----------------------------------------------------
-;Saving our own soul from the page allocator's greed
-; ----------------------.-----------------------------
+; Saving our own soul from the page allocator's greed
+; ----------------------------------------------------
 reserve_kernel_pages:
     push eax
     push ebx
-    mov eax,kernel_phys_start
-    and eax,0FFFFF000h
-    mov ebx,kernel_phys_end
-    add ebx,0FFFh
-    and ebx,0FFFFF000h
+    
+    mov eax, [kernel_phys_start_var]
+    and eax, 0FFFFF000h
+    mov ebx, [kernel_phys_end_var]
+    add ebx, 0FFFh
+    and ebx, 0FFFFF000h
 .reserve_loop:
     cmp eax,ebx
     jae .done
@@ -236,11 +258,9 @@ task1_entry:
     jmp .loop
 
 ; -------------------------------------
-;       The real worker bee - 
 ;   shell and command processor 
 ; -------------------------------------
 task2_entry:  
-main_loop:
     cmp byte [tick_flag],0
     je .skip
     mov byte [tick_flag],0
@@ -274,7 +294,7 @@ main_loop:
     mov byte [cmd_buf],0
     call prompt
     hlt
-    jmp main_loop
+    jmp task2_entry
 .tab:
     call tab_complete
     xor al,al
@@ -286,7 +306,7 @@ main_loop:
     call delchar
 .done:
     hlt
-    jmp main_loop
+    jmp task2_entry
 
 
 ;---  Parse ARGS  ---
@@ -811,7 +831,7 @@ init_tasks:
     sub eax,4
     mov dword [eax],0x08
     sub eax, 4
-    mov dword [eax],main_loop  ; entry point
+    mov dword [eax],task2_entry ; entry point
     sub eax,32
     mov edi,eax
     mov ecx,8
@@ -907,7 +927,7 @@ calc_free_heap:
     pop ebx
     ret
 
-; -- Kernel Commands --
+; -- Help! I need somebody - help --
 help_cmd:
     push esi
     mov esi,help_me
@@ -1015,7 +1035,7 @@ free_cmd:
 
 ;---------------------------
 ; in:
-;   eax = virtual base
+;   eax = base
 ;   ebx = page count
 ;---------------------------
 ; who borrowed what memory
@@ -1041,7 +1061,7 @@ register_allocation:
 
 ; -----------------------
 ; in:
-;   eax = virtual base
+;   eax = base
 ;   ebx = page count
 ; -----------------------
 free_pages:
@@ -1150,12 +1170,9 @@ hex2int:
 .done_hex:
     ret
 
-;HEAP_BASE equ 0xC0800000
-;HEAP_MAX  equ 0xC1000000
-
 ;----------------------------
 ; in:
-;   eax = physical page addr
+;   eax = page addr
 ;   marks page allocated
 ;----------------------------
 ;     Marking territory - 
@@ -1193,7 +1210,7 @@ set_page_free:
 
 ; -----------------------------
 ; out:
-;   eax = physical page address
+;   eax = page address
 ;   CF=0 success CF=1 fail
 ;
 ;  8192 dword = 32768 bytes
@@ -1228,7 +1245,6 @@ alloc_page:
 .free_bit:
     bts eax,ecx
     mov [page_bitmap+ebx*4],eax
-    ; physical address
     mov eax,ebx
     shl eax,5
     add eax,ecx
@@ -1257,6 +1273,7 @@ map_page:
     push edi
     mov edx,eax
     shr edx,22
+
     cmp edx,768
     je .pt0
     cmp edx,769
@@ -1267,30 +1284,35 @@ map_page:
     je .pt3
     cmp edx,772
     je .pt4
+
     stc
     jmp .fail
+
 .pt0:
-    mov edi,V2P(identity_page_table) 
+    mov edi,identity_page_table   
     jmp .map
 .pt1:
-    mov edi,V2P(kernel_low_page_table)
+    mov edi,kernel_low_page_table
     jmp .map
 .pt2:
-    mov edi,V2P(heap_page_table_0)
+    mov edi,heap_page_table_0
     jmp .map
 .pt3:
-    mov edi,V2P(heap_page_table_1)
+    mov edi,heap_page_table_1
     jmp .map
 .pt4:
-    mov edi,V2P(heap_page_table_2)
+    mov edi,heap_page_table_2
+
 .map:
-    mov edx,eax
-    shr edx,12
-    and edx,03FFh
-    or ebx,ecx
+    ; Get the PTE 
+    mov edx, eax
+    shr edx, 12
+    and edx, 0x03FF        
+    or ebx, ecx
     mov [edi+edx*4],ebx
-    invlpg [eax]
-    clc
+    invlpg [eax]        ; if CPU had cached an older translation
+                        ; for this virtual address - wipe it!
+    clc                          
 .fail:
     pop edi
     pop edx
@@ -1535,70 +1557,6 @@ heap_cmd:
     pop esi
     pop ecx
     pop eax
-    ret
-
-;------------------------------
-;  in:  
-;     eax = virtual address
-;  out: 
-;     eax = physical address
-;------------------------------
-space_cmd:
-    mov eax,0xC0100000 ; -> 0x00100000
-    call newline
-    mov esi,virt_mem
-    call print
-    call print_hex_dword
-    call newline
-    call virt2phys
-    jc  .virt      
-    mov esi,real_mem
-    call print
-    call print_hex_dword
-.virt:      
-    call newline
-    call newline
-    ret  
-
-virt2phys:
-    push ebx
-    push ecx
-    push edx
-    mov edx,eax
-    mov ebx,eax
-    shr ebx,22
-    cmp ebx,768
-    je .pt0
-    cmp ebx,769
-    je .pt1
-    clc
-    stc
-    jmp .fail
-.pt0:
-    mov ecx,V2P(identity_page_table) 
-    jmp .walk
-.pt1:
-    mov ecx,V2P(kernel_low_page_table)  
-.walk:
-    mov ebx,edx
-    shr ebx,12
-    and ebx,03FFh
-    mov eax,[ecx+ebx*4]
-    test eax,1
-    jz .not_present
-    and eax,0FFFFF000h
-    mov ebx,edx
-    and ebx,0FFFh
-    add eax,ebx
-    clc
-    jmp .done
-.not_present:
-    stc
-.done:
-.fail:
-    pop edx
-    pop ecx
-    pop ebx
     ret
 
 ;-----------------------------------------------------
@@ -3249,7 +3207,7 @@ sys_msg   db "*** x86 Operating System ***", 0
 deadbeef  db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF
           db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF 
 
-help_me:
+help_me: 
         db 13,"peek  -  at 16 bytes @ esi",13
         db "regs  -  cpu registers",13
         db "stack -  top of stack",13
@@ -3296,6 +3254,9 @@ pf_addr db "ADDRESS: 0x",0
 
 virt_mem: db "virtual : $",0
 real_mem: db "reality : $",0
+
+kernel_phys_start_var: dd 0
+kernel_phys_end_var:   dd 0
 
 sys_peek_msg db "peek = 0x",0
 
@@ -3415,8 +3376,6 @@ cmd_table:             ; BBox Cmds
     dd free_cmd
     db "heap",0
     dd heap_cmd
-    db "space",0
-    dd space_cmd
     db "sys",0
     dd sys_cmd
     db 0          ; end of BuzyBox
