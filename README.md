@@ -113,7 +113,7 @@ Syscalls run with interrupts off (interrupt gate), so the PIT cannot preempt the
 
 Each runtime-created file lives in two places: a 1024-byte buffer in RAM, and a fixed 3-sector slot on disk at `LBA 256 + slot*3`. The mapping never moves. On `sys_create` / `sys_write` / `sys_unlink`, the kernel updates RAM and immediately writes that slot's three sectors to disk via PIO ATA. On boot, `load_fs_persist` reads each slot back and replays it into RAM.
 
-Build-seeded files (everything in `/proc`, `/etc`, `/var/log`, etc.) live inside the kernel image and reset to their build-time content on every boot — they don't persist. Only the 16 spare slots do.
+Build-seeded files (everything in `/proc`, `/etc`, `/var/log`) live inside the kernel image and reset to their build-time content on every boot — they don't persist. Only the 16 spare slots do.
 
 The build script backs up the FS region before reassembling the kernel and restores it after, so your persisted files survive `./asm` too.
 
