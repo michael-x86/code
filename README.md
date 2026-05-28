@@ -60,16 +60,16 @@ Requires `nasm`, `python3`, `qemu-system-i386`.
 ├── gen_fs.py                # walks build dir, emits fs.inc
 ├── asm                      # build script
 ├── commands/                # userland program sources
-│   ├── pwd.asm  ls.asm  cd.asm  cat.asm
-│   ├── touch.asm  write.asm  rm.asm
-│   ├── vi.asm  mkdir.asm  (and then some...)
+│   ├── pwd.asm ls.asm cd.asm cat.asm
+│   ├── touch.asm write.asm rm.asm
+│   ├── vi.asm mkdir.asm (and then some...)
 ├── bin/                     # compiled userland
 ├── proc/                    # content (host-side mirror)
 ├── var/log/                 # content (host-side mirror)
 └── etc/                     # content (host-side mirror)
 ```
 
-Whatever sits in `bin/`, `proc/`, `var/log/`, `etc/`, `usr/`, `dev/`, `lib/` on the host shows up at the matching path inside the OS. Rebuilding picks up changes automatically.
+Whatever sits in `bin/`, `proc/`, `var/log/`, `etc/`  on the host shows up at the matching path inside the OS. Rebuilding picks up changes automatically.
 
 ## Adding a program
 
@@ -133,14 +133,13 @@ The build script backs up the FS region before reassembling the kernel and resto
 | Command         | Notes                                  |
 |-----------------|----------------------------------------|
 | `dump`          | dump 16 bytes                          |
-| `regs`          | show CPU registers                     |
-| `stack`         | dump 16 stack longwords                |
+| `regs`          | CPU registers                          |
+| `stack`         | top of stack                           |
 | `heap`          | show heap state                        |
 | `alloc <n>`     | allocate `n` 4 KB pages                |
 | `free <addr>`   | release a previous `alloc`             |
-| `space`         | show a virt→phys mapping demo          |
 | `clear`         |                                        |
-| `exit` / `quit` | shutdown                               |
+| `exit`          | shutdown                               |
 | `sys`           | int 0x80 self-test                     |
 | `help`          |                                        |
 
