@@ -36,7 +36,6 @@ flags          : learning infiltration phased-plasma
 
 Requires `nasm`, `python3`, `qemu-system-i386`.
 
-```bash
 ./asm -r          # build + run in a QEMU window
 ./asm -f          # fullscreen
 ./asm -d          # GDB server on localhost:1234, halts at start
