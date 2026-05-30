@@ -2460,6 +2460,34 @@ sys_get_arg:                 ; ebx = index, edi = dst -> eax = 0 or -1
     mov eax,-1
     ret
 
+
+; ---------------------------------------------
+; sys_get_ps_info (eax = 22)
+; in: 
+;    ebx = pntt to 16-byte buffer in user space
+; out: 
+;    eax = 0 on success, -1 on invalid pointer
+; ---------------------------------------------
+sys_get_ps_info:
+    cmp ebx, 0 ; Basic sanity check
+    je .error
+    ; edx or another free reg
+    push edx
+    mov edx, [current_task]
+    mov [ebx + 0], edx
+    mov edx, [task0_esp]
+    mov [ebx + 4], edx
+    mov edx, [task1_esp]
+    mov [ebx + 8], edx
+    mov edx, [task2_esp]
+    mov [ebx + 12], edx
+    pop edx
+    xor eax,eax ; success
+    ret
+.error:
+    mov eax,-1  ; error
+    ret
+
 ; ---------------------------------------------------------
 ;  Writeable FS syscalls
 ; ---------------------------------------------------------
@@ -2594,7 +2622,6 @@ sys_unlink:
     pop esi
     mov eax, -1
     ret
-
 
 sys_mkdir:
     push esi
@@ -3307,6 +3334,7 @@ syscall_table:
     dd sys_unlink        ; 19: esi = path -> eax = 0/-1
     dd sys_mkdir         ; 20: esi = path -> eax = 0/-1 
     dd sys_rmdir         ; 21: esi = path -> eax=n 0/-1
+    dd sys_get_ps_info   ; 22: ebx = dst ptr -> eax=0/-1
 SYSCALL_COUNT equ ($-syscall_table)/4
 
 ;---- Keycode -> ASCII Convertion ----
@@ -3446,7 +3474,7 @@ identity_page_table:
     resd 1024
 
 alignb 4096
-kernel_low_page_table: ;second_page_table:
+kernel_low_page_table: 
     resd 1024
 
 alignb 4096

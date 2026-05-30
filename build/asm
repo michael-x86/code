@@ -6,7 +6,7 @@ KERNEL_ASM="kernel.asm"
 IMG="os.img"
 
 # Programs to compile
-COMMANDS=(pwd ls cd ping cat touch write rm rmdir mkdir cp mv)
+COMMANDS=(ps pwd ls cd ping cat touch write rm rmdir mkdir cp mv)
 
 RUN_QEMU=false
 FULLSCREEN=false
