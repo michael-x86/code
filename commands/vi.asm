@@ -1,11 +1,5 @@
 [bits 32]
 [org 0x00000000]
- 
-; ----------------------------
-;  There can be only one - vi 
-;          
-;  michael@nordstedt.eu       
-; ----------------------------
 
 %define MODE_CMD        0
 %define MODE_INSERT     1
@@ -72,21 +66,21 @@ _start:
     je .ins_mode
 
     ; --- Command Mode ---
-    cmp al, 'h'
+    cmp al,';'  ; left  
     je .kh
-    cmp al, 'l'
+    cmp al,'\'   ;right 
     je .kl
-    cmp al, 'j'
+    cmp al,39    ;down 
     je .kj
-    cmp al, 'k'
+    cmp al,'['   ;up 
     je .kk
-    cmp al, 'i'
+    cmp al,'i'
     je .ki
-    cmp al, 'x'
+    cmp al,'x'
     je .kx
-    cmp al, 'w'
+    cmp al,'w'
     je .kw
-    cmp al, 'q'
+    cmp al,'q'
     je .kq
     jmp .loop
 
@@ -126,13 +120,13 @@ _start:
 
     ; --- Insert Mode ---
 .ins_mode:
-    cmp al, 27              ; ESC
+    cmp al,27              ; ESC
     je .esc
-    cmp al, 8               ; Backspace
+    cmp al,8               ; Backspace
     je .bs
-    cmp al, 13              ; Enter
+    cmp al,13              ; Enter
     je .nl
-    cmp al, ' '
+    cmp al,' '
     jb .loop
     call insert_char
     jmp .loop
@@ -351,48 +345,48 @@ render:
 .ins:
     lea esi, [ebp + mode_ins]
 .pr:
-    mov eax, 1
+    mov eax,1
     int 0x80
-    mov eax, 3              ; print newline
-    int 0x80
-
-    lea esi, [ebp + text_buf]
-    mov ecx, [ebp + size_var]
-    mov eax, 16             ; sys_print_buffer
+    mov eax,3              ; print newline
     int 0x80
 
-    lea esi, [ebp + text_buf]
-    mov ecx, [ebp + cursor_var]
-    mov ebx, 1              ; screen row
-    xor edx, edx            ; screen col
+    lea esi,[ebp + text_buf]
+    mov ecx,[ebp + size_var]
+    mov eax,16             ; sys_print_buffer
+    int 0x80
+
+    lea esi,[ebp + text_buf]
+    mov ecx,[ebp + cursor_var]
+    mov ebx,1              ; screen row
+    xor edx,edx            ; screen col
 .walk:
-    test ecx, ecx
+    test ecx,ecx
     jz .pos
-    mov al, [esi]
-    cmp al, 0x0A
+    mov al,[esi]
+    cmp al,0x0A
     je .nl
     inc edx
-    cmp edx, 80
+    cmp edx,80
     jb .nxt
-    xor edx, edx
+    xor edx,edx
     inc ebx
     jmp .nxt
 .nl:
-    xor edx, edx
+    xor edx,edx
     inc ebx
 .nxt:
     inc esi
     dec ecx
     jmp .walk
 .pos:
-    cmp ebx, 25
+    cmp ebx,25
     jae .done
-    mov eax, ebx
-    imul eax, 80
-    add eax, edx
-    shl eax, 1
-    mov edi, VGA_BASE
-    add edi, eax
+    mov eax,ebx
+    imul eax,80
+    add eax,edx
+    shl eax,1
+    mov edi,VGA_BASE
+    add edi,eax
     mov byte [edi+1], 0x70  ; cursor attribute
 .done:
     popad
@@ -401,8 +395,8 @@ render:
 ; --- Constant Data Section ---
 ; (This is where the actual file on disk terminates)
 hdr1       db "-- vi ", 0
-mode_cmd   db " [CMD] --", 13, 0
-mode_ins   db " [INS] --", 13, 0
+mode_cmd   db " [CMD] --", 0
+mode_ins   db " [INS] --", 0
 usage_msg  db "usage: vi <file>", 13, 0
 
 ; --- Virtual BSS Section (Costing 0 Bytes on Disk) ---

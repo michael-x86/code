@@ -222,9 +222,9 @@ kernel_main:
     call pic_remap
     call set_freq       ; 100 hz. 
 
-    mov edi, cwd_buf
-    mov ecx, 128
-    xor eax, eax
+    mov edi,cwd_buf
+    mov ecx,128
+    xor eax,eax
     rep stosb
     mov byte [cwd_buf],'/'
 
@@ -355,11 +355,9 @@ save_history:
     pushad
     cmp dword [cmd_len],0
     je .done
-
     mov eax,[hist_count]
     cmp eax,32
     jb .append
-
     mov esi,hist_buf+64
     mov edi,hist_buf
     mov ecx,31*64
@@ -432,9 +430,7 @@ hist_frwd:
     mul ecx
     mov esi,hist_buf
     add esi,eax
-
     call clear_cmdline
-
     mov edi,cmd_buf
     xor ecx,ecx
 .copy:
@@ -470,6 +466,8 @@ clear_cmdline:
 .done:
     popad
     ret
+;--------------------------------------
+
 
 ; -------------------------------------
 ; lookup table dispatcher
@@ -485,7 +483,6 @@ dispatch_command:
     test eax,eax
     jz .not_found
     mov edi,[argv]     ; argv[0] = command
-
 .compare:
     mov al,[ebx]
     mov dl,[edi]
@@ -584,7 +581,6 @@ newline:
     pop eax
     ret
 
-; ---  prompt/cursor  ---
 prompt:
     mov al,'$'   
     call putchar
@@ -714,6 +710,12 @@ get_key:
     mov al,bl
     test al,al
     jz .empty
+
+    ;xor ebx,ebx     ;key code
+    ;movsx ebx,al
+    ;mov eax,6
+    ;int 0x80
+
     ; -------------------------
     ; arrow up
     ; -------------------------
@@ -1682,7 +1684,7 @@ tab_complete:
     ; extract basename from full vpath  "/bin/ls"
     push esi
     push ecx
-    call tab_basename             ; eax = ptr to basename, 0 if not /bin/
+    call tab_basename            ; eax = ptr to basename, 0 if not /bin/
     test eax,eax
     jz .fs_next
     ; check type==2 (exec)
@@ -1692,7 +1694,7 @@ tab_complete:
     push eax                     ; save basename ptr
     mov esi,eax                  ; tab_prefix_match reads from esi
     call tab_prefix_match
-    pop esi                       ; esi = basename ptr (name to display)
+    pop esi                      ; esi = basename ptr (name to display)
     test eax,eax
     jz .fs_next_pop
     inc edx
@@ -1774,12 +1776,6 @@ tab_complete:
     popad
     ret
 
-; -------------------------------------------------------------
-;  in:  
-;    esi = name (null-terminated)
-; out: 
-;    eax = 1 if starts with typed prefix, else 0
-; -------------------------------------------------------------
 tab_prefix_match:
     push esi
     push edi
@@ -1812,14 +1808,6 @@ tab_prefix_match:
     xor eax,eax
     ret
 
-
-; -------------------------------------------------------------
-;  in:  
-;      esi = pointer to fs_entry (vpath at start)
-;  out: 
-;      eax = ptr to basename IFF path is /bin/<name>,
-;            0 otherwise
-; -------------------------------------------------------------
 tab_basename:
     push esi
     ; check "/bin/" prefix
@@ -1865,6 +1853,7 @@ tab_print_all_matches:
     mov esi, cmd_table
 .pbi_loop:
     cmp byte [esi],0
+    jmp .pbi_done          ;NORD
     je .pbi_done
     push esi
     call tab_prefix_match
@@ -2179,28 +2168,28 @@ sys_chdir:     ; esi = path -> eax = 0 or -1
     mov eax,-1
     ret
 
-sys_list_dir:     ; ebx = index, edi = dst -> eax = type or -1
+sys_list_dir:     ; (ls) ebx=index, edi=dst -> eax = type or -1
     push ebx
     push ecx
     push edx
     push esi
     push edi
-    mov [tmp_dst], edi
-    mov [tmp_left], ebx
-    mov esi, fs_entries
-    mov ecx, FS_COUNT
+    mov [tmp_dst],edi
+    mov [tmp_left],ebx
+    mov esi,fs_entries
+    mov ecx,FS_COUNT
 .next:
-    test ecx, ecx
+    test ecx,ecx
     jz .nf
     mov edi,cwd_buf
     call basename_if_child   ; eax = basename ptr(esi) or 0
     test eax, eax
     jz .skip
-    cmp dword [tmp_left], 0
+    cmp dword [tmp_left],0
     je .hit
     dec dword [tmp_left]
 .skip:
-    add esi, FS_REC_SIZE
+    add esi,FS_REC_SIZE
     dec ecx
     jmp .next
 .hit:
@@ -2294,11 +2283,11 @@ sys_print_n:                 ; esi=ptr, ecx=count -> eax=0
     ret
 
 sys_get_arg:         ; ebx = index, edi = dst -> eax = 0 or -1
-    cmp ebx, [argc]
+    cmp ebx,[argc]
     jae .nf
     push esi
-    mov esi, [argv+ebx*4]
-    test esi, esi
+    mov esi,[argv+ebx*4]
+    test esi,esi
     jz .nf_pop
 .cp:
     lodsb
@@ -2366,14 +2355,11 @@ sys_create:
     mov eax,-1
     ret
 
-;   esi=path, ebx=src buf, ecx=count 
-;   overwrites file content; size = count.
-sys_write:
+sys_write:           ; echo [text] > file
     push esi
     push edi
     push ebx
     push ecx
-    ; esp+0=ecx esp+4=ebx esp+8=edi esp+12=esi
     mov edi, resolve_buf
     call fs_resolve
     mov esi, resolve_buf
@@ -2409,7 +2395,7 @@ sys_write:
     ret
 
 ;   esi=path -> eax=0/-1
-;   (file type=1). Marks slot free; keeps the data buffer
+;   Marks slot free; keeps the data buffer
 ;   in place so it can be reused by a future sys_create.
 sys_unlink:
     push esi
@@ -2499,9 +2485,8 @@ sys_rmdir:
     jz .err
     cmp dword [eax+FS_NAME_LEN],0    ; must be type dir
     jne .err
-    ; check empty: no entry in fs_entries has resolved path as parent
     push eax
-    mov edi,resolve_buf                 ; use as cwd for check
+    mov edi,resolve_buf              ; use as cwd for check
     mov esi,fs_entries
     mov ecx,FS_COUNT
 .chk:
@@ -2540,7 +2525,7 @@ sys_rmdir:
     mov eax,-1
     ret
 
-sys_get_ps_info:
+sys_ps_info:
     cmp ebx,0 ; Basic sanity check
     je .error
     push edx
@@ -2558,15 +2543,6 @@ sys_get_ps_info:
 .error:
     mov eax,-1  ; error
     ret
-
-;push eax
-;push ecx
-;push edx
-;push ebx
-;push original_esp
-;push ebp
-;push esi
-;push edi
 
 ;EDI
 ;ESI
@@ -2646,7 +2622,6 @@ sys_alloc:
     mov esi,alloc_mem
     call print
     mov eax,edi
-    ;mov word [edi],0x6666
     call print_hex_dword
     call newline
     ret
@@ -2694,12 +2669,6 @@ sys_dealloc:
     call print_cr
     ret
 
-;------------------------------
-; in:
-;   arg = <address>
-; out:
-;   print 32 bytes 
-; -----------------------------
 sys_peek:
     push eax 
     push esi
@@ -2755,9 +2724,9 @@ sys_poke:
     pop eax 
     ret
 
-; in:  esi=entry_path, edi=cwd
-; out: eax = pointer to basename inside entry_path, 
-;      or 0 if not a direct child
+
+; tab completion stuff
+
 basename_if_child:
     push ebx
     push edx
@@ -3344,7 +3313,7 @@ syscall_table:
     dd sys_unlink        ; 19: esi = path 
     dd sys_mkdir         ; 20: esi = path  
     dd sys_rmdir         ; 21: esi = path 
-    dd sys_get_ps_info   ; 22: ebx = dst ptr 
+    dd sys_ps_info       ; 22: ebx = dst ptr 
     dd sys_stack_dump    ; 23: 
     dd sys_alloc         ; 24: in = <bytes> -> page ptr 
     dd sys_dealloc       ; 25: in = <page ptr> 
