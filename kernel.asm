@@ -1020,7 +1020,7 @@ asc2int:
 ; out: 
 ;   eax: integer    
 ; -------------------
-hex2int:
+sys_hex2int:
     xor eax,eax
     xor ebx,ebx
     mov bl,[esi]
@@ -2663,7 +2663,7 @@ sys_dealloc:
     cmp ecx,2
     jne .usage
     mov esi,[argv+4]
-    call hex2int
+    call sys_hex2int
     mov esi,alloc_table
     mov ecx,alloc_table_count
 .search:
@@ -2703,7 +2703,7 @@ sys_peek:
     cmp eax,2
     jl .arguse
     mov esi,[argv+4]
-    call hex2int   ;in esi {str} out eax {int}
+    call sys_hex2int   ;in esi {str} out eax {int}
     ;call show_regs
 
     call newline
@@ -2737,11 +2737,11 @@ sys_poke:
     cmp eax,3
     jl .usage
     mov esi,[argv+4]
-    call hex2int   ;in esi {str} out eax {int}
+    call sys_hex2int   ;in esi {str} out eax {int}
     mov edi,eax
     ;call show_regs
     mov esi,[argv+8]
-    call hex2int   ;in esi {str} out eax {int}
+    call sys_hex2int   ;in esi {str} out eax {int}
 
     mov [edi],eax 
     ;call show_regs
@@ -3356,6 +3356,7 @@ syscall_table:
     dd sys_dealloc       ; 25: in = <page ptr> 
     dd sys_peek          ; 26: in = <address> 
     dd sys_poke          ; 27: in = <address> <value> 
+    dd sys_hex2int       ; 28: in = edi->string out=eax
 SYSCALL_COUNT equ ($-syscall_table)/4
 
 ;---- Keycode -> ASCII Convertion ----
@@ -3403,14 +3404,8 @@ keymap_shift:
 ; final   db 0
 ; --------------------------------------------------
 cmd_table:             ; BBox Cmds
-    db "clear",0
-    dd cls
-    db "echo",0
-    dd echo_cmd
     db "heap",0
     dd heap_cmd
-    db "sys",0
-    dd sys_cmd
     db 0          ; end of BuzyBox
 
 ;---- in-kernel virtual filesystem ----
