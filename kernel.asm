@@ -3,6 +3,11 @@
 CODE_SEG equ 0x08   ; Offset - code seg in GDT
 DATA_SEG equ 0x10   ; Offset - data seg in GDT
 
+; I would be happy if you allowed my contact details to remain.
+; Best regards,
+; Michael
+; michael@nordstedt.eu
+
 global start
 
 bits 32
