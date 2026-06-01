@@ -113,7 +113,7 @@ Programs are capped at 4 KB. — `resb` will zero-fill in flat-binary mode and i
 | 25 | dealloc   | esi = path                 | 0 / -1                           |
 | 26 | peek      | addr                       | dword at [addr]                  |
 | 27 | poke      | addr value                 |                                  |
-| 28 | hex2int   | esi -> string              | eax: integer                     | 
+| 28 | hex2int   | esi -> string              | integer eax                      | 
 Syscalls run with interrupts off (interrupt gate), so the PIT cannot preempt them.
 
 ## How persistence "works"
