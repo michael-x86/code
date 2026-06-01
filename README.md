@@ -28,8 +28,8 @@ flags          : learning infiltration phased-plasma
 - In-kernel virtual filesystem generated at build time from the project directory
 - Read/write filesystem: `touch`, `write`, `rm` from the prompt
 - Persistence to disk via PIO ATA — files survive reboot **and** kernel rebuilds
-- Linux-style `int 0x80` syscall interface (20 syscalls)
-- Userland binaries linked into `/bin` and loaded on demand: `pwd ls cd cat touch write rm mkdir rmdir vi`
+- Linux-style `int 0x80` syscall interface (20+ syscalls)
+- Userland binaries linked into `/bin` and loaded on demand: `ls pwd etc...`
 - Minimal modal `vi`: `hjkl`, `i`, `ESC`, `x`, `w`, `q`
 
 ## Quick start
@@ -105,8 +105,14 @@ Programs are capped at 4 KB. — `resb` will zero-fill in flat-binary mode and i
 | 17 | create    | esi = path                 | 0 / -1                           |
 | 18 | write     | esi = path, ebx = buf, ecx = n | 0 / -1                       |
 | 19 | unlink    | esi = path                 | 0 / -1                           |
-| 20 | sys_mkdir | esi = path                 | 0 / -1                           |
-| 21 | sys_rmdir | esi = path                 | 0 / -1                           |
+| 20 | mkdir     | esi = path                 | 0 / -1                           |
+| 21 | rmdir     | esi = path                 | 0 / -1                           |
+| 22 | ps        |                            | 0 / -1                           |
+| 23 | dump      | stack and regsisters       |                                  |
+| 24 | alloc     | esi = path                 | ptr to memory                    |
+| 25 | dealloc   | esi = path                 | 0 / -1                           |
+| 26 | peek      | addr                       | dword at [addr]                  |
+| 27 | poke      | addr value                 |                                  |
 Syscalls run with interrupts off (interrupt gate), so the PIT cannot preempt them.
 
 ## How persistence "works"
@@ -129,18 +135,8 @@ The build script backs up the FS region before reassembling the kernel and resto
 
 ## Built-in shell commands (kernel-side)
 
-| Command         | Notes                                  |
-|-----------------|----------------------------------------|
-| `dump`          | dump 16 bytes                          |
-| `regs`          | CPU registers                          |
-| `stack`         | top of stack                           |
-| `heap`          | show heap state                        |
-| `alloc <n>`     | allocate `n` 4 KB pages                |
-| `free <addr>`   | release a previous `alloc`             |
-| `clear`         |                                        |
-| `exit`          | shutdown                               |
-| `sys`           | int 0x80 self-test                     |
-| `help`          |                                        |
+| `heap`          | allocated memory pointers              |
+
 
 ## Userland programs (`/bin/`)
 
@@ -159,10 +155,15 @@ The build script backs up the FS region before reassembling the kernel and resto
 | `write <file> <text...>` | join args with spaces, append `\n`, write |
 | `rm <file>` | unlink a regular file                                  |
 | `ping`  | int 0x80 liveness test                                     |
-| `vi <file>` | minimal editor — `HJKL` as in the good ol' days  |
-
-
-
+| `vi <file>` | minimal editor — `HJKL` as in the good ol' days        |
+| `alloc <bytes>`  | chunks (min 4KB)                                  |
+| `dealloc <addr>`  | release chunks                                   |
+| `dump`  | dump top of stack and registers                            |
+| `exit`  | shutdown kernel                                            |
+| `ps`  | snapshot of current processes                                |
+| `help`  | help info int                                              | 
+| `poke <addr> <value>` |  C64 forever                      |          |  
+| `peek <addr>`         |  C64 and ever                                |
 ## Debugging with GDB
 
 ```bash
