@@ -224,10 +224,12 @@ get_key:
     cmp byte [kbd_shift], 0
     jne .shifted
 .normal:
-    mov al, [keymap + eax]
+    mov ebx, [keymap_active]
+    mov al, [ebx + eax]
     ret
 .shifted:
-    mov al, [keymap_shift + eax]
+    mov ebx, [keymap_shift_active]
+    mov al, [ebx + eax]
     ret
 .empty:
     xor al, al
@@ -1157,6 +1159,242 @@ print_tick:
     dec ecx
     jnz .next
     popad
+    ret
+
+; ── Config loading ─────────────────────────────────────────────────────────
+
+; -----------------------------------------------------------------------------
+; load_config — read /etc/config and set active keymap + date/time settings
+;   Parses a simple key=value text file from the virtual filesystem.
+;   Recognised keys: layout, timezone, datefmt, timefmt
+; -----------------------------------------------------------------------------
+load_config:
+    pushad
+
+    ; Look up /etc/config in the filesystem
+    mov esi, config_path
+    call fs_lookup
+    test eax, eax
+    jz .done                  ; no config file — keep defaults
+
+    ; esi = pointer to file data, ecx = file size
+    mov esi, [eax + FS_OFS_DATA]
+    mov ecx, [eax + FS_OFS_SIZE]
+    test ecx, ecx
+    jz .done
+
+    ; Parse line by line
+.parse_line:
+    cmp ecx, 0
+    jle .done
+
+    ; Skip leading whitespace / blank lines
+    mov al, [esi]
+    cmp al, ' '
+    je .skip_char
+    cmp al, 9                 ; tab
+    je .skip_char
+    cmp al, 10                ; LF
+    je .skip_char
+    cmp al, 13                ; CR
+    je .skip_char
+    cmp al, '#'
+    je .skip_comment
+    jmp .read_key
+
+.skip_comment:
+    ; Skip until end of line
+    cmp ecx, 0
+    jle .done
+    mov al, [esi]
+    inc esi
+    dec ecx
+    cmp al, 10
+    je .parse_line
+    cmp al, 13
+    je .parse_line
+    jmp .skip_comment
+
+.skip_char:
+    inc esi
+    dec ecx
+    jmp .parse_line
+
+.read_key:
+    ; Check for known keys
+    ; "layout"
+    push esi
+    push ecx
+    mov edi, key_layout
+    call .key_match
+    pop ecx
+    pop esi
+    test eax, eax
+    jnz .do_layout
+
+    ; "timezone"
+    push esi
+    push ecx
+    mov edi, key_timezone
+    call .key_match
+    pop ecx
+    pop esi
+    test eax, eax
+    jnz .do_timezone
+
+    ; "datefmt"
+    push esi
+    push ecx
+    mov edi, key_datefmt
+    call .key_match
+    pop ecx
+    pop esi
+    test eax, eax
+    jnz .do_datefmt
+
+    ; "timefmt"
+    push esi
+    push ecx
+    mov edi, key_timefmt
+    call .key_match
+    pop ecx
+    pop esi
+    test eax, eax
+    jnz .do_timefmt
+
+    ; Unknown key — skip line
+    jmp .skip_to_eol
+
+.do_layout:
+    call .skip_value          ; advance esi past '=' and whitespace
+    ; Check value: "us" or "sv"
+    cmp byte [esi], 'u'
+    jne .check_sv
+    cmp byte [esi + 1], 's'
+    jne .skip_to_eol
+    ; US layout (default) — pointers already set
+    jmp .skip_to_eol
+.check_sv:
+    cmp byte [esi], 's'
+    jne .skip_to_eol
+    cmp byte [esi + 1], 'v'
+    jne .skip_to_eol
+    ; Swedish layout
+    mov dword [keymap_active], keymap_swe
+    mov dword [keymap_shift_active], keymap_swe_shift
+    mov dword [cfg_layout], 1
+    jmp .skip_to_eol
+
+.do_timezone:
+    call .skip_value
+    ; Parse signed integer
+    push esi
+    call asc2int
+    mov [cfg_timezone], edx
+    pop esi
+    jmp .skip_to_eol
+
+.do_datefmt:
+    call .skip_value
+    cmp byte [esi], '0'
+    jne .check_fmt1
+    mov dword [cfg_datefmt], 0
+    jmp .skip_to_eol
+.check_fmt1:
+    cmp byte [esi], '1'
+    jne .check_fmt2
+    mov dword [cfg_datefmt], 1
+    jmp .skip_to_eol
+.check_fmt2:
+    cmp byte [esi], '2'
+    jne .skip_to_eol
+    mov dword [cfg_datefmt], 2
+    jmp .skip_to_eol
+
+.do_timefmt:
+    call .skip_value
+    cmp byte [esi], '0'
+    jne .check_time1
+    mov dword [cfg_timefmt], 0
+    jmp .skip_to_eol
+.check_time1:
+    cmp byte [esi], '1'
+    jne .skip_to_eol
+    mov dword [cfg_timefmt], 1
+    jmp .skip_to_eol
+
+.skip_to_eol:
+    cmp ecx, 0
+    jle .done
+    mov al, [esi]
+    inc esi
+    dec ecx
+    cmp al, 10
+    je .parse_line
+    cmp al, 13
+    je .parse_line
+    jmp .skip_to_eol
+
+.done:
+    popad
+    ret
+
+; --- helpers for config parsing ----------------------------------------------
+
+; key_match — check if the key at esi matches the null-terminated string at edi
+;   in:  esi = position in config file, edi = key name (null-terminated)
+;   out: eax = 1 if match (and next char is '='), 0 otherwise
+;   Note: esi is NOT advanced on match — caller must skip past '=' after
+.key_match:
+    push esi
+    push edi
+.km_loop:
+    mov al, [esi]
+    mov ah, [edi]
+    test ah, ah
+    jz .km_check_eq           ; end of key name — check for '='
+    cmp al, ah
+    jne .km_no
+    inc esi
+    inc edi
+    jmp .km_loop
+.km_check_eq:
+    cmp al, '='
+    jne .km_no
+    pop edi
+    pop esi
+    mov eax, 1
+    ret
+.km_no:
+    pop edi
+    pop esi
+    xor eax, eax
+    ret
+
+; skip_value — advance esi past '=' and any leading whitespace
+;   in/out: esi, ecx
+.skip_value:
+    cmp ecx, 0
+    jle .sv_done
+    mov al, [esi]
+    inc esi
+    dec ecx
+    cmp al, '='
+    jne .skip_value
+.sv_ws:
+    cmp ecx, 0
+    jle .sv_done
+    mov al, [esi]
+    cmp al, ' '
+    je .sv_wskip
+    cmp al, 9
+    je .sv_wskip
+    jmp .sv_done
+.sv_wskip:
+    inc esi
+    dec ecx
+    jmp .sv_ws
+.sv_done:
     ret
 
 ; --- banner — paint the boot message at the top of the screen ---------------

@@ -122,6 +122,7 @@ kernel_main:
     mov byte [cwd_buf], '/'
 
     call load_fs_persist
+    call load_config
     call cls
     call banner
     mov eax, VGA_COLS * 4
@@ -174,6 +175,37 @@ keymap_shift:
     db '<'
     times 256 - ($ - keymap_shift) db 0
 
+; --- Swedish keymap (index = scancode) --------------------------------------
+; Physical Swedish layout on PS/2 scancodes:
+;   0x0D = +    0x0E = ´ (dead acute)   0x1A = å   0x1B = ¨ (dead diaeresis)
+;   0x27 = ö    0x28 = ä                0x29 = §   0x56 = < >
+keymap_swe:
+    db 0, 27, '1','2','3','4','5','6','7','8'
+    db '9','0','+', 0xB4, 8, 9              ; 0x0D=+, 0x0E=´(dead acute)
+    db 'q','w','e','r','t','y','u','i'
+    db 'o','p', 0xE5, 0xA8, 13, 0           ; 0x1A=å, 0x1B=¨(dead diaeresis)
+    db 'a','s','d','f','g','h','j','k'
+    db 'l', 0xF6, 0xE4, 0xA7, 0, '\'       ; 0x27=ö, 0x28=ä, 0x29=§
+    db 'z','x','c','v','b','n','m'
+    db ',','.','-', 0, '*', 0, ' '
+    times 0x3B - ($ - keymap_swe) db 0
+    db '<'
+    times 256 - ($ - keymap_swe) db 0
+
+; --- Swedish shift keymap ----------------------------------------------------
+keymap_swe_shift:
+    db 0, 27, '!','"', '#', 0xA4, '%', '&', '/', '('
+    db ')','=', '?', 0x60, 8, 9             ; 0x0D==, 0x0E=`(dead grave)
+    db 'Q','W','E','R','T','Y','U','I'
+    db 'O','P', 0xC5, 0xA8, 13, 0           ; 0x1A=Å, 0x1B=¨(dead diaeresis)
+    db 'A','S','D','F','G','H','J','K'
+    db 'L', 0xD6, 0xC4, 0xB1, 0, '|'       ; 0x27=Ö, 0x28=Ä, 0x29=¹
+    db 'Z','X','C','V','B','N','M'
+    db ';', ':', '_', 0, '*', 0, ' '
+    times 0x3B - ($ - keymap_swe_shift) db 0
+    db '>'
+    times 256 - ($ - keymap_swe_shift) db 0
+
 ; --- Built-in command table: name, 0, handler address ------------------------
 cmd_table:
     db "peek",  0
@@ -205,7 +237,6 @@ cmd_table:
 ; --- Strings -----------------------------------------------------------------
 sys_msg      db "*** OMNI INDUSTRIES UNIFIED OPERATING SYSTEM ***", 0
 deadbeef     db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF
-             db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF
 
 help_me:
     db 13, "peek  -  display 16 bytes at magic address", 13
@@ -241,3 +272,10 @@ real_mem       db "reality : $", 0
 sys_peek_msg   db "peek = 0x", 0
 bin_prefix     db "/bin/", 0
 command_nf_msg db 13, "command not found", 13, 0
+
+; --- Config strings ----------------------------------------------------------
+config_path    db "/etc/config", 0
+key_layout     db "layout", 0
+key_timezone   db "timezone", 0
+key_datefmt    db "datefmt", 0
+key_timefmt    db "timefmt", 0

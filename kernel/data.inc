@@ -13,6 +13,16 @@ prompt_limit dd 0
 
 kbd_shift    db 0
 
+; --- Active keymap pointers (set from /etc/config at boot) --------------------
+keymap_active      dd keymap
+keymap_shift_active dd keymap_shift
+
+; --- Config state (populated from /etc/config) -------------------------------
+cfg_timezone    dd 0          ; timezone offset in hours from UTC (-12..+14)
+cfg_datefmt     dd 0          ; 0=YYYY-MM-DD, 1=DD/MM/YYYY, 2=MM/DD/YYYY
+cfg_timefmt     dd 0          ; 0=24h, 1=12h
+cfg_layout      dd 0          ; 0=US, 1=Swedish
+
 kernel_phys_start_var: dd 0
 kernel_phys_end_var:   dd 0
 
@@ -66,3 +76,4 @@ syscall_table:
     dd sys_asc2int
     dd sys_get_proc_info
     dd sys_itoa
+    dd sys_get_config

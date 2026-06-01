@@ -759,3 +759,63 @@ sys_itoa:                                ; 29: eax = value, edi = dst buffer →
     pop ebx
     pop eax
     ret
+
+sys_get_config:                          ; 30: ebx = key, edi = dst buf → eax = 0/-1
+    ; key values: 0=timezone, 1=datefmt, 2=timefmt, 3=layout
+    ; Returns the numeric value as a decimal string in dst buffer.
+    cmp ebx, 3
+    ja .bad
+    push ebx
+    push ecx
+    push edx
+    cmp ebx, 0
+    jne .c1
+    mov eax, [cfg_timezone]
+    jmp .write
+.c1:
+    cmp ebx, 1
+    jne .c2
+    mov eax, [cfg_datefmt]
+    jmp .write
+.c2:
+    cmp ebx, 2
+    jne .c3
+    mov eax, [cfg_timefmt]
+    jmp .write
+.c3:
+    mov eax, [cfg_layout]
+.write:
+    ; Convert eax to decimal string at edi
+    push edi
+    mov ecx, 0
+    mov ebx, 10
+    test eax, eax
+    jnz .div
+    mov byte [edi], '0'
+    inc edi
+    jmp .wdone
+.div:
+    xor edx, edx
+    div ebx
+    push edx
+    inc ecx
+    test eax, eax
+    jnz .div
+.wemit:
+    pop edx
+    mov al, dl
+    add al, '0'
+    mov [edi], al
+    inc edi
+    loop .wemit
+.wdone:
+    mov byte [edi], 0
+    pop edi
+    pop edx
+    pop ecx
+    pop ebx
+    xor eax, eax
+    ret
+.bad:
+    mov eax, -1
+    ret

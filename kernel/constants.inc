@@ -57,9 +57,9 @@ PIC_MASTER_OFFSET    equ 0x20
 PIC_SLAVE_OFFSET     equ 0x28
 
 ; --- FS persistence -----------------------------------------------------------
-FS_BASE_LBA          equ 256
-SECTORS_PER_SLOT     equ 3
-FS_PERSIST_BUF_SIZE  equ 1536          ; 3 * 512
+FS_BASE_LBA          equ 512
+SECTORS_PER_SLOT     equ 9
+FS_PERSIST_BUF_SIZE  equ 4608          ; 512 + 4096
 
 ; --- Shell --------------------------------------------------------------------
 CMD_BUF_SIZE         equ 64
@@ -109,7 +109,8 @@ IDT_DPL3             equ 11101110b    ; syscall gate: DPL=3
 %assign SYSCALL_ASC2INT      27
 %assign SYSCALL_GET_PROC_INFO 28
 %assign SYSCALL_ITOA          29
-SYSCALL_COUNT        equ 30
+%assign SYSCALL_GET_CONFIG    30
+SYSCALL_COUNT        equ 31
 
 ; --- FS entry structure offsets -----------------------------------------------
 FS_NAME_LEN          equ 56

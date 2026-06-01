@@ -19,7 +19,7 @@ ROOT = sys.argv[1] if len(sys.argv) > 1 else "."
 OUT  = sys.argv[2] if len(sys.argv) > 2 else "fs.inc"
 
 NAME_LEN  = 56
-CAPACITY  = 1024
+CAPACITY  = 4096
 SPARE     = 16   # free slots for runtime-created files
 
 default_dirs = ["/", "/bin", "/proc", "/var", "/var/log", "/usr","/dev","/lib","/etc"]

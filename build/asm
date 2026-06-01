@@ -13,7 +13,7 @@ IMG="${BUILD_DIR}/os.img"
 # Programs to compile
 COMMANDS=(exit help dump alloc dealloc poke peek
           ps vi pwd ls cd ping cat touch write
-          rm rmdir mkdir cp mv calc)
+          rm rmdir mkdir cp mv calc invaders)
 
 RUN_QEMU=false
 FULLSCREEN=false
@@ -75,9 +75,9 @@ echo "[5/6] Assembling bootloader..."
 nasm -f bin "$BOOT_ASM" -o "${BUILD_DIR}/bootloader.bin"
 
 echo "[6/6] Linking os.img..."
-FS_BASE_LBA=256
+FS_BASE_LBA=512
 FS_SPARE_COUNT=16
-FS_SECTORS_PER_SLOT=3
+FS_SECTORS_PER_SLOT=9
 FS_BYTES=$((FS_SPARE_COUNT * FS_SECTORS_PER_SLOT * 512))
 FS_OFFSET=$((FS_BASE_LBA * 512))
 TARGET=$((FS_OFFSET + FS_BYTES))

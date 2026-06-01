@@ -9,7 +9,7 @@
 ;   +64   dword     size  bytes currently used in buffer
 ;
 ; Persistence: spare slots are written to LBA 256+ on disk.
-;   Each slot = 3 sectors: 1 metadata + 2 data (1024 bytes).
+;   Each slot = 9 sectors: 1 metadata + 8 data (4096 bytes).
 ; =============================================================================
 
 ; ── String helpers ──────────────────────────────────────────────────────────
