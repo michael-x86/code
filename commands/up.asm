@@ -1,7 +1,6 @@
 [bits 32]
 [org 0xC0700000]
 
-; -----    WORK TO BE DONE ----
 _start:
     pushad
     mov [tick_count],eax               ;read

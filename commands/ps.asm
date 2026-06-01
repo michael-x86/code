@@ -24,7 +24,7 @@ _start:
     mov eax,2                  
     int 0x80
     mov ebx,[ebp+ps_buffer+4] 
-    mov eax,5                 ; sys_print_hex
+    mov eax,5                
     int 0x80
     lea esi, [ebp+idle_lbl]   ; Task 0 is always architecturally IDLE
     mov eax,2                  
