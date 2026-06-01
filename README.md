@@ -89,7 +89,7 @@ Programs are capped at 4 KB. — `resb` will zero-fill in flat-binary mode and i
 | 1  | print     | esi = ptr (null-term)      | 0                                |
 | 2  | print_cr  | esi = ptr (CR=13 → newline)| 0                                |
 | 3  | newline   | —                          | 0                                |
-| 4  | cls       | —                          | 0                                |
+| 4  | cls       | —                          | Cleared VGA buffer               |
 | 5  | print_hex | ebx                        | 0                                |
 | 6  | print_int | ebx (decimal)              | 0                                |
 | 7  | get_key   | —                          | ASCII (0 if empty)               |
@@ -103,13 +103,13 @@ Programs are capped at 4 KB. — `resb` will zero-fill in flat-binary mode and i
 | 15 | stat      | esi = path, edi = info(12B)| 0 / -1                           |
 | 16 | print_n   | esi = ptr, ecx = n         | 0 (`\n`→newline, `\t`→space)     |
 | 17 | create    | esi = path                 | 0 / -1                           |
-| 18 | write     | esi = path, ebx = buf, ecx = n | 0 / -1                       |
+| 18 | write     | esi = path, ebx = buf      | 0 / -1                           |
 | 19 | unlink    | esi = path                 | 0 / -1                           |
 | 20 | mkdir     | esi = path                 | 0 / -1                           |
 | 21 | rmdir     | esi = path                 | 0 / -1                           |
-| 22 | ps        |                            | 0 / -1                           |
-| 23 | dump      | stack and regsisters       |                                  |
-| 24 | alloc     | esi = path                 | ptr to memory                    |
+| 22 | ps        |                            | current processes                |
+| 23 | dump      |                            | stack and regsisters             |
+| 24 | alloc     | esi = path                 | ptrs to allocs                   |
 | 25 | dealloc   | esi = path                 | 0 / -1                           |
 | 26 | peek      | addr                       | dword at [addr]                  |
 | 27 | poke      | addr value                 |                                  |
