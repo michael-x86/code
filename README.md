@@ -229,3 +229,8 @@ The goal is understanding:
 - how hardware is programmed directly
 - how operating systems function beneath modern tooling
 - how ...
+
+
+Best regards,
+Michael
+michael@nordstedt.eu
