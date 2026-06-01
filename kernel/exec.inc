@@ -29,17 +29,26 @@ exec_bin:
     test al, al
     jnz .cp_cmd
 
-    ; Look up in filesystem
+    ; Look up in filesystem using new VFS
     mov esi, path_buf
-    call fs_lookup
-    test eax, eax
-    jz .nf
-    cmp dword [eax + FS_OFS_TYPE], FS_TYPE_EXEC
+    call fs_lookup_inode
+    cmp eax, -1
+    je .nf
+    mov ebx, eax
+    call load_inode
+    cmp dword [inode_buf + INOFS_TYPE], INODE_FILE
     jne .nf
 
-    ; Save binary data pointer and size
-    mov esi, [eax + FS_OFS_DATA]
-    mov ebx, [eax + FS_OFS_SIZE]
+    ; Read file content into file_block_buf
+    mov ebx, eax
+    mov edi, file_block_buf
+    mov ecx, BLOCK_SIZE
+    xor edx, edx
+    call file_read
+    cmp eax, -1
+    je .nf
+    mov esi, file_block_buf
+    mov ebx, eax             ; ebx = file size
 
     ; Compute page count (round up)
     mov ecx, ebx

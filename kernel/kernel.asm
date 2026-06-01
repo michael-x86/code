@@ -19,14 +19,8 @@ bits 32
 ; ── Shared constants (equates only) ─────────────────────────────────────────
 %include "constants.inc"
 
-; ── Initialized mutable data ────────────────────────────────────────────────
-%include "data.inc"
-
-; ── Zero-initialized data (not emitted in binary) ───────────────────────────
-%include "bss.inc"
-
 ; ═════════════════════════════════════════════════════════════════════════════
-; .text — code
+; .text — code (must be first in binary so bootloader jumps to start)
 ; ═════════════════════════════════════════════════════════════════════════════
 section .text
 
@@ -139,8 +133,13 @@ kernel_main:
     popad
     iretd                        ; context-switch into task0_entry
 
-; ── In-kernel virtual filesystem (auto-generated) ───────────────────────────
-%include "fs.inc"
+; ── Initialized mutable data ────────────────────────────────────────────────
+section .data
+%include "data.inc"
+
+; ── Zero-initialized data (not emitted in binary) ───────────────────────────
+section .bss
+%include "bss.inc"
 
 ; ═════════════════════════════════════════════════════════════════════════════
 ; .rodata — read-only data
@@ -275,6 +274,7 @@ command_nf_msg db 13, "command not found", 13, 0
 
 ; --- Config strings ----------------------------------------------------------
 config_path    db "/etc/config", 0
+bin_path       db "/bin", 0
 key_layout     db "layout", 0
 key_timezone   db "timezone", 0
 key_datefmt    db "datefmt", 0

@@ -9,23 +9,17 @@
 ;   All other GPRs preserved.
 ; =============================================================================
 
-; -----------------------------------------------------------------------------
-; set_syscall — install the int 0x80 gate in the IDT (DPL=3, user-callable)
-; -----------------------------------------------------------------------------
 set_syscall:
     mov eax, syscall_isr
     mov edi, idt_start + 0x80 * 8
     mov word [edi], ax
     mov word [edi + 2], CODE_SEG
     mov byte [edi + 4], 0
-    mov byte [edi + 5], IDT_DPL3       ; present, DPL=3, 32-bit interrupt gate
+    mov byte [edi + 5], IDT_DPL3
     shr eax, 16
     mov word [edi + 6], ax
     ret
 
-; -----------------------------------------------------------------------------
-; syscall_isr — dispatch to handler via syscall_table[eax]
-; -----------------------------------------------------------------------------
 syscall_isr:
     cmp eax, SYSCALL_COUNT
     jae .bad
@@ -55,12 +49,12 @@ sys_putchar:                             ; 0: ebx = char
     xor eax, eax
     ret
 
-sys_print:                               ; 1: esi = null-terminated string
+sys_print:                               ; 1: esi = string
     call print
     xor eax, eax
     ret
 
-sys_print_cr:                            ; 2: esi = string (CR → newline)
+sys_print_cr:                            ; 2: esi = string
     call print_cr
     xor eax, eax
     ret
@@ -81,18 +75,18 @@ sys_print_hex:                           ; 5: ebx = value
     xor eax, eax
     ret
 
-sys_print_int:                           ; 6: ebx = unsigned value
+sys_print_int:                           ; 6: ebx = value
     mov eax, ebx
     call print_int_decimal
     xor eax, eax
     ret
 
-sys_get_key:                             ; 7: → eax = ASCII (0 if empty)
+sys_get_key:                             ; 7: -> eax = ASCII (0 if empty)
     call get_key
     movzx eax, al
     ret
 
-sys_get_tick:                            ; 8: → eax = tick_count
+sys_get_tick:                            ; 8: -> eax = tick_count
     mov eax, [tick_count]
     ret
 
@@ -100,7 +94,7 @@ sys_shutdown:                            ; 9: does not return
     call shutdown
     ret
 
-sys_read_mem:                            ; 10: ebx = addr → eax = [ebx]
+sys_read_mem:                            ; 10: ebx = addr -> eax = [ebx]
     mov eax, [ebx]
     ret
 
@@ -116,16 +110,20 @@ sys_getcwd:                              ; 11: edi = dst buffer
     xor eax, eax
     ret
 
-sys_chdir:                               ; 12: esi = path → eax = 0/-1
+; ── VFS syscalls (block-based filesystem) ──────────────────────────────────
+
+sys_chdir:                               ; 12: esi = path -> eax = 0/-1
     push esi
     push edi
     mov edi, resolve_buf
     call fs_resolve
     mov esi, resolve_buf
-    call fs_lookup
-    test eax, eax
-    jz .nf
-    cmp dword [eax + FS_OFS_TYPE], FS_TYPE_DIR
+    call fs_lookup_inode
+    cmp eax, -1
+    je .nf
+    mov ebx, eax
+    call load_inode
+    cmp dword [inode_buf + INOFS_TYPE], INODE_DIR
     jne .nf
     mov esi, resolve_buf
     mov edi, cwd_buf
@@ -144,48 +142,100 @@ sys_chdir:                               ; 12: esi = path → eax = 0/-1
     mov eax, -1
     ret
 
-sys_list_dir:                            ; 13: ebx = index, edi = dst → type/-1
+; -----------------------------------------------------------------------------
+; sys_list_dir — list directory entries by index
+;   in:  ebx = index, edi = dst buffer
+;   out: eax = file type (1=file 2=dir), or -1 if not found
+; -----------------------------------------------------------------------------
+sys_list_dir:                            ; 13: ebx = index, edi = dst -> type/-1
     push ebx
     push ecx
     push edx
     push esi
     push edi
-    mov [tmp_dst], edi
-    mov [tmp_left], ebx
-    mov esi, fs_entries
-    mov ecx, FS_COUNT
-.next:
-    test ecx, ecx
-    jz .nf
-    mov edi, cwd_buf
-    call basename_if_child
+    push ebp
+    mov esi, cwd_buf
+    call fs_lookup_inode
+    cmp eax, -1
+    je .ld_nf
+    mov ebp, eax             ; ebp = dir inode
+    mov ecx, ebx             ; ecx = target index
+    xor ebx, ebx             ; ebx = block index
+.ld_blk:
+    cmp ebx, 12
+    jae .ld_nf
+    push ecx
+    push ebx
+    mov ecx, ebp
+    call load_inode
+    pop ebx
+    pop ecx
+    mov eax, [inode_buf + INOFS_DIRECT + ebx * 4]
     test eax, eax
-    jz .skip
-    cmp dword [tmp_left], 0
-    je .hit
-    dec dword [tmp_left]
-.skip:
-    add esi, FS_REC_SIZE
+    jz .ld_nf
+    push ebx
+    push ecx
+    push ebp
+    mov ebx, eax
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    mov ecx, BLOCK_SECTORS
+    mov edi, dir_block_buf
+    call ata_read
+    pop ebp
+    pop ecx
+    pop ebx
+    mov edi, dir_block_buf
+    mov edx, BLOCK_SIZE
+.ld_ent:
+    cmp edx, 8
+    jb .ld_next_blk
+    movzx eax, word [edi + 4]
+    test eax, eax
+    jz .ld_next_blk
+    push eax
+    mov esi, [edi]           ; inode number
+    pop eax
+    test esi, esi
+    jz .ld_skip
+    test ecx, ecx
+    jz .ld_found
     dec ecx
-    jmp .next
-.hit:
-    mov edi, [tmp_dst]
+.ld_skip:
+    sub edx, eax
+    add edi, eax
+    jmp .ld_ent
+.ld_found:
+    ; Copy name to dst (original edi is at [esp+12])
+    mov eax, [esp + 12]
     push esi
-    mov esi, eax
-.cp:
-    lodsb
-    stosb
+    movzx ecx, byte [edi + 6] ; name_len
+    lea esi, [edi + 8]
+    push edi
+    mov edi, eax
+    cld
+    rep movsb
+    mov byte [edi], 0
+    pop edi
+    pop esi
+    ; Get file type
+    movzx eax, byte [edi + 7]
     test al, al
-    jnz .cp
-    pop esi
-    mov eax, [esi + FS_OFS_TYPE]
-    pop edi
-    pop esi
-    pop edx
-    pop ecx
+    jnz .ld_type_ok
+    mov ebx, esi
+    push eax
+    call load_inode
+    pop eax
+    mov eax, [inode_buf + INOFS_TYPE]
+.ld_type_ok:
+    add esp, 20
     pop ebx
     ret
-.nf:
+.ld_next_blk:
+    inc ebx
+    jmp .ld_blk
+.ld_nf:
+    pop ebp
     pop edi
     pop esi
     pop edx
@@ -194,71 +244,7 @@ sys_list_dir:                            ; 13: ebx = index, edi = dst → type/-
     mov eax, -1
     ret
 
-sys_stat:                                ; 15: esi = path, edi = info(12B) → 0/-1
-    push esi
-    push edi
-    push ebx
-    push edx
-    mov ebx, edi
-    mov edi, resolve_buf
-    call fs_resolve
-    mov esi, resolve_buf
-    call fs_lookup
-    test eax, eax
-    jz .nf
-    mov edx, [eax + FS_OFS_TYPE]
-    mov [ebx], edx
-    mov edx, [eax + FS_OFS_DATA]
-    mov [ebx + 4], edx
-    mov edx, [eax + FS_OFS_SIZE]
-    mov [ebx + 8], edx
-    pop edx
-    pop ebx
-    pop edi
-    pop esi
-    xor eax, eax
-    ret
-.nf:
-    pop edx
-    pop ebx
-    pop edi
-    pop esi
-    mov eax, -1
-    ret
-
-sys_print_n:                             ; 16: esi = ptr, ecx = count → 0
-.lp:
-    test ecx, ecx
-    jz .done
-    mov al, [esi]
-    inc esi
-    dec ecx
-    cmp al, 0x0A
-    je .nl
-    cmp al, 0x0D
-    je .lp                     ; skip bare CR
-    cmp al, 0x09
-    jne .raw
-    mov al, ' '                ; tab → space
-.raw:
-    push ecx
-    push esi
-    call putchar
-    pop esi
-    pop ecx
-    jmp .lp
-.nl:
-    push ecx
-    push esi
-    call newline
-    pop esi
-    pop ecx
-    jmp .lp
-.done:
-    xor eax, eax
-    ret
-
-sys_get_arg:                             ; 14: ebx = index, edi = dst → 0/-1
+sys_get_arg:                             ; 14: ebx = index, edi = dst -> 0/-1
     cmp ebx, [argc]
     jae .nf
     push esi
@@ -279,7 +265,348 @@ sys_get_arg:                             ; 14: ebx = index, edi = dst → 0/-1
     mov eax, -1
     ret
 
-sys_get_ps_info:                         ; 22: ebx = ptr to 16-byte buffer → 0/-1
+sys_stat:                                ; 15: esi = path, edi = info(12B) -> 0/-1
+    push esi
+    push edi
+    push ebx
+    mov ebx, edi
+    mov edi, resolve_buf
+    call fs_resolve
+    mov esi, resolve_buf
+    call fs_lookup_inode
+    cmp eax, -1
+    je .nf
+    mov edx, eax
+    push edx
+    mov ebx, eax
+    call load_inode
+    pop edx
+    mov eax, [inode_buf + INOFS_TYPE]
+    mov [ebx], eax
+    mov eax, [inode_buf + INOFS_SIZE]
+    mov [ebx + 4], eax
+    mov dword [ebx + 8], 0
+    pop ebx
+    pop edi
+    pop esi
+    xor eax, eax
+    ret
+.nf:
+    pop ebx
+    pop edi
+    pop esi
+    mov eax, -1
+    ret
+
+sys_print_n:                             ; 16: esi = ptr, ecx = count -> 0
+.lp:
+    test ecx, ecx
+    jz .done
+    mov al, [esi]
+    inc esi
+    dec ecx
+    cmp al, 0x0A
+    je .nl
+    cmp al, 0x0D
+    je .lp
+    cmp al, 0x09
+    jne .raw
+    mov al, ' '
+.raw:
+    push ecx
+    push esi
+    call putchar
+    pop esi
+    pop ecx
+    jmp .lp
+.nl:
+    push ecx
+    push esi
+    call newline
+    pop esi
+    pop ecx
+    jmp .lp
+.done:
+    xor eax, eax
+    ret
+
+; -----------------------------------------------------------------------------
+; sys_create — create a new file
+;   in:  esi = path -> eax = 0/-1
+; -----------------------------------------------------------------------------
+sys_create:                              ; 17: esi = path -> 0/-1
+    pushad
+    mov edi, resolve_buf
+    call fs_resolve
+    mov esi, resolve_buf
+    call fs_lookup_inode
+    cmp eax, -1
+    jne .sc_err
+    ; Find last '/' to split parent/name
+    mov esi, resolve_buf
+    xor ecx, ecx             ; last slash pos
+    xor edx, edx             ; counter
+.sc_scan:
+    lodsb
+    test al, al
+    jz .sc_got
+    cmp al, '/'
+    jne .sc_next
+    mov ecx, edx
+.sc_next:
+    inc edx
+    jmp .sc_scan
+.sc_got:
+    ; Copy parent path to path_buf
+    mov esi, resolve_buf
+    mov edi, path_buf
+    test ecx, ecx
+    jz .sc_parent_root
+    push ecx
+    rep movsb
+    pop ecx
+    mov byte [edi], 0
+    jmp .sc_parent_done
+.sc_parent_root:
+    mov byte [edi], '/'
+    mov byte [edi + 1], 0
+.sc_parent_done:
+    ; Copy name to temp area
+    lea esi, [resolve_buf + ecx + 1]
+    mov edi, file_block_buf + 256
+    mov [name_ptr], edi       ; save name pointer
+    push ecx
+    xor ecx, ecx
+.sc_cname:
+    lodsb
+    test al, al
+    jz .sc_cname_done
+    stosb
+    inc ecx
+    jmp .sc_cname
+.sc_cname_done:
+    mov byte [edi], 0
+    pop ecx
+    mov [file_bytes_left], ecx ; save name_len
+    ; Look up parent inode
+    mov esi, path_buf
+    call fs_lookup_inode
+    cmp eax, -1
+    je .sc_err
+    mov ebx, eax
+    ; Allocate new inode
+    call ialloc
+    cmp eax, -1
+    je .sc_err
+    mov edx, eax             ; edx = new inode num
+    ; Initialize inode
+    mov dword [inode_buf + INOFS_TYPE], INODE_FILE
+    mov dword [inode_buf + INOFS_SIZE], 0
+    push edi
+    lea edi, [inode_buf + INOFS_DIRECT]
+    mov ecx, 14               ; 12 direct + sind + dind
+    xor eax, eax
+    cld
+    rep stosd
+    pop edi
+    mov ebx, edx
+    call write_inode
+    ; Add directory entry
+    mov esi, [name_ptr]
+    mov ecx, INODE_FILE
+    call dir_add_entry
+    cmp eax, -1
+    je .sc_err
+    popad
+    xor eax, eax
+    ret
+.sc_err:
+    popad
+    mov eax, -1
+    ret
+
+; -----------------------------------------------------------------------------
+; sys_write — write data to a file
+;   in:  esi = path, ebx = buf, ecx = n -> bytes written / -1
+; -----------------------------------------------------------------------------
+sys_write:                               ; 18: esi = path, ebx = buf, ecx = n
+    pushad
+    mov edi, resolve_buf
+    call fs_resolve
+    mov esi, resolve_buf
+    call fs_lookup_inode
+    cmp eax, -1
+    je .sw_err
+    mov ebx, eax
+    mov esi, [esp + 4]       ; original ebx = source buffer
+    mov ecx, [esp]           ; original ecx = count
+    xor edx, edx             ; offset = 0
+    call file_write
+    cmp eax, -1
+    je .sw_err
+    popad
+    xor eax, eax
+    ret
+.sw_err:
+    popad
+    mov eax, -1
+    ret
+
+; -----------------------------------------------------------------------------
+; sys_unlink — delete a file
+;   in:  esi = path -> eax = 0/-1
+; -----------------------------------------------------------------------------
+sys_unlink:                              ; 19: esi = path -> 0/-1
+    pushad
+    mov edi, resolve_buf
+    call fs_resolve
+    mov esi, resolve_buf
+    call fs_lookup_inode
+    cmp eax, -1
+    je .su_err
+    mov ebx, eax
+    call load_inode
+    cmp dword [inode_buf + INOFS_TYPE], INODE_FILE
+    jne .su_err
+    call ifree
+    popad
+    xor eax, eax
+    ret
+.su_err:
+    popad
+    mov eax, -1
+    ret
+
+; -----------------------------------------------------------------------------
+; sys_mkdir — create a directory
+;   in:  esi = path -> eax = 0/-1
+; -----------------------------------------------------------------------------
+sys_mkdir:                               ; 20: esi = path -> 0/-1
+    pushad
+    mov edi, resolve_buf
+    call fs_resolve
+    mov esi, resolve_buf
+    call fs_lookup_inode
+    cmp eax, -1
+    jne .sm_err
+    ; Find last '/'
+    mov esi, resolve_buf
+    xor ecx, ecx
+    xor edx, edx
+.sm_scan:
+    lodsb
+    test al, al
+    jz .sm_got
+    cmp al, '/'
+    jne .sm_next
+    mov ecx, edx
+.sm_next:
+    inc edx
+    jmp .sm_scan
+.sm_got:
+    mov esi, resolve_buf
+    mov edi, path_buf
+    test ecx, ecx
+    jz .sm_parent_root
+    push ecx
+    rep movsb
+    pop ecx
+    mov byte [edi], 0
+    jmp .sm_parent_done
+.sm_parent_root:
+    mov byte [edi], '/'
+    mov byte [edi + 1], 0
+.sm_parent_done:
+    lea esi, [resolve_buf + ecx + 1]
+    mov edi, file_block_buf + 256
+    mov [name_ptr], edi
+    push ecx
+    xor ecx, ecx
+.sm_cname:
+    lodsb
+    test al, al
+    jz .sm_cname_done
+    stosb
+    inc ecx
+    jmp .sm_cname
+.sm_cname_done:
+    mov byte [edi], 0
+    pop ecx
+    mov [file_bytes_left], ecx
+    mov esi, path_buf
+    call fs_lookup_inode
+    cmp eax, -1
+    je .sm_err
+    mov ebx, eax
+    call ialloc
+    cmp eax, -1
+    je .sm_err
+    mov edx, eax
+    mov dword [inode_buf + INOFS_TYPE], INODE_DIR
+    mov dword [inode_buf + INOFS_SIZE], 0
+    push edi
+    lea edi, [inode_buf + INOFS_DIRECT]
+    mov ecx, 14
+    xor eax, eax
+    cld
+    rep stosd
+    pop edi
+    mov ebx, edx
+    call write_inode
+    mov esi, [name_ptr]
+    mov ecx, INODE_DIR
+    call dir_add_entry
+    cmp eax, -1
+    je .sm_err
+    popad
+    xor eax, eax
+    ret
+.sm_err:
+    popad
+    mov eax, -1
+    ret
+
+; -----------------------------------------------------------------------------
+; sys_rmdir — remove an empty directory
+;   in:  esi = path -> eax = 0/-1
+; -----------------------------------------------------------------------------
+sys_rmdir:                               ; 21: esi = path -> 0/-1
+    pushad
+    mov edi, resolve_buf
+    call fs_resolve
+    mov esi, resolve_buf
+    call fs_lookup_inode
+    cmp eax, -1
+    je .sr_err
+    mov ebx, eax
+    call load_inode
+    cmp dword [inode_buf + INOFS_TYPE], INODE_DIR
+    jne .sr_err
+    ; Check empty: all direct block pointers must be zero
+    push ebx
+    lea esi, [inode_buf + INOFS_DIRECT]
+    mov ecx, 12
+.sr_chk:
+    lodsd
+    test eax, eax
+    jnz .sr_not_empty
+    dec ecx
+    jnz .sr_chk
+    pop ebx
+    call ifree
+    popad
+    xor eax, eax
+    ret
+.sr_not_empty:
+    pop ebx
+.sr_err:
+    popad
+    mov eax, -1
+    ret
+
+; ── Memory management syscalls ─────────────────────────────────────────────
+
+sys_get_ps_info:                         ; 22: ebx = ptr to 16-byte buffer -> 0/-1
     cmp ebx, 0
     je .error
     push edx
@@ -298,233 +625,7 @@ sys_get_ps_info:                         ; 22: ebx = ptr to 16-byte buffer → 0
     mov eax, -1
     ret
 
-; ── Writable FS syscalls ────────────────────────────────────────────────────
-
-sys_create:                              ; 17: esi = path → 0/-1
-    push esi
-    push edi
-    push ebx
-    push ecx
-    push edx
-    mov edi, resolve_buf
-    call fs_resolve
-    mov esi, resolve_buf
-    call fs_lookup
-    test eax, eax
-    jnz .err                   ; already exists
-
-    ; Find first free slot
-    mov edi, fs_entries
-    mov ecx, FS_COUNT
-.scan:
-    test ecx, ecx
-    jz .err
-    cmp byte [edi], 0
-    je .got
-    add edi, FS_REC_SIZE
-    dec ecx
-    jmp .scan
-.got:
-    mov ebx, edi
-    mov esi, resolve_buf
-.cp:
-    lodsb
-    stosb
-    test al, al
-    jnz .cp
-    mov dword [ebx + FS_OFS_TYPE], FS_TYPE_FILE
-    mov dword [ebx + FS_OFS_SIZE], 0
-    mov eax, ebx
-    call persist_entry
-    pop edx
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    xor eax, eax
-    ret
-.err:
-    pop edx
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    mov eax, -1
-    ret
-
-sys_write:                               ; 18: esi = path, ebx = buf, ecx = n → 0/-1
-    push esi
-    push edi
-    push ebx
-    push ecx
-    mov edi, resolve_buf
-    call fs_resolve
-    mov esi, resolve_buf
-    call fs_lookup
-    test eax, eax
-    jz .err
-    cmp dword [eax + FS_OFS_TYPE], FS_TYPE_FILE
-    jne .err
-    mov ecx, [esp + 0]
-    cmp ecx, FS_CAPACITY
-    ja .err
-
-    mov esi, [esp + 4]                     ; source buffer
-    mov edi, [eax + FS_OFS_DATA]           ; entry data pointer
-    cld
-    rep movsb
-    mov ecx, [esp + 0]
-    mov [eax + FS_OFS_SIZE], ecx           ; update size
-    call persist_entry
-
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    xor eax, eax
-    ret
-.err:
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    mov eax, -1
-    ret
-
-sys_unlink:                              ; 19: esi = path → 0/-1
-    push esi
-    push edi
-    push ebx
-    mov edi, resolve_buf
-    call fs_resolve
-    mov esi, resolve_buf
-    call fs_lookup
-    test eax, eax
-    jz .err
-    cmp dword [eax + FS_OFS_TYPE], FS_TYPE_FILE
-    jne .err
-    mov byte [eax], 0
-    mov dword [eax + FS_OFS_TYPE], FS_TYPE_FREE
-    mov dword [eax + FS_OFS_SIZE], 0
-    call persist_entry
-    pop ebx
-    pop edi
-    pop esi
-    xor eax, eax
-    ret
-.err:
-    pop ebx
-    pop edi
-    pop esi
-    mov eax, -1
-    ret
-
-sys_mkdir:                               ; 20: esi = path → 0/-1
-    push esi
-    push edi
-    push ebx
-    push ecx
-    mov edi, resolve_buf
-    call fs_resolve
-    mov esi, resolve_buf
-    call fs_lookup
-    test eax, eax
-    jnz .err                   ; already exists
-
-    mov edi, fs_entries
-    mov ecx, FS_COUNT
-.scan:
-    test ecx, ecx
-    jz .err
-    cmp byte [edi], 0
-    je .got
-    add edi, FS_REC_SIZE
-    dec ecx
-    jmp .scan
-.got:
-    mov ebx, edi
-    mov esi, resolve_buf
-.cp:
-    lodsb
-    stosb
-    test al, al
-    jnz .cp
-    mov dword [ebx + FS_OFS_TYPE], FS_TYPE_DIR
-    mov dword [ebx + FS_OFS_SIZE], 0
-    mov eax, ebx
-    call persist_entry
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    xor eax, eax
-    ret
-.err:
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    mov eax, -1
-    ret
-
-sys_rmdir:                               ; 21: esi = path → 0/-1
-    push esi
-    push edi
-    push ebx
-    push ecx
-    mov edi, resolve_buf
-    call fs_resolve
-    mov esi, resolve_buf
-    call fs_lookup
-    test eax, eax
-    jz .err
-    cmp dword [eax + FS_OFS_TYPE], FS_TYPE_DIR
-    jne .err
-
-    ; Check directory is empty
-    push eax
-    mov edi, resolve_buf
-    mov esi, fs_entries
-    mov ecx, FS_COUNT
-.chk:
-    test ecx, ecx
-    jz .empty
-    call basename_if_child
-    test eax, eax
-    jnz .notempty
-    add esi, FS_REC_SIZE
-    dec ecx
-    jmp .chk
-.notempty:
-    pop eax
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    mov eax, -1
-    ret
-.empty:
-    pop eax
-    mov byte [eax], 0
-    mov dword [eax + FS_OFS_TYPE], FS_TYPE_FREE
-    call persist_entry
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    xor eax, eax
-    ret
-.err:
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    mov eax, -1
-    ret
-
-; ── Memory management syscalls ─────────────────────────────────────────────
-
-sys_alloc_pages:                         ; 23: ecx = page count → eax = vaddr/-1
+sys_alloc_pages:                         ; 23: ecx = page count -> eax = vaddr/-1
     push ebx
     push ecx
     push edx
@@ -576,7 +677,6 @@ sys_alloc_pages:                         ; 23: ecx = page count → eax = vaddr/
     pop ebx
     ret
 .err_free:
-    ; Free partially allocated pages
     mov eax, edi
     mov ebx, edx
     sub ebx, edi
@@ -595,7 +695,7 @@ sys_alloc_pages:                         ; 23: ecx = page count → eax = vaddr/
     mov eax, -1
     ret
 
-sys_free_pages:                          ; 24: ebx = vaddr → 0/-1
+sys_free_pages:                          ; 24: ebx = vaddr -> 0/-1
     push ebx
     push ecx
     push esi
@@ -624,12 +724,12 @@ sys_free_pages:                          ; 24: ebx = vaddr → 0/-1
     xor eax, eax
     ret
 
-sys_write_mem:                           ; 25: ebx = addr, ecx = byte value → 0/-1
+sys_write_mem:                           ; 25: ebx = addr, ecx = byte value -> 0/-1
     mov byte [ebx], cl
     xor eax, eax
     ret
 
-sys_hex2int:                             ; 26: esi = string → eax = value
+sys_hex2int:                             ; 26: esi = string -> eax = value
     push ebx
     push edx
     xor eax, eax
@@ -677,7 +777,7 @@ sys_hex2int:                             ; 26: esi = string → eax = value
     pop ebx
     ret
 
-sys_asc2int:                             ; 27: esi = string → eax = value
+sys_asc2int:                             ; 27: esi = string -> eax = value
     push ebx
     push edx
     xor eax, eax
@@ -698,25 +798,20 @@ sys_asc2int:                             ; 27: esi = string → eax = value
     pop ebx
     ret
 
-sys_get_proc_info:                       ; 28: ebx = ptr to 36-byte buffer → 0/-1
-    ; Buffer layout: dword vbase, dword pages, 32 bytes name
+sys_get_proc_info:                       ; 28: ebx = ptr to 36-byte buffer -> 0/-1
     cmp ebx, 0
     je .error
     push edx
     push esi
     push edi
-
     mov eax, [exec_vbase]
     mov [ebx], eax
     mov eax, [exec_pages]
     mov [ebx + 4], eax
-
-    ; Copy process name
     lea esi, [exec_name]
     lea edi, [ebx + 8]
     mov ecx, 32
     rep movsb
-
     pop edi
     pop esi
     pop edx
@@ -726,7 +821,7 @@ sys_get_proc_info:                       ; 28: ebx = ptr to 36-byte buffer → 0
     mov eax, -1
     ret
 
-sys_itoa:                                ; 29: eax = value, edi = dst buffer → edi = end ptr
+sys_itoa:                                ; 29: eax = value, edi = dst -> edi = end ptr
     push eax
     push ebx
     push ecx
@@ -753,16 +848,14 @@ sys_itoa:                                ; 29: eax = value, edi = dst buffer →
     inc edi
     loop .emit
 .fin:
-    mov byte [edi], 0           ; null-terminate
+    mov byte [edi], 0
     pop edx
     pop ecx
     pop ebx
     pop eax
     ret
 
-sys_get_config:                          ; 30: ebx = key, edi = dst buf → eax = 0/-1
-    ; key values: 0=timezone, 1=datefmt, 2=timefmt, 3=layout
-    ; Returns the numeric value as a decimal string in dst buffer.
+sys_get_config:                          ; 30: ebx = key, edi = dst -> eax = 0/-1
     cmp ebx, 3
     ja .bad
     push ebx
@@ -785,7 +878,6 @@ sys_get_config:                          ; 30: ebx = key, edi = dst buf → eax 
 .c3:
     mov eax, [cfg_layout]
 .write:
-    ; Convert eax to decimal string at edi
     push edi
     mov ecx, 0
     mov ebx, 10

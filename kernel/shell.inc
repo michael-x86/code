@@ -502,40 +502,84 @@ tab_complete:
     jmp .bi_loop
 .bi_done:
 
-    ; Scan fs_entries for executables in /bin/
-    mov esi, fs_entries
-    mov ecx, FS_COUNT
-.fs_loop:
-    test ecx, ecx
+    ; Scan /bin directory for executables using new VFS
+    mov esi, bin_path
+    call fs_lookup_inode
+    cmp eax, -1
+    je .fs_done
+    mov ebx, eax             ; ebx = /bin inode
+    xor ebp, ebp             ; ebp = directory block index
+.fs_blk:
+    cmp ebp, 12
+    jae .fs_done
+    push ebx
+    push ebp
+    call load_inode
+    pop ebp
+    pop ebx
+    mov eax, [inode_buf + INOFS_DIRECT + ebp * 4]
+    test eax, eax
     jz .fs_done
-    push esi
+    ; Read directory block
+    push ebx
+    push ebp
+    mov ebx, eax
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    mov ecx, BLOCK_SECTORS
+    mov edi, dir_block_buf
+    call ata_read
+    pop ebp
+    pop ebx
+    ; Scan directory entries
+    mov edi, dir_block_buf
+    mov ecx, BLOCK_SIZE
+.fs_ent:
+    cmp ecx, 8
+    jb .fs_next_blk
+    movzx eax, word [edi + 4] ; rec_len
+    test eax, eax
+    jz .fs_next_blk
+    ; Check if executable (file_type == 2)
+    cmp byte [edi + 7], 2
+    jne .fs_skip_ent
+    ; Get name
     push ecx
-    call tab_basename
-    test eax, eax
-    jz .fs_next
-    cmp dword [esi + FS_OFS_TYPE], FS_TYPE_EXEC
-    jne .fs_next
+    push edi
     push eax
-    mov esi, eax
+    lea esi, [edi + 8]
     call tab_prefix_match
-    pop esi
+    pop ecx                  ; rec_len
+    pop edi
     test eax, eax
-    jz .fs_next_pop
+    jz .fs_pop_skip
     inc edx
-    mov [tab_single_ptr], esi
-    jmp .fs_next_pop
-.fs_next_pop:
+    movzx eax, byte [edi + 6] ; name_len
+    ; Copy name to tab_single_ptr area
+    push edi
+    push ecx
+    lea esi, [edi + 8]
+    mov edi, file_block_buf + 512  ; temp name area
+    movzx ecx, byte [esp + 2]      ; name_len from stack
+    ; Actually name_len is at [esp + 2 + 4] after pushes
+    ; Let me just use the dirent directly
     pop ecx
-    pop esi
-    add esi, FS_REC_SIZE
-    dec ecx
-    jmp .fs_loop
-.fs_next:
+    pop edi
+    ; tab_single_ptr points to name in dirent
+    lea eax, [edi + 8]
+    mov [tab_single_ptr], eax
+.fs_pop_skip:
     pop ecx
-    pop esi
-    add esi, FS_REC_SIZE
-    dec ecx
-    jmp .fs_loop
+    jmp .fs_skip_adv
+.fs_skip_ent:
+    movzx eax, word [edi + 4]
+.fs_skip_adv:
+    sub ecx, eax
+    add edi, eax
+    jmp .fs_ent
+.fs_next_blk:
+    inc ebp
+    jmp .fs_blk
 .fs_done:
 
     mov [tab_match_count], edx
@@ -707,26 +751,58 @@ tab_print_all_matches:
     jmp .pbi_loop
 .pbi_done:
 
-    ; FS executables
-    mov esi, fs_entries
-    mov ecx, FS_COUNT
-.pfs_loop:
-    test ecx, ecx
+    ; FS executables in /bin
+    mov esi, bin_path
+    call fs_lookup_inode
+    cmp eax, -1
+    je .pfs_done
+    mov ebx, eax
+    xor ebp, ebp
+.pfs_blk:
+    cmp ebp, 12
+    jae .pfs_done
+    push ebx
+    push ebp
+    call load_inode
+    pop ebp
+    pop ebx
+    mov eax, [inode_buf + INOFS_DIRECT + ebp * 4]
+    test eax, eax
     jz .pfs_done
-    push esi
+    push ebx
+    push ebp
+    mov ebx, eax
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    mov ecx, BLOCK_SECTORS
+    mov edi, dir_block_buf
+    call ata_read
+    pop ebp
+    pop ebx
+    mov edi, dir_block_buf
+    mov ecx, BLOCK_SIZE
+.pfs_ent:
+    cmp ecx, 8
+    jb .pfs_next_blk
+    movzx eax, word [edi + 4]
+    test eax, eax
+    jz .pfs_next_blk
+    cmp byte [edi + 7], 2    ; executable?
+    jne .pfs_skip
     push ecx
-    call tab_basename
-    test eax, eax
-    jz .pfs_next
-    cmp dword [esi + FS_OFS_TYPE], FS_TYPE_EXEC
-    jne .pfs_next
+    push edi
     push eax
-    mov esi, eax
+    lea esi, [edi + 8]
     call tab_prefix_match
-    pop esi
+    pop ecx
+    pop edi
+    pop ecx
     test eax, eax
-    jz .pfs_next
+    jz .pfs_skip
+    push ecx
+    push edi
     push esi
+    lea esi, [edi + 8]
 .pfs_print:
     lodsb
     test al, al
@@ -738,12 +814,16 @@ tab_print_all_matches:
     call putchar
     call putchar
     pop esi
-.pfs_next:
+    pop edi
     pop ecx
-    pop esi
-    add esi, FS_REC_SIZE
-    dec ecx
-    jmp .pfs_loop
+.pfs_skip:
+    movzx eax, word [edi + 4]
+    sub ecx, eax
+    add edi, eax
+    jmp .pfs_ent
+.pfs_next_blk:
+    inc ebp
+    jmp .pfs_blk
 .pfs_done:
     call newline
     ret
@@ -1171,15 +1251,21 @@ print_tick:
 load_config:
     pushad
 
-    ; Look up /etc/config in the filesystem
+    ; Look up /etc/config using new VFS
     mov esi, config_path
-    call fs_lookup
-    test eax, eax
-    jz .done                  ; no config file — keep defaults
-
-    ; esi = pointer to file data, ecx = file size
-    mov esi, [eax + FS_OFS_DATA]
-    mov ecx, [eax + FS_OFS_SIZE]
+    call fs_lookup_inode
+    cmp eax, -1
+    je .done                  ; no config file — keep defaults
+    ; Read file content into file_block_buf
+    mov ebx, eax
+    mov edi, file_block_buf
+    mov ecx, BLOCK_SIZE       ; read up to 1 block
+    xor edx, edx              ; offset = 0
+    call file_read
+    cmp eax, -1
+    je .done
+    mov esi, file_block_buf
+    mov ecx, eax              ; bytes read = file size for parsing
     test ecx, ecx
     jz .done
 

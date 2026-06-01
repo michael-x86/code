@@ -1,9 +1,12 @@
 [org 0x7C00]
+bits 16
 
 ; Constants
-KERNEL_SECTORS  equ 0x15A
+KERNEL_SECTORS  equ 0x18
 KERNEL_LOAD_SEG equ 0x1000
-KERNEL_LOAD_ADDR equ 0x00100000
+KERNEL_LOAD_OFF equ 0x0000
+KERNEL_LOAD_ADDR equ 0x10000       ; = KERNEL_LOAD_SEG * 16 + KERNEL_LOAD_OFF
+
 CODE_SEG        equ 0x08
 DATA_SEG        equ 0x10
 
@@ -22,39 +25,49 @@ start:
     or al, 00000010b
     out 0x92, al
 
-    ; ---- Load Kernel from Disk (LBA via INT 13h AH=42h) ----
-    ; Uses DAP (Disk Address Packet) for LBA access.
-    ; Reads 1 sector at a time to keep the DAP simple.
-    mov dword [dap_lba], 1          ; start at LBA 1 (sector 2 in CHS, after boot)
-    mov word  [dap_count], 1
-    mov word  [dap_off], 0
-    mov word  [dap_seg], KERNEL_LOAD_SEG
-    mov dword [sectors_left], KERNEL_SECTORS
+    ; ---- Load Kernel from Disk ----
+    ; Try LBA (INT 13h AH=42h) first, fall back to CHS (AH=02h) on failure.
 
-.read_loop:
-    cmp dword [sectors_left], 0
-    je .read_done
+    ; Check EDD support
+    mov ah, 0x41
+    mov bx, 0x55AA
+    mov dl, [BOOT_DRIVE]
+    int 0x13
+    jc .chs_fallback
+    cmp bx, 0xAA55
+    jne .chs_fallback
 
+    ; LBA read: read KERNEL_SECTORS from LBA 1 into KERNEL_LOAD_SEG:KERNEL_LOAD_OFF
+    mov si, dap
     mov ah, 0x42
     mov dl, [BOOT_DRIVE]
-    mov si, dap
+    int 0x13
+    jc disk_error
+    jmp load_done
+
+.chs_fallback:
+    ; CHS read: KERNEL_SECTORS from Cyl 0 Head 1 Sector 2
+    ; (Cyl 0, Head 0, Sector 1 is the bootloader itself)
+    ; CHS(0, 1, 2) = LBA 63... wait, no.
+    ; CHS addressing: LBA 0 = (0,0,1), LBA 1 = (0,0,2), ..., LBA 62 = (0,0,63)
+    ; LBA 63 = (0,1,1), etc.
+    ; For a small kernel (< 62 sectors), all sectors are in cyl 0, head 0.
+    ; LBA 1 = (0,0,2)
+    mov ah, 0x02
+    mov al, KERNEL_SECTORS
+    mov ch, 0            ; cylinder 0
+    mov cl, 2            ; start at sector 2 (LBA 1)
+    mov dh, 0            ; head 0
+    mov dl, [BOOT_DRIVE]
+    xor bx, bx           ; offset = 0
+    mov ax, KERNEL_LOAD_SEG
+    mov es, ax
     int 0x13
     jc disk_error
 
-    ; Advance LBA
-    inc dword [dap_lba]
-    dec dword [sectors_left]
+load_done:
 
-    ; Advance destination: add 512 to offset, handle segment overflow
-    add word [dap_off], 512
-    jnc .no_seg_oflow
-    mov ax, [dap_seg]
-    add ax, 0x1000
-    mov [dap_seg], ax
-.no_seg_oflow:
-    jmp .read_loop
-
-.read_done:
+    ; ---- Transition to Protected Mode ----
     cli
     lgdt [gdt_descriptor]
     mov eax, cr0
@@ -79,6 +92,7 @@ print_string:
     ret
 
 ; ---- GDT ----
+align 8
 gdt_start:
 gdt_null:   dq 0x0
 gdt_code:   dq 0x00CF9A000000FFFF
@@ -89,26 +103,20 @@ gdt_descriptor:
     dw gdt_end - gdt_start - 1
     dd gdt_start
 
-; ---- DAP (must be in first 64K) ----
-dap:
-    db 0x10                 ; size of DAP (16 bytes)
-    db 0                    ; reserved
-    dw 1                    ; number of sectors to transfer
-    dw 0                    ; offset of buffer
-    dw KERNEL_LOAD_SEG      ; segment of buffer
-    dd 1                    ; start LBA (low)
-    dd 0                    ; start LBA (high)
-
-; Aliased names for runtime modification
-dap_count   equ dap + 2
-dap_off     equ dap + 4
-dap_seg     equ dap + 6
-dap_lba     equ dap + 8
-
 ; ---- Data ----
 msg_fail     db "DISK ERROR!", 0
 BOOT_DRIVE   db 0
-sectors_left dd 0
+
+; Disk Address Packet (for INT 13h AH=42h LBA read)
+align 4
+dap:
+    db 0x10                 ; size of packet (16 bytes)
+    db 0                    ; reserved
+    dw KERNEL_SECTORS       ; number of sectors to read
+    dw KERNEL_LOAD_OFF      ; offset of buffer
+    dw KERNEL_LOAD_SEG      ; segment of buffer
+    dd 1                    ; start LBA (sector 1, after bootloader)
+    dd 0                    ; upper 32 bits of LBA (unused)
 
 ; ---- 32-bit Protected Mode ----
 bits 32
@@ -121,13 +129,21 @@ protected_mode:
     mov gs, ax
     mov esp, 0x90000
 
-    mov esi, 0x00010000
-    mov edi, 0x00100000
+    ; Copy kernel from 0x10000 to 0x100000
+    mov esi, KERNEL_LOAD_ADDR     ; source = 0x10000
+    mov edi, 0x00100000           ; dest = 1MB
     mov ecx, KERNEL_SECTORS
-    shl ecx, 9
+    shl ecx, 9                   ; sectors * 512 = bytes
+    cld
     rep movsb
 
-    jmp KERNEL_LOAD_ADDR
+    ; Store FS base LBA at physical 0x500 for the kernel to read
+    ; FS starts right after the kernel: LBA = 1 + KERNEL_SECTORS
+    mov eax, 1
+    add eax, KERNEL_SECTORS
+    mov [0x500], eax
+
+    jmp 0x00100000               ; jump to kernel at 1MB
 
 times 510 - ($-$$) db 0
 dw 0xAA55

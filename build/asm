@@ -18,24 +18,34 @@ COMMANDS=(exit help dump alloc dealloc poke peek
 RUN_QEMU=false
 FULLSCREEN=false
 DEBUG=false
+INDEX_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         -r|--run)        RUN_QEMU=true; shift;;
         -f|--fullscreen) FULLSCREEN=true; RUN_QEMU=true; shift;;
         -d|--debug)      DEBUG=true; RUN_QEMU=true; shift;;
+        -i|--index)      INDEX_ONLY=true; shift;;
         -h|--help)
             cat <<EOF
 Usage: ./asm [options]
   -r, --run         Compile and run in QEMU
   -f, --fullscreen  Run in fullscreen
   -d, --debug       Run with GDB on localhost:1234
+  -i, --index       Run the code indexing pipeline (and exit)
   -h, --help        Show this help
 EOF
             exit 0;;
         *) echo "Unknown option: $1"; exit 1;;
     esac
 done
+
+if [[ "$INDEX_ONLY" == true ]]; then
+    echo "[Index] Building code search index..."
+    "${PROJECT_DIR}/scripts/code-index-build.py" --root "${PROJECT_DIR}" --out "${BUILD_DIR}/code-index/code-index.sqlite"
+    echo "[Index] Index built at ${BUILD_DIR}/code-index/code-index.sqlite"
+    exit 0
+fi
 
 # Content directories (source trees scanned by gen_fs.py)
 mkdir -p "${BUILD_DIR}/bin" "${BUILD_DIR}/proc" "${BUILD_DIR}/var/log"
@@ -58,9 +68,9 @@ for p in "${COMMANDS[@]}"; do
     echo "  + bin/$p ($sz bytes)"
 done
 
-echo "[2/6] Scanning filesystem (bin/ proc/ var/log/ ..."
+echo "[2/6] Generating filesystem image..."
 cd "$BUILD_DIR"
-python3 gen_fs.py "$BUILD_DIR" fs.inc | sed 's/^/  /'
+python3 gen_fs.py "$BUILD_DIR" fs.bin | sed 's/^/  /'
 
 echo "[3/6] Assembling kernel..."
 nasm -f bin "$KERNEL_ASM" -o "${BUILD_DIR}/kernel.bin" -I "${KERNEL_INC_DIR}/"
@@ -75,36 +85,33 @@ echo "[5/6] Assembling bootloader..."
 nasm -f bin "$BOOT_ASM" -o "${BUILD_DIR}/bootloader.bin"
 
 echo "[6/6] Linking os.img..."
-FS_BASE_LBA=512
-FS_SPARE_COUNT=16
-FS_SECTORS_PER_SLOT=9
-FS_BYTES=$((FS_SPARE_COUNT * FS_SECTORS_PER_SLOT * 512))
-FS_OFFSET=$((FS_BASE_LBA * 512))
-TARGET=$((FS_OFFSET + FS_BYTES))
-if (( KERNEL_SECTORS + 1 >= FS_BASE_LBA )); then
-    echo "ERROR: kernel ($KERNEL_SECTORS sectors) overlaps FS region (LBA $FS_BASE_LBA+)" >&2
-    exit 1
-fi
-# Preserve any existing FS region so persisted files survive rebuilds.
-FS_BACKUP=""
-if [[ -f "$IMG" ]] && (( $(stat -c%s "$IMG") >= TARGET )); then
-    FS_BACKUP=$(mktemp)
-    dd if="$IMG" of="$FS_BACKUP" bs=512 skip=$FS_BASE_LBA \
-       count=$((FS_SPARE_COUNT * FS_SECTORS_PER_SLOT)) status=none
-fi
-cat "${BUILD_DIR}/bootloader.bin" "${BUILD_DIR}/kernel.bin" > "$IMG"
+FS_BIN_SIZE=$(stat -c%s "${BUILD_DIR}/fs.bin")
+FS_SECTORS=$(((FS_BIN_SIZE + 511) / 512))
+FS_LBA=$((KERNEL_SECTORS + 1))  # FS region starts right after kernel
+
+# Total image size = bootloader(1) + kernel(KERNEL_SECTORS) + fs(FS_SECTORS)
+TOTAL_SECTORS=$((1 + KERNEL_SECTORS + FS_SECTORS))
+TARGET=$((TOTAL_SECTORS * 512))
+
+# Concatenate: bootloader + kernel (padded to sector boundary) + fs.bin
+# Pad kernel to KERNEL_SECTORS * 512 bytes so the disk has zeros between
+# the kernel and the filesystem (prevents BSS corruption during copy)
+KERNEL_PADDED=$(mktemp)
+cat "${BUILD_DIR}/kernel.bin" > "$KERNEL_PADDED"
+truncate -s "$KERNEL_BYTES" "$KERNEL_PADDED"
+cat "${BUILD_DIR}/bootloader.bin" "$KERNEL_PADDED" "${BUILD_DIR}/fs.bin" > "$IMG"
 truncate -s "$TARGET" "$IMG"
-if [[ -n "$FS_BACKUP" ]]; then
-    dd if="$FS_BACKUP" of="$IMG" bs=512 seek=$FS_BASE_LBA \
-       count=$((FS_SPARE_COUNT * FS_SECTORS_PER_SLOT)) conv=notrunc status=none
-    rm -f "$FS_BACKUP"
-fi
+rm -f "$KERNEL_PADDED"
 
 echo ""
 echo "Build complete: $IMG ($(stat -c%s "$IMG") bytes)"
+echo "  Bootloader: LBA 0 (1 sector)"
+echo "  Kernel:     LBA 1..${KERNEL_SECTORS} (${KERNEL_SECTORS} sectors)"
+echo "  FS:         LBA ${FS_LBA}..$((FS_LBA + FS_SECTORS - 1)) (${FS_SECTORS} sectors)"
 echo ""
 rm -f "${BUILD_DIR}/kernel.bin" "${BUILD_DIR}/bootloader.bin"
-rm -f "${BUILD_DIR}/fs.inc"
+rm -f "${BUILD_DIR}/fs.bin"
+
 if [[ "$RUN_QEMU" == true ]]; then
     QEMU_ARGS=(
         -drive format=raw,file="$IMG",index=0,if=ide

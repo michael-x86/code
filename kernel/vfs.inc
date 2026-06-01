@@ -1,24 +1,37 @@
 ; =============================================================================
-; vfs.inc — virtual filesystem: lookup, resolve, ATA persistence
+; vfs.inc — block-based virtual filesystem: superblock, inodes, block bitmap,
+;           directory entries, ATA persistence
 ; =============================================================================
 ;
-; FS entry record (FS_REC_SIZE = 68 bytes):
-;   +0    56 bytes  null-padded absolute path  (empty path = free slot)
-;   +56   dword     type  (0=free 1=dir 2=file/exec)
-;   +60   dword     data  pointer to mutable buffer (0 for dirs)
-;   +64   dword     size  bytes currently used in buffer
+; On-disk layout:
+;   LBA 0       bootloader
+;   LBA 1       superblock (512 bytes)
+;   LBA 2..N    inode table (INODE_COUNT * INODE_SIZE bytes, sector-aligned)
+;   LBA N+1..M  block bitmap (1 bit per data block)
+;   LBA M+1..   data blocks (BLOCK_SIZE = 4096 bytes each)
 ;
-; Persistence: spare slots are written to LBA 256+ on disk.
-;   Each slot = 9 sectors: 1 metadata + 8 data (4096 bytes).
+; Inode (INODE_SIZE = 128 bytes):
+;   +0    dword   type (0=free 1=file 2=dir)
+;   +4    dword   size (bytes for files, 0 for dirs)
+;   +8    dword   flags (reserved)
+;   +12   12xdirect block pointers (48 bytes)
+;   +60   dword   single-indirect block pointer
+;   +64   dword   double-indirect block pointer
+;   +68   60 bytes reserved
+;
+; Directory entries (variable-length, packed into data blocks):
+;   dword  inode_number
+;   word   rec_len
+;   byte   name_len
+;   byte   file_type
+;   char[] name (name_len bytes)
+;
+; At boot we load the superblock and block bitmap into memory.
+; All metadata changes are written back to disk immediately.
 ; =============================================================================
 
 ; ── String helpers ──────────────────────────────────────────────────────────
 
-; -----------------------------------------------------------------------------
-; str_eq — compare two null-terminated strings
-;   in:  esi = str1, edi = str2
-;   out: eax = 0 if equal, 1 if not
-; -----------------------------------------------------------------------------
 str_eq:
     push esi
     push edi
@@ -43,8 +56,35 @@ str_eq:
     mov eax, 1
     ret
 
+str_len:
+    push esi
+    xor ecx, ecx
+.lp:
+    cmp byte [esi], 0
+    je .done
+    inc esi
+    inc ecx
+    jmp .lp
+.done:
+    pop esi
+    ret
+
+str_copy:
+    push eax
+    push esi
+    push edi
+.lp:
+    lodsb
+    stosb
+    test al, al
+    jnz .lp
+    pop edi
+    pop esi
+    pop eax
+    ret
+
 ; -----------------------------------------------------------------------------
-; basename_if_child — check if an entry path is a direct child of a cwd
+; basename_if_child — check if path is a direct child of cwd
 ;   in:  esi = entry path, edi = cwd
 ;   out: eax = pointer to basename within entry path, or 0 if not a child
 ; -----------------------------------------------------------------------------
@@ -55,8 +95,6 @@ basename_if_child:
     push edi
     cmp byte [edi + 1], 0
     je .cwd_root
-
-    ; Non-root cwd: match cwd as exact prefix
 .mp:
     mov al, [edi]
     test al, al
@@ -90,7 +128,6 @@ basename_if_child:
     pop edx
     pop ebx
     ret
-
 .cwd_root:
     cmp byte [esi], '/'
     jne .nope
@@ -114,7 +151,6 @@ basename_if_child:
     pop edx
     pop ebx
     ret
-
 .nope:
     xor eax, eax
     pop edi
@@ -135,10 +171,8 @@ fs_resolve:
     push ebx
     push esi
     push edi
-
     cmp byte [esi], '/'
     je .abs
-
     cmp byte [esi], '.'
     jne .relative
     cmp byte [esi + 1], 0
@@ -148,7 +182,6 @@ fs_resolve:
     cmp byte [esi + 2], 0
     jne .relative
     jmp .dotdot
-
 .dot:
     mov esi, cwd_buf
 .abs:
@@ -158,16 +191,15 @@ fs_resolve:
     test al, al
     jnz .cp_abs
     jmp .done
-
 .dotdot:
-    mov ebx, edi             ; save dst origin
+    mov ebx, edi
     mov esi, cwd_buf
 .cp_dd:
     lodsb
     stosb
     test al, al
     jnz .cp_dd
-    dec edi                  ; point at null terminator
+    dec edi
 .find:
     dec edi
     cmp edi, ebx
@@ -183,9 +215,8 @@ fs_resolve:
     mov byte [edi], '/'
     mov byte [edi + 1], 0
     jmp .done
-
 .relative:
-    mov ebx, esi             ; save name pointer
+    mov ebx, esi
     mov esi, cwd_buf
     cmp byte [esi + 1], 0
     je .root_join
@@ -194,7 +225,7 @@ fs_resolve:
     stosb
     test al, al
     jnz .cp_cwd
-    mov byte [edi - 1], '/'  ; replace null with separator
+    mov byte [edi - 1], '/'
     jmp .append
 .root_join:
     mov byte [edi], '/'
@@ -206,7 +237,6 @@ fs_resolve:
     stosb
     test al, al
     jnz .cp_name
-
 .done:
     pop edi
     pop esi
@@ -214,59 +244,43 @@ fs_resolve:
     pop eax
     ret
 
-; ── Lookup ─────────────────────────────────────────────────────────────────
-
-; -----------------------------------------------------------------------------
-; fs_lookup — find an fs_entry by absolute path
-;   in:  esi = absolute null-terminated path
-;   out: eax = pointer to fs_entry, or 0 if not found
-; -----------------------------------------------------------------------------
-fs_lookup:
-    push ecx
-    push edi
-    mov edi, fs_entries
-    mov ecx, FS_COUNT
-.lp:
-    test ecx, ecx
-    jz .nf
-    push esi
-    push edi
-    call str_eq
-    pop edi
-    pop esi
-    test eax, eax
-    jz .found
-    add edi, FS_REC_SIZE
-    dec ecx
-    jmp .lp
-.found:
-    mov eax, edi
-    pop edi
-    pop ecx
-    ret
-.nf:
-    xor eax, eax
-    pop edi
-    pop ecx
-    ret
-
 ; ── ATA PIO disk access ────────────────────────────────────────────────────
 
-; -----------------------------------------------------------------------------
-; ata_read — read sectors from disk via PIO
-;   in:  eax = LBA, ecx = sector count, edi = destination buffer
-; -----------------------------------------------------------------------------
 ata_read:
     pushad
-    mov ebx, eax             ; LBA
-    mov ebp, ecx             ; sector count
-    mov dx, ATA_STATUS_CMD
-.wb:
-    in al, dx
-    test al, 0x80            ; wait while BSY set
-    jnz .wb
+    mov ebx, eax
+    mov ebp, ecx
 
-    ; Drive + LBA high nibble
+    ; --- Drive reset / initialization ---
+    ; Set SRST (bit 2) in device control register, wait, then clear it.
+    ; This ensures the drive is in a known state after the BIOS/bootloader
+    ; may have left it in an inconsistent state.
+    mov dx, ATA_DEV_CONTROL
+    mov al, 0x04             ; SRST = 1
+    out dx, al
+    ; Small delay: read status a few times (each read takes ~400ns)
+    mov ecx, 10
+.reset_delay:
+    mov dx, ATA_STATUS_CMD
+    in al, dx
+    dec ecx
+    jnz .reset_delay
+    mov dx, ATA_DEV_CONTROL
+    xor al, al               ; SRST = 0
+    out dx, al
+    ; Wait for BSY to clear after reset
+    mov ecx, 100000
+.reset_wait:
+    mov dx, ATA_STATUS_CMD
+    in al, dx
+    test al, 0x80
+    jz .reset_done
+    dec ecx
+    jnz .reset_wait
+    jmp .timeout
+.reset_done:
+
+    ; Select drive (LBA mode, master)
     mov dx, ATA_DRIVE_HEAD
     mov eax, ebx
     shr eax, 24
@@ -274,12 +288,37 @@ ata_read:
     or al, ATA_DRIVE_MASTER
     out dx, al
 
-    ; Sector count
+    ; Small delay for drive selection to take effect
+    mov ecx, 4
+.sel_delay:
+    mov dx, ATA_STATUS_CMD
+    in al, dx
+    dec ecx
+    jnz .sel_delay
+
+    ; Wait for BSY clear and DRDY set with timeout
+    mov ecx, 100000
+.wb:
+    mov dx, ATA_STATUS_CMD
+    in al, dx
+    test al, 0x80            ; BSY set?
+    jz .ready
+    dec ecx
+    jnz .wb
+    jmp .timeout
+.ready:
+    ; Check for error
+    test al, 0x01
+    jnz .timeout
+    mov dx, ATA_DRIVE_HEAD
+    mov eax, ebx
+    shr eax, 24
+    and al, 0x0F
+    or al, ATA_DRIVE_MASTER
+    out dx, al
     mov dx, ATA_SECTOR_COUNT
     mov eax, ebp
     out dx, al
-
-    ; LBA low / mid / high
     mov dx, ATA_LBA_LOW
     mov eax, ebx
     out dx, al
@@ -289,46 +328,64 @@ ata_read:
     mov dx, ATA_LBA_HIGH
     shr eax, 8
     out dx, al
-
-    ; Issue READ command
     mov dx, ATA_STATUS_CMD
     mov al, ATA_CMD_READ
     out dx, al
-
     mov ecx, ebp
 .nxs:
     mov dx, ATA_STATUS_CMD
 .wd:
     in al, dx
-    test al, 0x80            ; wait while BSY
+    test al, 0x80            ; BSY set? keep waiting
     jnz .wd
-    test al, 0x08            ; DRQ set?
+    test al, 0x01            ; ERR set? abort
+    jnz .timeout
+    test al, 0x08            ; DRQ set? read data
     jz .wd
-
     mov dx, ATA_DATA_PORT
     push ecx
-    mov ecx, 256             ; 256 words = 512 bytes
+    mov ecx, 256
     rep insw
     pop ecx
     dec ecx
     jnz .nxs
     popad
     ret
+.timeout:
+    popad
+    mov eax, -1
+    ret
 
-; -----------------------------------------------------------------------------
-; ata_write — write sectors to disk via PIO
-;   in:  eax = LBA, ecx = sector count, esi = source buffer
-; -----------------------------------------------------------------------------
 ata_write:
     pushad
     mov ebx, eax
     mov ebp, ecx
+
+    ; --- Drive reset / initialization ---
+    mov dx, ATA_DEV_CONTROL
+    mov al, 0x04
+    out dx, al
+    mov ecx, 10
+.wr_reset_delay:
     mov dx, ATA_STATUS_CMD
-.wb:
+    in al, dx
+    dec ecx
+    jnz .wr_reset_delay
+    mov dx, ATA_DEV_CONTROL
+    xor al, al
+    out dx, al
+    mov ecx, 100000
+.wr_reset_wait:
+    mov dx, ATA_STATUS_CMD
     in al, dx
     test al, 0x80
-    jnz .wb
+    jz .wr_reset_done
+    dec ecx
+    jnz .wr_reset_wait
+    jmp .wr_timeout
+.wr_reset_done:
 
+    ; Select drive
     mov dx, ATA_DRIVE_HEAD
     mov eax, ebx
     shr eax, 24
@@ -336,10 +393,34 @@ ata_write:
     or al, ATA_DRIVE_MASTER
     out dx, al
 
+    mov ecx, 4
+.wr_sel_delay:
+    mov dx, ATA_STATUS_CMD
+    in al, dx
+    dec ecx
+    jnz .wr_sel_delay
+
+    mov ecx, 100000
+.wb:
+    mov dx, ATA_STATUS_CMD
+    in al, dx
+    test al, 0x80
+    jz .wr_ready
+    dec ecx
+    jnz .wb
+    jmp .wr_timeout
+.wr_ready:
+    test al, 0x01
+    jnz .wr_timeout
+    mov dx, ATA_DRIVE_HEAD
+    mov eax, ebx
+    shr eax, 24
+    and al, 0x0F
+    or al, ATA_DRIVE_MASTER
+    out dx, al
     mov dx, ATA_SECTOR_COUNT
     mov eax, ebp
     out dx, al
-
     mov dx, ATA_LBA_LOW
     mov eax, ebx
     out dx, al
@@ -349,21 +430,20 @@ ata_write:
     mov dx, ATA_LBA_HIGH
     shr eax, 8
     out dx, al
-
     mov dx, ATA_STATUS_CMD
     mov al, ATA_CMD_WRITE
     out dx, al
-
     mov ecx, ebp
 .nxs:
     mov dx, ATA_STATUS_CMD
 .wd:
     in al, dx
-    test al, 0x80
+    test al, 0x80            ; BSY set? keep waiting
     jnz .wd
-    test al, 0x08
+    test al, 0x01            ; ERR set? abort
+    jnz .wr_timeout
+    test al, 0x08            ; DRQ set? write data
     jz .wd
-
     mov dx, ATA_DATA_PORT
     push ecx
     mov ecx, 256
@@ -371,8 +451,6 @@ ata_write:
     pop ecx
     dec ecx
     jnz .nxs
-
-    ; Flush cache
     mov dx, ATA_STATUS_CMD
     mov al, ATA_CMD_CACHE_FLUSH
     out dx, al
@@ -382,108 +460,772 @@ ata_write:
     jnz .wf
     popad
     ret
+.wr_timeout:
+    popad
+    mov eax, -1
+    ret
 
-; ── Persistence ────────────────────────────────────────────────────────────
+; ── Superblock ─────────────────────────────────────────────────────────────
 
-; -----------------------------------------------------------------------------
-; persist_entry — write a spare-slot entry to disk
-;   in:  eax = pointer to fs_entry
-; -----------------------------------------------------------------------------
-persist_entry:
+; FS_BASE_LBA is set by load_fs_persist before any disk access.
+; It represents the disk LBA where the filesystem region begins.
+; All LBA constants in this file (INODE_TABLE_LBA, etc.) are relative
+; to the FS region start, so we add FS_BASE_LBA for actual disk reads.
+
+load_superblock:
     pushad
-    ; slot_idx = (entry_ptr - fs_entries) / FS_REC_SIZE
-    sub eax, fs_entries
-    xor edx, edx
-    mov ebx, FS_REC_SIZE
-    div ebx
-    cmp eax, FS_COUNT - FS_SPARE_COUNT
-    jb .skip                  ; not a spare slot — no-op
-    sub eax, FS_COUNT - FS_SPARE_COUNT
-    mov ebp, eax              ; ebp = spare index
+    mov eax, [fs_base_lba]   ; superblock is at sector 0 of FS region
+    mov ecx, 1
+    mov edi, sb_buf
+    call ata_read
+    popad
+    ret
 
-    ; Re-derive entry pointer
-    add eax, FS_COUNT - FS_SPARE_COUNT
-    imul eax, FS_REC_SIZE
-    add eax, fs_entries
-    mov ebx, eax              ; ebx = entry pointer
-
-    ; Build persist buffer: metadata zero-padded to 512, then content
-    mov esi, ebx
-    mov edi, persist_buf
-    mov ecx, FS_REC_SIZE
-    cld
-    rep movsb
-    mov ecx, 512 - FS_REC_SIZE
-    xor eax, eax
-    rep stosb
-    mov esi, [ebx + FS_OFS_DATA]
-    mov ecx, FS_CAPACITY
-    rep movsb
-
-    ; Write 3 sectors at FS_BASE_LBA + spare_idx * 3
-    mov eax, ebp
-    imul eax, SECTORS_PER_SLOT
-    add eax, FS_BASE_LBA
-    mov ecx, SECTORS_PER_SLOT
-    mov esi, persist_buf
+write_superblock:
+    pushad
+    mov eax, [fs_base_lba]
+    mov ecx, 1
+    mov esi, sb_buf
     call ata_write
-.skip:
+    popad
+    ret
+
+; ── Block bitmap ───────────────────────────────────────────────────────────
+
+load_bitmap:
+    pushad
+    mov eax, [sb_buf + SB_BITMAP_LBA]
+    add eax, [fs_base_lba]       ; convert FS-relative LBA to disk LBA
+    mov ecx, [sb_buf + SB_TOTAL_BLOCKS]
+    add ecx, 7
+    shr ecx, 3
+    add ecx, 511
+    shr ecx, 9
+    mov edi, fs_bitmap
+    call ata_read
+    popad
+    ret
+
+write_bitmap:
+    pushad
+    mov eax, [sb_buf + SB_BITMAP_LBA]
+    add eax, [fs_base_lba]
+    mov ecx, [sb_buf + SB_TOTAL_BLOCKS]
+    add ecx, 7
+    shr ecx, 3
+    add ecx, 511
+    shr ecx, 9
+    mov esi, fs_bitmap
+    call ata_write
     popad
     ret
 
 ; -----------------------------------------------------------------------------
-; load_fs_persist — at boot, restore spare slots from disk into RAM
+; balloc — allocate a free data block
+;   out: eax = block number, or -1 if none free
 ; -----------------------------------------------------------------------------
-load_fs_persist:
-    pushad
-    xor ebx, ebx
-.lp:
-    cmp ebx, FS_SPARE_COUNT
-    jae .done
-
-    ; Read slot from disk
-    mov eax, ebx
-    imul eax, SECTORS_PER_SLOT
-    add eax, FS_BASE_LBA
-    mov ecx, SECTORS_PER_SLOT
-    mov edi, persist_buf
-    call ata_read
-
-    cmp byte [persist_buf], 0
-    je .next                  ; empty on-disk slot
-
-    ; Compute entry pointer
-    mov eax, FS_COUNT
-    sub eax, FS_SPARE_COUNT
-    add eax, ebx
-    imul eax, FS_REC_SIZE
-    add eax, fs_entries
-    mov edx, eax              ; edx = entry pointer
-
-    ; Preserve the in-memory data pointer assigned by gen_fs.py
-    mov eax, [edx + FS_OFS_DATA]
-    push eax
+balloc:
+    push ebx
+    push ecx
     push edx
+    push edi
+    mov ecx, [sb_buf + SB_TOTAL_BLOCKS]
+    xor ebx, ebx
+    mov edi, fs_bitmap
+.bitmap_lp:
+    cmp ebx, ecx
+    jae .no_free
+    mov eax, ebx
+    shr eax, 3
+    movzx edx, byte [edi + eax]
+    mov eax, ebx
+    and eax, 7
+    bt edx, eax
+    jnc .found
+    inc ebx
+    jmp .bitmap_lp
+.found:
+    mov eax, ebx
+    shr eax, 3
+    mov edx, 1
+    push ecx
+    mov ecx, ebx
+    and ecx, 7
+    shl dl, cl
+    or [fs_bitmap + eax], dl
+    pop ecx
+    call write_bitmap
+    dec dword [sb_buf + SB_FREE_BLOCKS]
+    call write_superblock
+    mov eax, ebx
+    pop edi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+.no_free:
+    mov eax, -1
+    pop edi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
 
-    ; Copy on-disk record into entry (overwrites data ptr too)
-    mov esi, persist_buf
-    mov edi, edx
-    mov ecx, FS_REC_SIZE
+; -----------------------------------------------------------------------------
+; bfree — free a data block
+;   in: ebx = block number
+; -----------------------------------------------------------------------------
+bfree:
+    push eax
+    push ecx
+    push edx
+    push edi
+    mov eax, ebx
+    shr eax, 3
+    mov edx, 1
+    mov ecx, ebx
+    and ecx, 7
+    shl dl, cl
+    not dl
+    and [fs_bitmap + eax], dl
+    call write_bitmap
+    inc dword [sb_buf + SB_FREE_BLOCKS]
+    call write_superblock
+    pop edi
+    pop edx
+    pop ecx
+    pop eax
+    ret
+
+; ── Inode table ────────────────────────────────────────────────────────────
+
+; -----------------------------------------------------------------------------
+; load_inode — read an inode from disk into inode_buf
+;   in:  ebx = inode number (0-based)
+; -----------------------------------------------------------------------------
+load_inode:
+    pushad
+    mov eax, ebx
+    imul eax, INODE_SIZE
+    mov ecx, eax
+    shr ecx, 9
+    add ecx, INODE_TABLE_LBA
+    add ecx, [fs_base_lba]       ; convert to disk LBA
+    and eax, 511
+    push eax
+    mov eax, ecx
+    mov ecx, 2
+    mov edi, inode_sector_buf
+    call ata_read
+    pop eax
+    lea esi, [inode_sector_buf + eax]
+    mov edi, inode_buf
+    mov ecx, INODE_SIZE
     cld
     rep movsb
+    popad
+    ret
 
-    pop edx
+; -----------------------------------------------------------------------------
+; write_inode — write inode_buf back to disk
+;   in:  ebx = inode number
+; -----------------------------------------------------------------------------
+write_inode:
+    pushad
+    mov eax, ebx
+    imul eax, INODE_SIZE
+    mov ecx, eax
+    shr ecx, 9
+    add ecx, INODE_TABLE_LBA
+    add ecx, [fs_base_lba]       ; convert to disk LBA
+    and eax, 511
+    push eax
+    mov eax, ecx
+    mov ecx, 2
+    mov edi, inode_sector_buf
+    call ata_read
     pop eax
-    mov [edx + FS_OFS_DATA], eax   ; restore real data pointer
-
-    ; Copy content from persist buffer to entry's data buffer
-    mov edi, eax
-    mov esi, persist_buf + 512
-    mov ecx, FS_CAPACITY
+    mov esi, inode_buf
+    lea edi, [inode_sector_buf + eax]
+    mov ecx, INODE_SIZE
+    cld
     rep movsb
-.next:
+    mov eax, ebx
+    imul eax, INODE_SIZE
+    shr eax, 9
+    add eax, INODE_TABLE_LBA
+    mov ecx, 2
+    mov esi, inode_sector_buf
+    call ata_write
+    popad
+    ret
+
+; -----------------------------------------------------------------------------
+; ialloc — allocate a free inode
+;   out: eax = inode number, or -1 if none free
+; -----------------------------------------------------------------------------
+ialloc:
+    push ebx
+    push ecx
+    push edx
+    mov ecx, [sb_buf + SB_INODE_COUNT]
+    xor ebx, ebx
+.scan:
+    cmp ebx, ecx
+    jae .no_free
+    call load_inode
+    cmp dword [inode_buf + INOFS_TYPE], INODE_FREE
+    je .found
     inc ebx
-    jmp .lp
-.done:
+    jmp .scan
+.found:
+    mov dword [inode_buf + INOFS_TYPE], INODE_FILE
+    mov dword [inode_buf + INOFS_SIZE], 0
+    call write_inode
+    dec dword [sb_buf + SB_FREE_INODES]
+    call write_superblock
+    mov eax, ebx
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+.no_free:
+    mov eax, -1
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+
+; -----------------------------------------------------------------------------
+; ifree — free an inode and all its data blocks
+;   in:  ebx = inode number
+; -----------------------------------------------------------------------------
+ifree:
+    pushad
+    call load_inode
+    mov ecx, 12
+    lea esi, [inode_buf + INOFS_DIRECT]
+.free_direct:
+    mov eax, [esi]
+    test eax, eax
+    jz .next_d
+    push ecx
+    push esi
+    mov ebx, eax
+    call bfree
+    pop esi
+    pop ecx
+    mov dword [esi], 0
+.next_d:
+    add esi, 4
+    dec ecx
+    jnz .free_direct
+    mov eax, [inode_buf + INOFS_SIND]
+    test eax, eax
+    jz .no_sind
+    push eax
+    mov ecx, 1
+    mov edi, indirect_buf
+    call ata_read
+    pop eax
+    mov ebx, eax
+    call bfree
+    mov dword [inode_buf + INOFS_SIND], 0
+.no_sind:
+    mov dword [inode_buf + INOFS_TYPE], INODE_FREE
+    mov dword [inode_buf + INOFS_SIZE], 0
+    call write_inode
+    inc dword [sb_buf + SB_FREE_INODES]
+    call write_superblock
+    popad
+    ret
+
+; ── Directory operations ───────────────────────────────────────────────────
+
+; -----------------------------------------------------------------------------
+; dir_lookup — look up a name within a directory inode
+;   in:  ebx = parent inode number, esi = name to find
+;   out: eax = child inode number, or -1 if not found
+; -----------------------------------------------------------------------------
+dir_lookup:
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+    push ebp
+    call load_inode
+    mov ebp, 0
+.dblk:
+    cmp ebp, 12
+    jae .not_found
+    mov eax, [inode_buf + INOFS_DIRECT + ebp * 4]
+    test eax, eax
+    jz .not_found
+    push ebp
+    push ebx
+    mov ebx, eax
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]       ; convert to disk LBA
+    mov ecx, BLOCK_SECTORS
+    mov edi, dir_block_buf
+    call ata_read
+    pop ebx
+    pop ebp
+    mov edi, dir_block_buf
+    mov ecx, BLOCK_SIZE
+.scan_entry:
+    cmp ecx, 8
+    jb .next_block
+    movzx eax, word [edi + 4]
+    test eax, eax
+    jz .next_block
+    push ecx
+    push edi
+    push esi
+    lea edi, [edi + 8]
+    call str_eq
+    pop esi
+    pop edi
+    pop ecx
+    test eax, eax
+    jz .found_it
+    movzx eax, word [edi + 4]
+    sub ecx, eax
+    add edi, eax
+    jmp .scan_entry
+.found_it:
+    mov eax, [edi]
+    pop ebp
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+.next_block:
+    inc ebp
+    jmp .dblk
+.not_found:
+    mov eax, -1
+    pop ebp
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+
+; -----------------------------------------------------------------------------
+; dir_add_entry — add a directory entry to a parent directory
+;   in:  ebx = parent inode number, esi = name, edx = child inode number
+;         cl = file_type (1=file 2=dir)
+;   out: eax = 0 on success, -1 on error
+;   Clobbers: all GPRs
+; -----------------------------------------------------------------------------
+dir_add_entry:
+    pushad
+    ; Save parameters to memory (pushad order: eax,ecx,edx,ebx,esp,ebp,esi,edi)
+    mov [child_inum], edx
+    mov [file_type], ecx
+    mov [name_ptr], esi
+    ; Compute rec_len needed: 8 + name_len, aligned to 4
+    push ebx
+    call str_len              ; ecx = name_len (esi = name_ptr still)
+    mov eax, ecx
+    add eax, 8 + 3
+    and eax, ~3
+    mov ebp, eax              ; ebp = rec_len needed
+    pop ebx
+    ; Load parent inode
+    call load_inode
+    ; Try to find space in existing data blocks
+    mov dword [curr_block_idx], 0
+.dae_blk:
+    mov ecx, [curr_block_idx]
+    cmp ecx, 12
+    jae .dae_alloc
+    mov eax, [inode_buf + INOFS_DIRECT + ecx * 4]
+    test eax, eax
+    jz .dae_alloc_here
+    ; Read data block
+    push ebx
+    push ecx
+    mov ebx, eax
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
+    mov ecx, BLOCK_SECTORS
+    mov edi, dir_block_buf
+    call ata_read
+    pop ecx
+    pop ebx
+    ; Scan for trailing free space
+    mov edi, dir_block_buf
+    mov eax, BLOCK_SIZE
+.dae_scan:
+    cmp eax, ebp
+    jb .dae_next_blk
+    movzx ecx, word [edi + 4] ; rec_len
+    test ecx, ecx
+    jz .dae_use_here
+    sub eax, ecx
+    add edi, ecx
+    jmp .dae_scan
+.dae_use_here:
+    cmp eax, ebp
+    jge .dae_found
+.dae_next_blk:
+    inc dword [curr_block_idx]
+    jmp .dae_blk
+.dae_alloc_here:
+    ; Allocate a new data block
+    call balloc
+    cmp eax, -1
+    je .dae_err
+    ; Store in inode
+    mov edx, eax
+    push ebx
+    mov ecx, [curr_block_idx]
+    call load_inode
+    pop ebx
+    mov [inode_buf + INOFS_DIRECT + ecx * 4], edx
+    call write_inode
+    ; Zero the block
+    mov edi, dir_block_buf
+    mov ecx, BLOCK_SIZE / 4
+    xor eax, eax
+    cld
+    rep stosd
+    mov edi, dir_block_buf
+    jmp .dae_write
+.dae_alloc:
+    jmp .dae_err
+.dae_found:
+    ; edi = where to write, ebp = rec_len
+.dae_write:
+    ; Write inode number
+    mov eax, [child_inum]
+    mov [edi], eax
+    ; Write rec_len
+    mov word [edi + 4], bp
+    ; Write name_len
+    mov esi, [name_ptr]
+    push edi
+    xor ecx, ecx
+.dae_nlen:
+    cmp byte [esi + ecx], 0
+    je .dae_nlen_done
+    inc ecx
+    jmp .dae_nlen
+.dae_nlen_done:
+    pop edi
+    mov byte [edi + 6], cl   ; name_len
+    ; Write file_type
+    mov eax, [file_type]
+    mov byte [edi + 7], al
+    ; Copy name
+    lea edi, [edi + 8]
+    mov esi, [name_ptr]
+    cld
+    rep movsb
+    ; Write the data block back to disk
+    ; Compute which block this is from curr_block_idx
+    mov ecx, [curr_block_idx]
+    push ebx
+    call load_inode
+    pop ebx
+    mov eax, [inode_buf + INOFS_DIRECT + ecx * 4]
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
+    mov ecx, BLOCK_SECTORS
+    mov esi, dir_block_buf
+    call ata_write
+    popad
+    xor eax, eax
+    ret
+.dae_err:
+    popad
+    mov eax, -1
+    ret
+
+; ── File lookup by path ────────────────────────────────────────────────────
+
+; -----------------------------------------------------------------------------
+; fs_lookup_inode — resolve a path to an inode number
+;   in:  esi = absolute null-terminated path
+;   out: eax = inode number, or -1 if not found
+; -----------------------------------------------------------------------------
+fs_lookup_inode:
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+    cmp byte [esi], '/'
+    jne .not_found
+    cmp byte [esi + 1], 0
+    je .root_found
+    mov ebx, 0               ; current inode = root
+    inc esi
+.component:
+    mov edi, path_buf
+.cp_comp:
+    mov al, [esi]
+    test al, al
+    jz .last_comp
+    cmp al, '/'
+    je .got_comp
+    stosb
+    inc esi
+    jmp .cp_comp
+.got_comp:
+    mov byte [edi], 0
+    inc esi
+    push esi
+    mov esi, path_buf
+    call dir_lookup
+    pop esi
+    cmp eax, -1
+    je .not_found
+    mov ebx, eax
+    jmp .component
+.last_comp:
+    mov byte [edi], 0
+    cmp byte [path_buf], 0
+    je .root_found
+    push esi
+    mov esi, path_buf
+    call dir_lookup
+    pop esi
+    cmp eax, -1
+    je .not_found
+    mov ebx, eax
+.root_found:
+    mov eax, ebx
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+.not_found:
+    mov eax, -1
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+
+; ── File read ──────────────────────────────────────────────────────────────
+
+; -----------------------------------------------------------------------------
+; file_read — read data from a file inode
+;   in:  ebx = inode number, edi = dest buffer, ecx = count, edx = offset
+;   out: eax = bytes read, or -1 on error
+; -----------------------------------------------------------------------------
+file_read:
+    pushad
+    mov ebp, edi             ; ebp = dest
+    mov [file_bytes_left], ecx
+    mov [file_offset], edx
+    call load_inode
+    ; Clamp to file size
+    mov eax, [inode_buf + INOFS_SIZE]
+    sub eax, [file_offset]
+    jle .read_done
+    cmp [file_bytes_left], eax
+    jle .read_loop
+    mov [file_bytes_left], eax
+.read_loop:
+    cmp dword [file_bytes_left], 0
+    je .read_done
+    mov eax, [file_offset]
+    shr eax, 12              ; block index
+    cmp eax, 12
+    jae .read_done
+    ; Get block pointer from inode
+    mov ecx, [inode_buf + INOFS_DIRECT + eax * 4]
+    test ecx, ecx
+    jz .read_done
+    ; Read data block
+    push ebx
+    mov ebx, ecx
+    shl ecx, 3
+    add ecx, [sb_buf + SB_DATA_LBA]
+    add ecx, [fs_base_lba]
+    mov eax, ecx
+    mov ecx, BLOCK_SECTORS
+    mov edi, file_block_buf
+    call ata_read
+    pop ebx
+    ; Compute bytes to copy
+    mov eax, [file_offset]
+    and eax, 0xFFF           ; offset in block
+    mov ecx, BLOCK_SIZE
+    sub ecx, eax             ; bytes available in block
+    cmp [file_bytes_left], ecx
+    jle .rd_copy
+    mov ecx, [file_bytes_left]
+.rd_copy:
+    ; Copy from file_block_buf[offset_in_block] to dest
+    push esi
+    push edi
+    lea esi, [file_block_buf + eax]
+    mov edi, ebp
+    ; ecx already has bytes to copy
+    cld
+    rep movsb
+    pop edi
+    pop esi
+    add ebp, ecx
+    add [file_offset], ecx
+    sub [file_bytes_left], ecx
+    jmp .read_loop
+.read_done:
+    mov eax, ebp
+    sub eax, [esp + 28]      ; original edi from pushad
+    mov [esp + 28], eax      ; store in eax slot for popad
+    popad
+    ret
+
+; ── File write ─────────────────────────────────────────────────────────────
+
+; -----------------------------------------------------------------------------
+; file_write — write data to a file inode
+;   in:  ebx = inode number, esi = src buffer, ecx = count, edx = offset
+;   out: eax = bytes written, or -1 on error
+; -----------------------------------------------------------------------------
+file_write:
+    pushad
+    mov [file_bytes_left], ecx
+    mov [file_offset], edx
+    mov ebp, esi             ; ebp = source pointer
+    call load_inode
+.wr_loop:
+    cmp dword [file_bytes_left], 0
+    je .wr_done
+    mov eax, [file_offset]
+    shr eax, 12              ; block index
+    cmp eax, 12
+    jae .wr_done
+    ; Check if block is allocated
+    mov ecx, [inode_buf + INOFS_DIRECT + eax * 4]
+    test ecx, ecx
+    jnz .wr_block_ok
+    ; Allocate a new block
+    call balloc
+    cmp eax, -1
+    je .wr_err
+    ; Store in inode
+    mov ecx, [file_offset]
+    shr ecx, 12
+    push ebx
+    call load_inode
+    pop ebx
+    mov [inode_buf + INOFS_DIRECT + ecx * 4], eax
+    call write_inode
+    ; Zero the new block
+    push ebx
+    mov edi, file_block_buf
+    mov ecx, BLOCK_SIZE / 4
+    xor eax, eax
+    cld
+    rep stosd
+    pop ebx
+    mov ecx, [inode_buf + INOFS_DIRECT + ecx * 4]
+    ; Write zeroed block to disk
+    push ebx
+    mov ebx, ecx
+    shl ecx, 3
+    add ecx, [sb_buf + SB_DATA_LBA]
+    add ecx, [fs_base_lba]
+    mov eax, ecx
+    mov ecx, BLOCK_SECTORS
+    mov esi, file_block_buf
+    call ata_write
+    pop ebx
+.wr_block_ok:
+    ; Read existing block
+    mov eax, [file_offset]
+    shr eax, 12
+    mov ecx, [inode_buf + INOFS_DIRECT + eax * 4]
+    push ebx
+    mov ebx, ecx
+    shl ecx, 3
+    add ecx, [sb_buf + SB_DATA_LBA]
+    add ecx, [fs_base_lba]
+    mov eax, ecx
+    mov ecx, BLOCK_SECTORS
+    mov edi, file_block_buf
+    call ata_read
+    pop ebx
+    ; Compute bytes to copy
+    mov eax, [file_offset]
+    and eax, 0xFFF
+    mov ecx, BLOCK_SIZE
+    sub ecx, eax
+    cmp [file_bytes_left], ecx
+    jle .wr_copy
+    mov ecx, [file_bytes_left]
+.wr_copy:
+    ; Copy from source into file_block_buf
+    push esi
+    push edi
+    lea edi, [file_block_buf + eax]
+    mov esi, ebp
+    cld
+    rep movsb
+    pop edi
+    pop esi
+    ; Write block back
+    push ebx
+    push ecx
+    mov eax, [file_offset]
+    shr eax, 12
+    mov ecx, [inode_buf + INOFS_DIRECT + eax * 4]
+    mov ebx, ecx
+    shl ecx, 3
+    add ecx, [sb_buf + SB_DATA_LBA]
+    add ecx, [fs_base_lba]
+    mov eax, ecx
+    mov ecx, BLOCK_SECTORS
+    mov esi, file_block_buf
+    call ata_write
+    pop ecx
+    pop ebx
+    add ebp, ecx
+    add [file_offset], ecx
+    sub [file_bytes_left], ecx
+    jmp .wr_loop
+.wr_done:
+    ; Update file size if extended
+    mov eax, [file_offset]
+    call load_inode
+    cmp eax, [inode_buf + INOFS_SIZE]
+    jle .wr_no_size
+    mov [inode_buf + INOFS_SIZE], eax
+    call write_inode
+.wr_no_size:
+    popad
+    xor eax, eax
+    ret
+.wr_err:
+    popad
+    mov eax, -1
+    ret
+
+; ── Persistence (boot-time) ────────────────────────────────────────────────
+
+load_fs_persist:
+    pushad
+    ; Read FS base LBA from the location stored by the bootloader
+    mov eax, [0x500]             ; physical address, identity-mapped
+    mov [fs_base_lba], eax
+    call load_superblock
+    call load_bitmap
     popad
     ret

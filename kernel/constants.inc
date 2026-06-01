@@ -45,6 +45,10 @@ ATA_CMD_READ         equ 0x20
 ATA_CMD_WRITE        equ 0x30
 ATA_CMD_CACHE_FLUSH  equ 0xE7
 ATA_DRIVE_MASTER     equ 0xE0
+ATA_DEV_CONTROL      equ 0x3F6
+ATA_CMD_IDENTIFY     equ 0xEC
+ATA_CMD_CACHE_FLUSH  equ 0xE7
+ATA_DRIVE_MASTER     equ 0xE0
 
 ; --- PIC ----------------------------------------------------------------------
 PIC_MASTER_CMD       equ 0x20
@@ -56,10 +60,58 @@ PIC_INIT             equ 0x11
 PIC_MASTER_OFFSET    equ 0x20
 PIC_SLAVE_OFFSET     equ 0x28
 
-; --- FS persistence -----------------------------------------------------------
+; --- FS persistence (legacy — kept for build script compat) -------------------
 FS_BASE_LBA          equ 512
 SECTORS_PER_SLOT     equ 9
 FS_PERSIST_BUF_SIZE  equ 4608          ; 512 + 4096
+
+; --- New block filesystem layout ----------------------------------------------
+; On-disk layout (relative to FS region start):
+;   sector 0 = superblock (512 bytes)
+;   sector 1+ = inode table (INODE_COUNT inodes, INODE_SIZE bytes each, rounded up)
+;   then  = block bitmap (1 bit per data block, rounded up to sector)
+;   then  = data blocks (BLOCK_SIZE bytes each)
+; The FS region starts at FS_BASE_LBA on the disk (set at boot from kernel size).
+BLOCK_SIZE           equ 4096
+BLOCK_SECTORS        equ 8              ; 4096 / 512
+INODE_SIZE           equ 128
+INODE_COUNT          equ 256
+INODE_TABLE_LBA      equ 2
+; Superblock magic
+FS_MAGIC             equ 0xEF53
+; Inode types
+INODE_FREE           equ 0
+INODE_FILE           equ 1
+INODE_DIR            equ 2
+; Inode structure offsets within 128-byte inode:
+INOFS_TYPE           equ 0    ; dword: 0=free 1=file 2=dir
+INOFS_SIZE           equ 4    ; dword: file size in bytes
+INOFS_FLAGS          equ 8    ; dword: reserved
+INOFS_DIRECT         equ 12   ; 12 x dword direct block pointers (48 bytes)
+INOFS_SIND           equ 60   ; dword: single-indirect block pointer
+INOFS_DIND           equ 64   ; dword: double-indirect block pointer
+INOFS_RESERVED       equ 68   ; 60 bytes reserved, total = 128
+; Superblock structure offsets (within 512-byte sector):
+SB_MAGIC             equ 0    ; dword: FS_MAGIC
+SB_BLOCK_SIZE        equ 4    ; dword
+SB_TOTAL_BLOCKS      equ 8    ; dword: total data blocks on disk
+SB_INODE_COUNT       equ 12   ; dword
+SB_FREE_BLOCKS       equ 16   ; dword
+SB_FREE_INODES       equ 20   ; dword
+SB_INODE_TABLE_LBA   equ 24   ; dword
+SB_BITMAP_LBA        equ 28   ; dword
+SB_DATA_LBA          equ 32   ; dword
+SB_MOUNT_COUNT       equ 36   ; dword
+SB_MAX_BLOCKS        equ 40   ; dword: absolute capacity
+; Directory entry structure (variable-length, stored in data blocks):
+;   dword  inode_number
+;   word   rec_len (total record length including padding)
+;   byte   name_len
+;   byte   file_type (1=file 2=dir)
+;   char[] name (name_len bytes, no null required but null-terminated)
+DIRENT_NAME_MAX      equ 48
+; FS bitmap buffer in BSS (tracks free/used data blocks)
+FS_BITMAP_MAX_BLOCKS equ 4096  ; max blocks we can track (4096 * 4096 = 16 MB)
 
 ; --- Shell --------------------------------------------------------------------
 CMD_BUF_SIZE         equ 64

@@ -32,6 +32,23 @@ tmp_dst          resd 1
 tmp_left         resd 1
 persist_buf      resb FS_PERSIST_BUF_SIZE
 
+; --- Block filesystem state ---
+alignb 4
+fs_base_lba      resd 1                ; disk LBA where FS region begins
+sb_buf           resb 512              ; superblock cache
+inode_buf        resb INODE_SIZE       ; current inode cache
+inode_sector_buf resb 1024             ; raw sector(s) for inode R/W
+fs_bitmap        resb (FS_BITMAP_MAX_BLOCKS / 8)  ; block bitmap cache
+dir_block_buf    resb BLOCK_SIZE       ; directory data block cache
+file_block_buf   resb BLOCK_SIZE       ; file data block cache
+indirect_buf     resb BLOCK_SIZE       ; indirect block cache
+curr_block_idx   resd 1                ; current block index helper
+file_offset      resd 1                ; current file offset helper
+file_bytes_left  resd 1                ; remaining bytes helper
+name_ptr         resd 1                ; name pointer helper
+child_inum       resd 1                ; child inode number helper
+file_type        resd 1                ; file type helper
+
 ; --- IDT ---
 alignb 8
 idt_start:
