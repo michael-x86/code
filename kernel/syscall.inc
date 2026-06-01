@@ -521,3 +521,179 @@ sys_rmdir:                               ; 21: esi = path → 0/-1
     pop esi
     mov eax, -1
     ret
+
+; ── Memory management syscalls ─────────────────────────────────────────────
+
+sys_alloc_pages:                         ; 23: ecx = page count → eax = vaddr/-1
+    push ebx
+    push ecx
+    push edx
+    push edi
+    push esi
+    mov eax, ecx
+    test eax, eax
+    jz .err
+    add eax, 4095
+    shr eax, 12
+    mov ecx, eax
+    push ecx
+    call find_free_virt
+    pop ecx
+    jc .err_pop
+    mov edi, eax
+    mov edx, eax
+.alloc_loop:
+    test ecx, ecx
+    jz .done_alloc
+    push edx
+    push ecx
+    call alloc_page
+    pop ecx
+    pop edx
+    jc .err_free
+    mov ebx, eax
+    mov eax, edx
+    push edx
+    push ecx
+    mov ecx, PAGE_PRESENT_RW
+    call map_page
+    pop ecx
+    pop edx
+    jc .err_free
+    add edx, PAGE_SIZE
+    dec ecx
+    jmp .alloc_loop
+.done_alloc:
+    mov eax, edi
+    mov ebx, edx
+    sub ebx, edi
+    shr ebx, 12
+    call register_allocation
+    pop esi
+    pop edi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+.err_free:
+    ; Free partially allocated pages
+    mov eax, edi
+    mov ebx, edx
+    sub ebx, edi
+    shr ebx, 12
+    test ebx, ebx
+    jz .err_pop
+    call free_pages
+.err_pop:
+    pop ecx
+.err:
+    pop esi
+    pop edi
+    pop edx
+    pop ecx
+    pop ebx
+    mov eax, -1
+    ret
+
+sys_free_pages:                          ; 24: ebx = vaddr → 0/-1
+    push ebx
+    push ecx
+    push esi
+    mov esi, alloc_table
+    mov ecx, alloc_table_count
+.search:
+    cmp [esi], ebx
+    je .found
+    add esi, 8
+    loop .search
+    pop esi
+    pop ecx
+    pop ebx
+    mov eax, -1
+    ret
+.found:
+    mov ebx, [esi + 4]
+    push eax
+    call free_pages
+    pop eax
+    mov dword [esi], 0
+    mov dword [esi + 4], 0
+    pop esi
+    pop ecx
+    pop ebx
+    xor eax, eax
+    ret
+
+sys_write_mem:                           ; 25: ebx = addr, ecx = byte value → 0/-1
+    mov byte [ebx], cl
+    xor eax, eax
+    ret
+
+sys_hex2int:                             ; 26: esi = string → eax = value
+    push ebx
+    push edx
+    xor eax, eax
+    xor ebx, ebx
+    mov bl, [esi]
+    cmp bl, '0'
+    jne .parse
+    cmp byte [esi + 1], 'x'
+    je .skip_prefix
+    cmp byte [esi + 1], 'X'
+    jne .parse
+.skip_prefix:
+    add esi, 2
+.parse:
+    movzx ebx, byte [esi]
+    test bl, bl
+    jz .done
+    cmp bl, '0'
+    jb .done
+    cmp bl, '9'
+    jle .digit
+    cmp bl, 'A'
+    jb .done
+    cmp bl, 'F'
+    jle .upper
+    cmp bl, 'a'
+    jb .done
+    cmp bl, 'f'
+    ja .done
+.lower:
+    sub bl, 'a' - 10
+    jmp .nib
+.upper:
+    sub bl, 'A' - 10
+    jmp .nib
+.digit:
+    sub bl, '0'
+.nib:
+    shl eax, 4
+    or eax, ebx
+    inc esi
+    jmp .parse
+.done:
+    pop edx
+    pop ebx
+    ret
+
+sys_asc2int:                             ; 27: esi = string → edx = value
+    push eax
+    push ebx
+    xor edx, edx
+    mov ebx, 10
+.loop:
+    movzx eax, byte [esi]
+    test al, al
+    jz .done
+    cmp al, ' '
+    je .done
+    sub eax, '0'
+    imul edx, edx, 10
+    add edx, eax
+    inc esi
+    jmp .loop
+.done:
+    pop ebx
+    pop eax
+    ret

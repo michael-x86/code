@@ -58,3 +58,8 @@ syscall_table:
     dd sys_mkdir
     dd sys_rmdir
     dd sys_get_ps_info
+    dd sys_alloc_pages
+    dd sys_free_pages
+    dd sys_write_mem
+    dd sys_hex2int
+    dd sys_asc2int

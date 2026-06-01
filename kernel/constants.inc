@@ -102,7 +102,12 @@ IDT_DPL3             equ 11101110b    ; syscall gate: DPL=3
 %assign SYSCALL_MKDIR       20
 %assign SYSCALL_RMDIR       21
 %assign SYSCALL_GET_PS_INFO 22
-SYSCALL_COUNT        equ 23
+%assign SYSCALL_ALLOC_PAGES  23
+%assign SYSCALL_FREE_PAGES   24
+%assign SYSCALL_WRITE_MEM    25
+%assign SYSCALL_HEX2INT      26
+%assign SYSCALL_ASC2INT      27
+SYSCALL_COUNT        equ 28
 
 ; --- FS entry structure offsets -----------------------------------------------
 FS_NAME_LEN          equ 56
