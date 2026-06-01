@@ -2581,7 +2581,6 @@ sys_stack_dump:
     call show_regs
     pushad
     mov esi,esp
-    call sys_peek
     call newline
     mov ecx,8
     mov edi,esp
@@ -2709,8 +2708,6 @@ sys_peek:
     jl .arguse
     mov esi,[argv+4]
     call sys_hex2int   ;in esi {str} out eax {int}
-    ;call show_regs
-
     call newline
     mov esi,eax 
     mov ecx,4
@@ -2742,14 +2739,11 @@ sys_poke:
     cmp eax,3
     jl .usage
     mov esi,[argv+4]
-    call sys_hex2int   ;in esi {str} out eax {int}
+    call sys_hex2int  
     mov edi,eax
-    ;call show_regs
     mov esi,[argv+8]
-    call sys_hex2int   ;in esi {str} out eax {int}
-
+    call sys_hex2int   
     mov [edi],eax 
-    ;call show_regs
 .done:
     pop esi
     pop eax 
@@ -2761,21 +2755,16 @@ sys_poke:
     pop eax 
     ret
 
-; ---------------------------------------------------------
-;  VFS helpers
-; ---------------------------------------------------------
-
 ; in:  esi=entry_path, edi=cwd
 ; out: eax = pointer to basename inside entry_path, 
 ;      or 0 if not a direct child
-; preserves esi, edi
 basename_if_child:
     push ebx
     push edx
     push esi
     push edi
     cmp byte [edi+1], 0
-    je .cwd_root        ;    NORD
+    je .cwd_root      
 
     ; non-root cwd — match as exact prefix
 .mp:
@@ -2789,23 +2778,23 @@ basename_if_child:
     inc edi
     jmp .mp
 .after_cwd:
-    cmp byte [esi], '/'
+    cmp byte [esi],'/'
     jne .nope
     inc esi
-    cmp byte [esi], 0
+    cmp byte [esi],0
     je .nope
     mov ebx, esi
     mov edx, esi
 .scan:
-    mov al, [edx]
+    mov al,[edx]
     test al,al
     jz .yes
-    cmp al, '/'
+    cmp al,'/'
     je .nope
     inc edx
     jmp .scan
 .yes:
-    mov eax, ebx
+    mov eax,ebx
     pop edi
     pop esi
     pop edx
@@ -2813,23 +2802,23 @@ basename_if_child:
     ret
 
 .cwd_root:
-    cmp byte [esi], '/'
+    cmp byte [esi],'/'
     jne .nope
-    cmp byte [esi+1], 0
+    cmp byte [esi+1],0
     je .nope                 ; entry is "/" itself
-    mov ebx, esi
+    mov ebx,esi
     inc ebx                  ; basename = past leading '/'
-    mov edx, ebx
+    mov edx,ebx
 .sr:
     mov al, [edx]
     test al,al
     jz .root_ok
-    cmp al, '/'
+    cmp al,'/'
     je .nope
     inc edx
     jmp .sr
 .root_ok:
-    mov eax, ebx
+    mov eax,ebx
     pop edi
     pop esi
     pop edx
