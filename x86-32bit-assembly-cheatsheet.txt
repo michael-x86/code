@@ -1,0 +1,680 @@
+═══════════════════════════════════════════════════════════════
+                   32-BIT x86 ASSEMBLY CHEAT SHEET
+═══════════════════════════════════════════════════════════════
+
+── REGISTERS ──────────────────────────────────────────────────
+
+  32-bit    16-bit    8-bit (high/low)    Purpose
+  ─────────────────────────────────────────────────────
+  eax       ax        ah/al               Accumulator
+  ebx       bx        bh/bl               Base
+  ecx       cx        ch/cl               Counter
+  edx       dx        dh/dl               Data
+  esi       si        sil                 Source Index
+  edi       di        dil                 Dest Index
+  ebp       bp        bpl                 Base Pointer
+  esp       sp        spl                 Stack Pointer
+
+  Segment: cs ds es fs gs ss
+  EIP = instruction pointer, EFLAGS = flags
+
+── CALLING CONVENTIONS ────────────────────────────────────────
+
+  cdecl (C default, 32-bit):
+    Args pushed right-to-left on stack
+    Caller cleans stack
+    Return: eax (edx:eax for 64-bit)
+    Caller-saved: eax, ecx, edx
+    Callee-saved: ebx, esi, edi, ebp
+
+  stdcall (Win32 API):
+    Args pushed right-to-left on stack
+    Callee cleans stack (ret N)
+    Return: eax
+    Same register rules as cdecl
+
+  fastcall (MS):
+    First 2 args in ecx, edx → rest on stack
+    Callee cleans stack
+    Return: eax
+
+  thiscall (MS C++):
+    this in ecx, args on stack
+    Callee cleans stack
+
+  System calls (Linux int 0x80):
+    eax = syscall number
+    Args: ebx, ecx, edx, esi, edi, ebp
+    Return: eax
+
+── DATA SIZES ─────────────────────────────────────────────────
+
+  byte    = 8 bits    (db)
+  word    = 16 bits   (dw)
+  dword   = 32 bits   (dd)
+  qword   = 64 bits   (dq, FPU only)
+  tword   = 80 bits   (dt, FPU only)
+
+── ADDRESSING MODES ──────────────────────────────────────────
+
+  mov eax, [ebx]              ; base
+  mov eax, [ebx + 4]          ; base + displacement
+  mov eax, [ebx + ecx*4]      ; base + index*scale
+  mov eax, [ebx + ecx*4 + 8]  ; base + index*scale + disp
+  mov eax, [label]            ; absolute address
+
+  Scale: 1, 2, 4, or 8
+  Any 32-bit GPR can be base or index (except ESP as index)
+
+── DATA MOVEMENT ──────────────────────────────────────────────
+
+  mov   dst, src              ; move
+  movzx dst, src              ; zero-extend
+  movsx dst, src              ; sign-extend
+  lea   dst, [mem]            ; load effective address
+  xchg  dst, src              ; swap
+  cmovcc dst, src             ; conditional move (Pentium Pro+)
+  push  src                   ; push dword
+  pop   dst                   ; pop dword
+  pushad                      ; push all 8 GPRs (28h bytes)
+  popad                       ; pop all 8 GPRs
+  pushfd                      ; push EFLAGS
+  popfd                       ; pop EFLAGS
+  lds/les/lfs/lgs/lss         ; load far pointer (seg:offset)
+
+── ARITHMETIC ─────────────────────────────────────────────────
+
+  add   dst, src              ; dst += src
+  adc   dst, src              ; dst += src + CF
+  sub   dst, src              ; dst -= src
+  sbb   dst, src              ; dst -= src + CF
+  inc   dst                   ; dst++
+  dec   dst                   ; dst--
+  neg   dst                   ; negate
+  cmp   op1, op2              ; compare (sets flags)
+
+  mul   src                   ; unsigned: edx:eax = eax * src
+  imul  src                   ; signed:   edx:eax = eax * src
+  imul  dst, src              ; dst = dst * src
+  imul  dst, src, imm         ; dst = src * imm
+
+  div   src                   ; unsigned: eax=quot, edx=rem (of edx:eax)
+  idiv  src                   ; signed version
+  cdq                         ; sign-extend eax into edx:eax (before div)
+
+  aaa/aas/aam/aad             ; ASCII adjust (BCD arithmetic)
+  daa/das                     ; decimal adjust (packed BCD)
+
+── LOGICAL / BITWISE ──────────────────────────────────────────
+
+  and   dst, src
+  or    dst, src
+  xor   dst, src              ; xor eax, eax = zero (preferred)
+  not   dst
+  test  op1, op2              ; AND w/o store (sets flags)
+
+  shl   dst, count            ; shift left
+  shr   dst, count            ; shift right (unsigned)
+  sar   dst, count            ; shift right (signed, arithmetic)
+  sal   dst, count            ; same as shl
+  rol   dst, count            ; rotate left
+  ror   dst, count            ; rotate right
+  rcl   dst, count            ; rotate through carry left
+  rcr   dst, count            ; rotate through carry right
+  shld  dst, src, count       ; double-precision shift left
+  shrd  dst, src, count       ; double-precision shift right
+
+  bsf   dst, src              ; bit scan forward
+  bsr   dst, src              ; bit scan reverse
+  bt    bit, base             ; bit test
+  bts   bit, base             ; bit test and set
+  btr   bit, base             ; bit test and reset
+  btc   bit, base             ; bit test and complement
+
+── FLAGS (EFLAGS) ─────────────────────────────────────────────
+
+  CF  Carry       ZF  Zero       SF  Sign
+  OF  Overflow    PF  Parity     AF  Aux Carry
+  DF  Direction   TF  Trap       IF  Interrupt
+  NT  Nested Task RF  Resume     VM  Virtual 8086
+  AC  Alignment   VIF VIP        ID  CPUID
+
+  pushfd / popfd to read/write EFLAGS
+
+── CONDITIONAL JUMPS ──────────────────────────────────────────
+
+  Mnemonic        Condition               After CMP A, B
+  ─────────────────────────────────────────────────────
+  je / jz         ZF=1                    A == B
+  jne / jnz       ZF=0                    A != B
+  jg / jnle       ZF=0 && SF=OF           A > B  (signed)
+  jge / jnl       SF=OF                   A >= B (signed)
+  ja / jnbe       CF=0 && ZF=0           A > B  (unsigned)
+  jae / jnb       CF=0                    A >= B (unsigned)
+  jl / jnge       SF!=OF                  A < B  (signed)
+  jle / jng       ZF=1 || SF!=OF          A <= B (signed)
+  jb / jnae       CF=1                    A < B  (unsigned)
+  jbe / jna       CF=1 || ZF=1            A <= B (unsigned)
+  jo              OF=1                    overflow
+  jno             OF=0                    no overflow
+  js              SF=1                    negative
+  jns             SF=0                    non-negative
+  jp / jpe        PF=1                    parity even
+  jnp / jpo       PF=0                    parity odd
+  jcxz            CX=0                    (16-bit)
+  jecxz           ECX=0                   (32-bit)
+
+  SETcc reg       ; set byte if condition true
+  CMOVcc dst, src ; conditional move (Pentium Pro+)
+
+── CONTROL FLOW ───────────────────────────────────────────────
+
+  jmp   target                ; unconditional
+  jmp   reg                   ; indirect jump (switch tables)
+  call  target                ; push EIP, jump
+  call  reg                   ; indirect call
+  ret                         ; pop EIP
+  ret   N                     ; pop EIP, esp += N (stdcall)
+  int   0x80                  ; Linux syscall
+  int   3                     ; debug breakpoint
+  int   1                     ; single-step debug
+  into                        ; interrupt on overflow
+  iret                        ; return from interrupt
+  loop  target                ; dec ecx, jnz target
+  loope/loopz                 ; loop while equal/zero
+  loopne/loopnz               ; loop while not equal/not zero
+  enter N, 0                  ; stack frame setup
+  leave                       ; mov esp, ebp; pop ebp
+
+── STRING / BLOCK OPERATIONS ──────────────────────────────────
+
+  movsb/movsw/movsd           ; copy [esi] → [edi]
+  cmpsb/cmpsw/cmpsd           ; compare [esi] vs [edi]
+  scasb/scasw/scasd           ; scan al/ax/eax vs [edi]
+  lodsb/lodsd                 ; load [esi] → al/eax
+  stosb/stosd                 ; store al/eax → [edi]
+
+  rep                         ; repeat ecx times
+  repe/repz                   ; repeat while equal
+  repne/repnz                 ; repeat while not equal
+
+  CLD (DF=0, forward) / STD (DF=1, backward)
+
+── SYSTEM CALLS (Linux 32-bit, int 0x80) ────────────────────
+
+  eax = syscall, args: ebx ecx edx esi edi ebp
+
+  1   sys_exit        2   sys_fork        3   sys_read
+  4   sys_write       5   sys_open        6   sys_close
+  7   sys_waitpid     8   sys_creat       9   sys_link
+  10  sys_unlink      11  sys_execve      12  sys_chdir
+  13  sys_time        14  sys_mknod       15  sys_chmod
+  19  sys_lseek       20  sys_getpid      33  sys_access
+  36  sys_sync        37  sys_kill        38  sys_rename
+  39  sys_mkdir       40  sys_rmdir       41  sys_dup
+  42  sys_pipe        43  sys_times       45  sys_brk
+  47  sys_getgid      48  sys_geteuid     49  sys_getegid
+  54  sys_ioctl       57  sys_setpgid     60  sys_umask
+  63  sys_dup2        64  sys_getppid     65  sys_getpgrp
+  77  sys_getrusage   78  sys_gettimeofday
+  82  sys_select      83  sys_symlink     85  sys_readlink
+  90  sys_mmap        91  sys_munmap      93  sys_ftruncate
+  94  sys_fchmod      99  sys_stat        102 sys_socketcall
+  104 sys_setitimer   106 sys_lstat       107 sys_fstat
+  116 sys_sysinfo     120 sys_clone       122 sys_uname
+  125 sys_mprotect    140 sys_llseek      141 sys_getdents
+  146 sys_futex       158 sys_sched_yield
+  162 sys_nanosleep   174 sys_rt_sigaction
+  175 sys_rt_sigprocmask  183 sys_getcwd
+  191 sys_getrlimit   192 sys_mmap2       195 sys_stat64
+  197 sys_fstat64     221 sys_getdents64
+  240 sys_futex       243 sys_set_thread_area
+  252 sys_exit_group  258 sys_set_tid_address
+  270 sys_tgkill      295 sys_openat
+  330 sys_pipe2
+
+  mmap2: ebx=addr, ecx=len, edx=prot, esi=flags,
+         edi=fd, ebp=offset (in 4096-byte pages)
+
+── FLOATING POINT (x87) ───────────────────────────────────────
+
+  ST(0) through ST(7) — 8-deep stack, 80-bit extended precision
+
+  fld   mem32/64             ; push float/double
+  fld   st(i)                ; push existing register
+  fld1/fldz/fldpi/fldl2e     ; push constants
+  fst   mem/st(i)            ; store (no pop)
+  fstp  mem/st(i)            ; store and pop
+  fild  mem16/32/64          ; push integer as float
+  fist  mem16/32             ; store as integer (no pop)
+  fistp mem16/32/64          ; store as integer and pop
+  fisttp mem16/32/64         ; truncate to integer (SSE3)
+
+  fadd  / fsub  / fmul  / fdiv
+  faddp / fsubp / fmulp / fdivp    ; and pop
+  fadd  st(i), st(0)         ; st(i) += st(0)
+  fadd  st(0), st(i)         ; st(0) += st(i)
+  fsubr / fdivr              ; reversed operand subtract/divide
+
+  fsqrt  / fscale  / fpatan  / fprem  / fprem1
+  fsin   / fcos   / fsincos
+  fchs   / fabs   / ftst
+  fxch   st(i)               ; swap st(0) and st(i)
+  fcom   mem/st(i)           ; compare st(0) with operand
+  fcomp  mem/st(i)           ; compare and pop
+  fcompp                     ; compare st(0) with st(1), pop twice
+  fcomi  st(i)               ; compare, set CPU flags (P6+)
+  fcomip st(i)               ; compare, set flags, pop
+  fucomi st(i)               ; unordered compare (NaN-safe)
+  fucomip st(i)              ; unordered compare, pop
+  fstsw  ax                  ; store status word → AX
+  fnstsw ax                  ; same, no wait
+  fclex / fnclex             ; clear exceptions
+  fstenv / fnstenv           ; save environment
+  fldenv                     ; restore environment
+  fsave  / fnsave            ; save full state
+  frstor                     ; restore full state
+  finit / fninit             ; initialize FPU
+  ffreep st(i)               ; free register (undocumented)
+
+── SSE (128-bit XMM0-XMM7) ───────────────────────────────────
+
+  movss   xmm, xmm/mem32     ; scalar single load
+  movss   mem32, xmm         ; scalar single store
+  movsd   xmm, xmm/mem64     ; scalar double load
+  movaps  xmm, xmm/mem128    ; aligned packed single
+  movups  xmm, xmm/mem128    ; unaligned packed single
+  movdqa  xmm, xmm/mem128    ; aligned integer
+  movdqu  xmm, xmm/mem128    ; unaligned integer
+  movd    xmm, reg/mem32     ; dword to XMM
+  movq    xmm, reg/mem64     ; qword to XMM
+
+  addss/addps/addsd/addpd    ; add (scalar/packed, single/double)
+  subss/subps/subsd/subpd    ; subtract
+  mulss/mulsd/mulps/mulpd    ; multiply
+  divss/divps/divsd/divpd    ; divide
+  sqrtss/sqrtsd/sqrtps/sqrtpd ; square root
+  minss/minsd/minps/minpd    ; minimum
+  maxss/maxsd/maxps/maxpd    ; maximum
+  rcpss/rcpps                ; reciprocal
+  rsqrtss/rsqrtps            ; reciprocal sqrt
+
+  andps/andpd/andnps/andnpd  ; bitwise AND / ANDN
+  orps/orpd                  ; bitwise OR
+  xorps/xorpd                ; bitwise XOR
+
+  cmpss xmm, xmm/mem, imm8   ; compare scalar single
+  cmpsd xmm, xmm/mem, imm8   ; compare scalar double
+  cmpps xmm, xmm/mem, imm8   ; compare packed single
+  cmppd xmm, xmm/mem, imm8   ; compare packed double
+  ucomiss xmm, xmm/mem       ; unordered compare scalar single
+  ucomisd xmm, xmm/mem       ; unordered compare scalar double
+
+  cvtsi2ss xmm, reg/mem32    ; int32 → scalar float
+  cvtsi2sd xmm, reg/mem32    ; int32 → scalar double
+  cvtss2si reg, xmm/mem32    ; scalar float → int32
+  cvtsd2si reg, xmm/mem64    ; scalar double → int32
+  cvtss2sd xmm, xmm/mem32    ; single → double
+  cvtsd2ss xmm, xmm/mem64    ; double → single
+  cvtps2pd xmm, xmm/mem64    ; packed single → packed double
+  cvtpd2ps xmm, xmm/mem128   ; packed double → packed single
+  cvtdq2ps xmm, xmm/mem128   ; packed int32 → packed float
+  cvtps2dq xmm, xmm/mem128   ; packed float → packed int32
+  cvttps2dq xmm, xmm/mem128  ; truncate packed float → int32
+
+  unpcklps/unpckhps          ; interleave low/high singles
+  unpcklpd/unpckhpd          ; interleave low/high doubles
+  shufps xmm, xmm/mem, imm8   ; shuffle packed singles
+  shufpd xmm, xmm/mem, imm8   ; shuffle packed doubles
+  movhlps xmm, xmm           ; high 64 → low 64
+  movlhps xmm, xmm           ; low 64 → high 64
+  movmskps reg, xmm          ; extract sign bits (packed)
+  movmskpd reg, xmm          ; extract sign bits (packed)
+
+  pavgb/pavgw                ; packed average
+  pminub/pmaxub              ; packed min/max unsigned byte
+  pminsw/pmaxsw              ; packed min/max signed word
+  pmulhuw                    ; packed multiply high unsigned
+  pmaddwd                    ; packed multiply and add
+  psadbw                     ; packed sum of absolute differences
+  pshufw mm, mm/mem, imm8    ; shuffle packed words (MMX)
+  pshufd xmm, xmm/mem, imm8  ; shuffle packed dwords (SSE2)
+  pshuflw xmm, xmm/mem, imm8 ; shuffle low words
+  pshufhw xmm, xmm/mem, imm8 ; shuffle high words
+
+  ldmxcsr mem32              ; load MXCSR
+  stmxcsr mem32              ; store MXCSR
+  sfence                     ; store fence
+  lfence                     ; load fence
+  mfence                     ; memory fence
+
+── SSE2 INTEGER (XMM) ─────────────────────────────────────────
+
+  paddb/paddw/paddd/paddq    ; packed add
+  psubb/psubw/psubd/psubq    ; packed sub
+  paddsb/paddsw              ; packed add signed saturated
+  psubsb/psubsw              ; packed sub signed saturated
+  paddusb/paddusw            ; packed add unsigned saturated
+  psubusb/psubusw            ; packed sub unsigned saturated
+  pmullw/pmulhw/pmulhuw      ; packed multiply
+  pmuludq                    ; packed multiply unsigned dword
+  pand/por/pxor/pxor         ; bitwise
+  pandn                      ; AND NOT
+  pslldq xmm, imm8           ; byte shift left
+  psrldq xmm, imm8           ; byte shift right
+  pslld/psllw/psllq          ; bit shift left
+  psrad/psraw                ; arithmetic shift right
+  psrld/psrlw/psrlq          ; logical shift right
+  pcmpeqb/pcmpeqw/pcmpeqd   ; compare equal
+  pcmpgtb/pcmpgtw/pcmpgtd   ; compare greater than (signed)
+  packsswb/packssdw          ; pack with signed saturation
+  packuswb                   ; pack with unsigned saturation
+  punpcklbw/wd/dq            ; unpack low
+  punpckhbw/wd/dq            ; unpack high
+  movdqa/movdqu              ; aligned/unaligned move
+
+── SSE3 / SSSE3 / SSE4 ───────────────────────────────────────
+
+  SSE3:  addsubps/pd, haddps/pd, movsldup, movshdup,
+         movddup, fisttp, lddqu, monitor, mwait
+
+  SSSE3: pshufb, phaddw/d/sw, phsubw/d/sw, pmaddubsw,
+         pmulhrsw, psignb/w/d, pabsb/w/d, palignr
+
+  SSE4.1: pmovsxbd/bw/wd, pmovzxbd/bw/wd,
+          pmuldq, pmulld, dpps/dppd, blendps/pd/vps/vd,
+          roundps/ss/sd/pd, insertps, extractps,
+          pminsb/pmaxsb, pminuw/pmaxuw,
+          pminsd/pmaxsd, pminud/pmaxud,
+          ptest, phminposuw, mpsadbw, packusdw
+
+  SSE4.2: crc32, pcmpgtq, pcmpistrm, pcmpistri,
+          pcmpestrm, pcmpestri, popcnt
+
+── MMX (MM0-MM7, aliased to x87 ST) ─────────────────────────
+
+  movd mm, reg/mem32         ; dword to MMX
+  movq mm, mm/mem64          ; qword to MMX
+  packsswb/wd                ; pack with saturation
+  punpcklbw/hbw/lbw          ; unpack
+  paddb/w/d                  ; add
+  psubb/w/d                  ; sub
+  pmullw/pmulhw              ; multiply
+  pand/por/pxor/pandn        ; bitwise
+  pcmpeqb/w/d                ; compare equal
+  pcmpgtb/w/d                ; compare greater
+  psllw/d/q                  ; shift left
+  psrlw/d/q                  ; shift right
+  psraw/d                    ; arithmetic shift right
+  emms                       ; empty MMX state (REQUIRED before x87!)
+
+── COMMON PATTERNS ────────────────────────────────────────────
+
+  ; Function prologue (cdecl)
+      push ebp
+      mov  ebp, esp
+      sub  esp, N          ; N bytes of locals
+
+  ; Function epilogue
+      mov  esp, ebp
+      pop  ebp
+      ret
+
+  ; Function epilogue (stdcall, callee cleans args)
+      mov  esp, ebp
+      pop  ebp
+      ret  N              ; N = arg bytes to pop
+
+  ; Access stack args (cdecl, after prologue)
+      mov  eax, [ebp+8]    ; arg1
+      mov  eax, [ebp+12]   ; arg2
+      mov  eax, [ebp+16]   ; arg3
+
+  ; Local vars
+      mov  eax, [ebp-4]    ; local 1
+      mov  eax, [ebp-8]    ; local 2
+
+  ; Loop
+      xor  ecx, ecx        ; i = 0
+  .loop:
+      ; ... body ...
+      inc  ecx
+      cmp  ecx, N
+      jl   .loop
+
+  ; While loop
+  .top:
+      test eax, eax
+      jz   .done
+      ; ... body ...
+      jmp  .top
+  .done:
+
+  ; If / else
+      cmp  eax, ebx
+      jne  .else
+      ; ... if body ...
+      jmp  .endif
+  .else:
+      ; ... else body ...
+  .endif:
+
+  ; Switch (jump table)
+      cmp  eax, MAX_CASE
+      ja   .default
+      jmp  [jump_table + eax*4]
+  .case0: ...
+  .case1: ...
+
+  ; String length
+      mov  edi, str
+      xor  ecx, ecx
+      not  ecx             ; ecx = -1 (max count)
+      xor  al, al          ; search for null
+      repne scasb
+      not  ecx
+      dec  ecx             ; length in ecx
+
+  ; Memory copy
+      mov  esi, src
+      mov  edi, dst
+      mov  ecx, len
+      rep  movsb           ; copy ecx bytes
+
+  ; Struct member access
+      ; struct at [ebp+8], member offset 12
+      mov  eax, [ebp+8]    ; struct ptr
+      mov  ebx, [eax+12]   ; member
+
+  ; Min / Max
+      cmp  eax, ebx
+      jle  .no_swap
+      xchg eax, ebx
+  .no_swap:
+
+  ; Absolute value
+      cdq                  ; edx = sign mask of eax
+      xor  eax, edx
+      sub  eax, edx
+
+  ; Sign extend
+      movsx eax, byte [val]  ; byte → dword
+      movsx eax, word [val]  ; word → dword
+
+  ; Linux syscall (int 0x80)
+      mov  eax, 4           ; sys_write
+      mov  ebx, 1           ; fd = stdout
+      mov  ecx, msg         ; buffer
+      mov  edx, len         ; length
+      int  0x80
+
+  ; Linux exit
+      mov  eax, 1           ; sys_exit
+      xor  ebx, ebx         ; status 0
+      int  0x80
+
+── SEGMENTS & SELECTORS ───────────────────────────────────────
+
+  Real mode:  physical = segment * 16 + offset
+  Protected:  segment → descriptor table → base + limit
+  Flat model: cs/ds/es/fs/gs all base=0, limit=4GB
+
+  GDT entry: base(32), limit(20), access(8), flags(4)
+  LDT: local descriptor table per task
+  TSS: task state segment
+
+  Descriptor privilege: DPL 0 (kernel) .. 3 (user)
+  CPL = current privilege level (low 2 bits of CS)
+  RPL = requestor privilege level (low 2 bits of selector)
+
+── PROTECTED MODE CONCEPTS ───────────────────────────────────
+
+  CR0: PE (protected mode), PG (paging), WP (write protect)
+  CR3: page directory physical address (PDBR)
+  CR4: PAE, PSE, OSFXSR, OSXMMEXCPT
+
+  Paging (4KB pages):
+    32-bit linear → [PDE 10 bits][PTE 10 bits][offset 12 bits]
+    PDE → page table base, PTE → physical page base
+    PDE/PTE flags: P, R/W, U/S, PWT, PCD, A, D, PS
+
+  PAE (36-bit physical):
+    3-level: [PDPTE 2][PDE 9][PTE 9][offset 12]
+    4KB pages, 64-bit PDE/PTE with NX bit
+
+  PSE (4MB pages):
+    PDE.PS=1 → single 4MB page, no PTE
+
+── INTERRUPTS & EXCEPTIONS ───────────────────────────────────
+
+  Vector  Exception              Error Code?
+  ──────────────────────────────────────────
+  0     #DE  Divide error        No
+  1     #DB  Debug               No
+  2     NMI  NMI                 No
+  3     #BP  Breakpoint (int 3)  No
+  4     #OF  Overflow (into)     No
+  5     #BR  BOUND range         No
+  6     #UD  Invalid opcode      No
+  7     #NM  Device not avail    No
+  8     #DF  Double fault        Yes (0)
+  9     Coprocessor overrun      No
+  10    #TS  Invalid TSS         Yes
+  11    #NP  Segment not present Yes
+  12    #SS  Stack fault         Yes
+  13    #GP  General protection  Yes
+  14    #PF  Page fault          Yes
+  16    #MF  x87 FPU error       No
+  17    #AC  Alignment check     Yes (0)
+  18    #MC  Machine check       No
+  19    #XM  SIMD FP exception   No
+
+  Page fault error code:
+    Bit 0: 0=not present, 1=protection violation
+    Bit 1: 0=read, 1=write
+    Bit 2: 0=kernel, 1=user
+    Bit 3: reserved bit violation
+    Bit 4: instruction fetch
+
+  CR2 = faulting linear address (on #PF)
+
+── BCD / DECIMAL ──────────────────────────────────────────────
+
+  daa     ; adjust AL after add (packed BCD)
+  das     ; adjust AL after sub (packed BCD)
+  aaa     ; adjust AL after add (unpacked BCD)
+  aas     ; adjust AL after sub (unpacked BCD)
+  aam     ; adjust AX after multiply (unpacked BCD)
+  aad     ; adjust AX before divide (unpacked BCD)
+
+── UNDOCUMENTED / OBSCURE ─────────────────────────────────────
+
+  salc    ; set AL if carry (undocumented, not 64-bit)
+  ud2     ; guaranteed invalid opcode (official)
+  icebp   ; ICE breakpoint (undocumented, 1 byte)
+  loadall ; load all CPU state (286/386 only)
+  smi     ; system management interrupt (not an instruction)
+
+── OPCODES QUICK REFERENCE ────────────────────────────────────
+
+  90       nop
+  90       xchg eax, eax (same thing)
+  0F 05    syscall (not 32-bit, but 64-bit)
+  0F 34    sysenter
+  0F 35    sysexit
+  CC       int 3
+  CD 80    int 0x80
+  CF       iret
+  F4       hlt
+  FA       cli
+  FB       sti
+  FC       cld
+  FD       std
+  F5       cmc
+  F8       clc
+  F9       stc
+  0F A2    cpuid
+  0F 30    wrmsr
+  0F 31    rdtsc
+  0F 32    rdmsr
+  0F 01    group: sgdt/sidt/smsw/lgdt/lidt/lmsw/invlpg/lldt/lstr
+
+── NASM DIRECTIVES ───────────────────────────────────────────
+
+  section .text / .data / .bss
+  global _start
+  extern printf
+  db / dw / dd / dq / dt
+  resb / resw / resd / resq    ; reserve (bss)
+  equ  NAME, value
+  %define MACRO val
+  %macro name argc
+  %endmacro
+  %if / %elif / %else / %endif
+  %rep N / %endrep
+  %include "file"
+  times N db 0
+  align N
+  incbin "file"
+  __?BITS__?                   ; 16, 32, or 64
+
+── GAS (AT&T) SYNTAX ─────────────────────────────────────────
+
+  .text / .data / .bss
+  .globl _start
+  .byte / .word / .long / .quad / .ascii / .asciz
+  .equ / .set
+  .macro name / .endm
+  .rept N / .endr
+  .align N
+  .space N, val
+  .incbin "file"
+  .code16 / .code32 / .code64
+
+  AT&T: movl $42, %eax       ; src, dst (opposite of Intel!)
+  AT&T: movl (%ebx), %eax    ; () instead of []
+  AT&T: movl 8(%ebx,%ecx,4), %eax  ; disp(base, index, scale)
+  AT&T: movl $label, %eax    ; immediate = address
+  AT&T: movl label, %eax     ; memory = contents
+
+── CONDITION FLAGS QUICK REF ──────────────────────────────────
+
+  Instruction    CF    ZF    SF    OF    PF    AF
+  ─────────────────────────────────────────────────
+  add/adc        ✓     ✓     ✓     ✓     ✓     ✓
+  sub/sbb/cmp    ✓     ✓     ✓     ✓     ✓     ✓
+  inc/dec        ✗     ✓     ✓     ✓     ✓     ✓
+  and/or/xor     0     ✓     ✓     0     ✓     ?
+  test           0     ✓     ✓     0     ✓     ?
+  shl/shr/sar    ✓     ✓     ✓     ?     ✓     ?
+  mul/imul       ✓     ?     ?     ✓     ?     ?
+  imul (2-op)    ✓     ?     ?     ✓     ?     ?
+  neg            ✓     ✓     ✓     ✓     ✓     ✓
+  rcl/rcr        ✓     ✗     ✗     ✗     ✗     ✗
+  rol/ror        ✓     ✗     ✗     ✗     ✗     ✗
+  bsf/bsr        ✗     ✓     ✗     ✗     ✗     ✗
+  bt             ✓     ✗     ✗     ✗     ✗     ✗
+  bts/btr/btc    ✓     ✗     ✗     ✗     ✗     ✗
+  not            ✗     ✗     ✗     ✗     ✗     ✗
+
+═══════════════════════════════════════════════════════════════
