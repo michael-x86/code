@@ -1,12 +1,19 @@
 #!/bin/bash
 set -e
 
-BOOT_ASM="bootloader.asm"
-KERNEL_ASM="kernel.asm"
-IMG="os.img"
+# ── Paths ──────────────────────────────────────────────────────────
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+BOOT_ASM="${PROJECT_DIR}/kernel/bootloader.asm"
+KERNEL_ASM="${PROJECT_DIR}/kernel/kernel.asm"
+KERNEL_INC_DIR="${PROJECT_DIR}/kernel"
+IMG="${BUILD_DIR}/os.img"
 
 # Programs to compile
-COMMANDS=(ps pwd ls cd ping cat touch write rm rmdir mkdir cp mv)
+COMMANDS=(exit help dump alloc dealloc poke peek
+          ps vi pwd ls cd ping cat touch write
+          rm rmdir mkdir cp mv)
 
 RUN_QEMU=false
 FULLSCREEN=false
@@ -30,13 +37,14 @@ EOF
     esac
 done
 
-mkdir -p etc bin proc var/log usr dev lib
+# Content directories (source trees scanned by gen_fs.py)
+mkdir -p "${BUILD_DIR}/bin" "${BUILD_DIR}/proc" "${BUILD_DIR}/var/log"
+mkdir -p "${BUILD_DIR}/usr" "${BUILD_DIR}/dev" "${BUILD_DIR}/lib" "${BUILD_DIR}/etc"
 
 echo "[1/6] Building commands..."
 for p in "${COMMANDS[@]}"; do
-    src="./commands/${p}.asm"
-    #echo "$src"
-    out="bin/${p}"
+    src="${PROJECT_DIR}/commands/${p}.asm"
+    out="${BUILD_DIR}/bin/${p}"
     if [[ ! -f "$src" ]]; then
         echo "  ! missing $src — skipping"
         continue
@@ -51,19 +59,20 @@ for p in "${COMMANDS[@]}"; do
 done
 
 echo "[2/6] Scanning filesystem (bin/ proc/ var/log/ ..."
-python3 gen_fs.py . fs.inc | sed 's/^/  /'
+cd "$BUILD_DIR"
+python3 gen_fs.py "$BUILD_DIR" fs.inc | sed 's/^/  /'
 
 echo "[3/6] Assembling kernel..."
-nasm -f bin "$KERNEL_ASM" -o kernel.bin
+nasm -f bin "$KERNEL_ASM" -o "${BUILD_DIR}/kernel.bin" -I "${KERNEL_INC_DIR}/"
 
-KERNEL_SIZE=$(stat -c%s kernel.bin)
+KERNEL_SIZE=$(stat -c%s "${BUILD_DIR}/kernel.bin")
 KERNEL_SECTORS=$(((KERNEL_SIZE + 511) / 512))
 KERNEL_BYTES=$((KERNEL_SECTORS * 512))
 echo "[4/6] Kernel size: $KERNEL_SIZE bytes ($KERNEL_SECTORS sectors)"
-sed -i "s/^KERNEL_SECTORS.*/KERNEL_SECTORS  equ 0x$(printf '%02X' $KERNEL_SECTORS)/" bootloader.asm
+sed -i "s/^KERNEL_SECTORS.*/KERNEL_SECTORS  equ 0x$(printf '%02X' $KERNEL_SECTORS)/" "$BOOT_ASM"
 
 echo "[5/6] Assembling bootloader..."
-nasm -f bin "$BOOT_ASM" -o bootloader.bin
+nasm -f bin "$BOOT_ASM" -o "${BUILD_DIR}/bootloader.bin"
 
 echo "[6/6] Linking os.img..."
 FS_BASE_LBA=256
@@ -83,7 +92,7 @@ if [[ -f "$IMG" ]] && (( $(stat -c%s "$IMG") >= TARGET )); then
     dd if="$IMG" of="$FS_BACKUP" bs=512 skip=$FS_BASE_LBA \
        count=$((FS_SPARE_COUNT * FS_SECTORS_PER_SLOT)) status=none
 fi
-cat bootloader.bin kernel.bin > "$IMG"
+cat "${BUILD_DIR}/bootloader.bin" "${BUILD_DIR}/kernel.bin" > "$IMG"
 truncate -s "$TARGET" "$IMG"
 if [[ -n "$FS_BACKUP" ]]; then
     dd if="$FS_BACKUP" of="$IMG" bs=512 seek=$FS_BASE_LBA \
@@ -94,8 +103,8 @@ fi
 echo ""
 echo "Build complete: $IMG ($(stat -c%s "$IMG") bytes)"
 echo ""
-rm -f kernel.bin bootloader.bin
-rm -f  fs.inc
+rm -f "${BUILD_DIR}/kernel.bin" "${BUILD_DIR}/bootloader.bin"
+rm -f "${BUILD_DIR}/fs.inc"
 if [[ "$RUN_QEMU" == true ]]; then
     QEMU_ARGS=(
         -drive format=raw,file="$IMG",index=0,if=ide

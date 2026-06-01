@@ -1,7 +1,7 @@
 [org 0x7C00]
 
 ; Constants for memory management and segments
-KERNEL_SECTORS  equ 0x5F
+KERNEL_SECTORS  equ 0x51
 KERNEL_LOAD_SEG   equ 0x1000     
 KERNEL_LOAD_ADDR  equ 0x00100000  ; 1 MB (safe, below 4 MB)
 CODE_SEG          equ 0x08        ; Offset - code segment in GDT

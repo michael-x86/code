@@ -104,13 +104,21 @@ info "NASM version: $NASM_VERSION"
 # ── 3. Scaffold directory structure ──────────────────────────────
 info "Scaffolding directory structure..."
 
-DIRS=(bin commands boot kernel build etc proc var/log usr dev lib src)
+DIRS=(commands kernel build)
 for d in "${DIRS[@]}"; do
     if [[ ! -d "$PROJECT_DIR/$d" ]]; then
         mkdir -p "$PROJECT_DIR/$d"
         ok "Created $d/"
     else
         ok "$d/  (already exists)"
+    fi
+done
+
+# Ensure build/ has the content directories gen_fs.py scans
+BUILD_CONTENT_DIRS=(bin proc var/log usr dev lib etc)
+for d in "${BUILD_CONTENT_DIRS[@]}"; do
+    if [[ ! -d "$PROJECT_DIR/build/$d" ]]; then
+        mkdir -p "$PROJECT_DIR/build/$d"
     fi
 done
 
@@ -121,9 +129,9 @@ info "Checking key source files..."
 
 KEY_FILES=(
     "asm"
-    "gen_fs.py"
-    "bootloader.asm"
-    "kernel.asm"
+    "build/gen_fs.py"
+    "kernel/bootloader.asm"
+    "kernel/kernel.asm"
 )
 
 ALL_PRESENT=true
@@ -131,7 +139,7 @@ for f in "${KEY_FILES[@]}"; do
     if [[ -f "$PROJECT_DIR/$f" ]]; then
         ok "$f  (found)"
     else
-        fail "$f — NOT FOUND in project root"
+        fail "$f — NOT FOUND"
         ALL_PRESENT=false
     fi
 done
@@ -148,22 +156,22 @@ if [[ -f "$PROJECT_DIR/asm" ]]; then
 fi
 
 # Check that gen_fs.py is executable (it has a shebang)
-if [[ -f "$PROJECT_DIR/gen_fs.py" ]]; then
-    if [[ -x "$PROJECT_DIR/gen_fs.py" ]]; then
-        ok "gen_fs.py  (executable)"
+if [[ -f "$PROJECT_DIR/build/gen_fs.py" ]]; then
+    if [[ -x "$PROJECT_DIR/build/gen_fs.py" ]]; then
+        ok "build/gen_fs.py  (executable)"
     else
-        warn "gen_fs.py — not executable, fixing..."
-        chmod +x "$PROJECT_DIR/gen_fs.py"
-        ok "gen_fs.py  (made executable)"
+        warn "build/gen_fs.py — not executable, fixing..."
+        chmod +x "$PROJECT_DIR/build/gen_fs.py"
+        ok "build/gen_fs.py  (made executable)"
     fi
 fi
 
 echo ""
 
 if [[ "$ALL_PRESENT" == false ]]; then
-    fail "Some key files are missing from the project root."
-    echo "  Make sure you have copied or symlinked the build script,"
-    echo "  gen_fs.py, bootloader.asm, and kernel.asm into this directory."
+    fail "Some key files are missing."
+    echo "  Expected: asm (root), build/gen_fs.py,"
+    echo "             kernel/bootloader.asm, kernel/kernel.asm"
     exit 1
 fi
 
@@ -188,16 +196,16 @@ fi
 
 echo ""
 
-# ── 6. Check content directories ─────────────────────────────────
+# ── 6. Check content directories (inside build/) ─────────────────
 info "Checking content directories..."
 
 CONTENT_DIRS=(proc etc var/log)
 for d in "${CONTENT_DIRS[@]}"; do
-    COUNT=$(find "$PROJECT_DIR/$d" -maxdepth 1 -type f 2>/dev/null | wc -l)
+    COUNT=$(find "$PROJECT_DIR/build/$d" -maxdepth 1 -type f 2>/dev/null | wc -l)
     if [[ $COUNT -gt 0 ]]; then
-        ok "$d/  ($COUNT file(s))"
+        ok "build/$d/  ($COUNT file(s))"
     else
-        warn "$d/  (empty — the filesystem will have no content here)"
+        warn "build/$d/  (empty — the filesystem will have no content here)"
     fi
 done
 
