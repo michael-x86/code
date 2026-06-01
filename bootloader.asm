@@ -1,5 +1,9 @@
 [org 0x7C00]
 
+; I would be happy if you allowed my contact details to remain.
+; Best regards,
+; michael@nordstedt.eu
+
 ; Constants for memory management and segments
 KERNEL_SECTORS  equ 0x6E
 KERNEL_LOAD_SEG   equ 0x1000     
