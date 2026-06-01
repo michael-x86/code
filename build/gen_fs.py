@@ -108,7 +108,7 @@ bitmap = bytearray(bitmap_sectors * 512)
 
 # State
 next_inode = 1  # 0 reserved for root
-next_block = 0
+next_block = 1  # 1-based: 0 means "no block" in direct block pointers
 
 def alloc_inode(inode_type):
     global next_inode
@@ -134,11 +134,10 @@ def set_inode_block(inode_num, block_index, block_num):
     offset = inode_num * INODE_SIZE + 12 + block_index * 4
     struct.pack_into('<I', inode_table, offset, block_num)
 
-def make_dirent(inode_num, name, file_type, rec_len):
+def make_dirent(inode_num, name, file_type):
     name_bytes = name.encode('ascii', errors='replace')
     name_len = len(name_bytes)
-    min_len = 8 + name_len
-    rec_len = max(rec_len, min_len)
+    rec_len = 8 + name_len
     if rec_len % 4 != 0:
         rec_len += 4 - (rec_len % 4)
     entry = struct.pack('<IHBB', inode_num, rec_len, name_len, file_type)
@@ -220,14 +219,24 @@ for block_num, name, child_inode, file_type in dir_entries:
         if inum_at == 0 or rec_len == 0:
             break
         pos += rec_len
-    entry = make_dirent(child_inode, name, file_type, BLOCK_SIZE - pos)
+    entry = make_dirent(child_inode, name, file_type)
     data[pos:pos+len(entry)] = entry
 
 # Build output: superblock + inode table + bitmap + data blocks
 output = bytearray()
 output += superblock
+# Pad to inode_table_lba (LBA 2): 1 sector gap after superblock
+output += b'\x00' * ((INODE_TABLE_LBA - 1) * 512)
 output += inode_table
+# Pad to bitmap_lba
+bitmap_lba_offset = (INODE_TABLE_LBA + inode_table_sectors) * 512
+current_offset = len(output)
+output += b'\x00' * (bitmap_lba_offset - current_offset)
 output += bitmap
+# Pad to data_lba
+data_lba_offset = data_start_lba * 512
+current_offset = len(output)
+output += b'\x00' * (data_lba_offset - current_offset)
 
 # Map file blocks: (inode_num, block_index) -> (host_path, file_offset)
 file_block_map = {}

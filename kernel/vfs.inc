@@ -654,6 +654,7 @@ write_inode:
     imul eax, INODE_SIZE
     shr eax, 9
     add eax, INODE_TABLE_LBA
+    add eax, [fs_base_lba]
     mov ecx, 2
     mov esi, inode_sector_buf
     call ata_write

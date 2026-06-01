@@ -51,6 +51,18 @@ fi
 mkdir -p "${BUILD_DIR}/bin" "${BUILD_DIR}/proc" "${BUILD_DIR}/var/log"
 mkdir -p "${BUILD_DIR}/usr" "${BUILD_DIR}/dev" "${BUILD_DIR}/lib" "${BUILD_DIR}/etc"
 
+# Copy static content from kernel/ into the build filesystem tree
+echo "[0/6] Populating filesystem content directories..."
+for f in "${PROJECT_DIR}/kernel/etc/"*; do
+    [[ -f "$f" ]] && cp "$f" "${BUILD_DIR}/etc/"
+done
+for f in "${PROJECT_DIR}/kernel/proc/"*; do
+    [[ -f "$f" ]] && cp "$f" "${BUILD_DIR}/proc/"
+done
+for f in "${PROJECT_DIR}/kernel/var/log/"*; do
+    [[ -f "$f" ]] && cp "$f" "${BUILD_DIR}/var/log/"
+done
+
 echo "[1/6] Building commands..."
 for p in "${COMMANDS[@]}"; do
     src="${PROJECT_DIR}/commands/${p}.asm"

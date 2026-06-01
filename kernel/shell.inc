@@ -526,6 +526,7 @@ tab_complete:
     mov ebx, eax
     shl eax, 3
     add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
     mov ecx, BLOCK_SECTORS
     mov edi, dir_block_buf
     call ata_read
@@ -774,6 +775,7 @@ tab_print_all_matches:
     mov ebx, eax
     shl eax, 3
     add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
     mov ecx, BLOCK_SECTORS
     mov edi, dir_block_buf
     call ata_read
