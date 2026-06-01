@@ -697,3 +697,31 @@ sys_asc2int:                             ; 27: esi = string → edx = value
     pop ebx
     pop eax
     ret
+
+sys_get_proc_info:                       ; 28: ebx = ptr to 36-byte buffer → 0/-1
+    ; Buffer layout: dword vbase, dword pages, 32 bytes name
+    cmp ebx, 0
+    je .error
+    push edx
+    push esi
+    push edi
+
+    mov eax, [exec_vbase]
+    mov [ebx], eax
+    mov eax, [exec_pages]
+    mov [ebx + 4], eax
+
+    ; Copy process name
+    lea esi, [exec_name]
+    lea edi, [ebx + 8]
+    mov ecx, 32
+    rep movsb
+
+    pop edi
+    pop esi
+    pop edx
+    xor eax, eax
+    ret
+.error:
+    mov eax, -1
+    ret

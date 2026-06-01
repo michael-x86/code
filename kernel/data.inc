@@ -18,6 +18,7 @@ kernel_phys_end_var:   dd 0
 
 exec_vbase   dd 0
 exec_pages   dd 0
+exec_name    times 32 db 0
 
 argc         dd 0
 argv         times ARGV_MAX dd 0
@@ -63,3 +64,4 @@ syscall_table:
     dd sys_write_mem
     dd sys_hex2int
     dd sys_asc2int
+    dd sys_get_proc_info

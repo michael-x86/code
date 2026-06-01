@@ -100,9 +100,37 @@ exec_bin:
     mov ebx, [exec_pages]
     call register_allocation
 
+    ; Save process name from argv[0]
+    push edi
+    push esi
+    mov esi, [argv]
+    mov edi, exec_name
+    mov ecx, 31
+.cp_name:
+    lodsb
+    stosb
+    test al, al
+    jz .name_done
+    dec ecx
+    jnz .cp_name
+    mov byte [edi], 0
+.name_done:
+    pop esi
+    pop edi
+
     ; Call the binary
     mov eax, [exec_vbase]
     call eax
+
+    ; Clear process name on return
+    push edi
+    push ecx
+    mov edi, exec_name
+    mov ecx, 32
+    xor eax, eax
+    rep stosb
+    pop ecx
+    pop edi
 
     ; Free pages on return
     mov eax, [exec_vbase]
