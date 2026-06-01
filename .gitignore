@@ -1,0 +1,34 @@
+# ── Build artifacts ───────────────────────────────────────────────
+
+# Final disk image
+os.img
+
+# Generated filesystem include
+fs.inc
+build/fs.inc
+
+# Compiled userland binaries
+bin/
+
+# ── Copied build scripts / sources (source of truth is build/, kernel/, boot/) ──
+asm
+gen_fs.py
+bootloader.asm
+kernel.asm
+
+# ── Content directories (populated from kernel/, build/ at build time) ──
+etc/
+proc/
+var/
+dev/
+usr/
+lib/
+
+# ── Editor / OS noise ─────────────────────────────────────────────
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
