@@ -155,10 +155,15 @@ The build script backs up the FS region before reassembling the kernel and resto
 | `write <file> <text...>` | join args with spaces, append `\n`, write |
 | `rm <file>` | unlink a regular file                                  |
 | `ping`  | int 0x80 liveness test                                     |
-| `vi <file>` | minimal editor — `HJKL` as in the good ol' days  |
-
-
-
+| `vi <file>` | minimal editor — `HJKL` as in the good ol' days        |
+| `alloc <bytes>`  | chunks (min 4KB)                                  |
+| `dealloc <addr>`  | release chunks                                   |
+| `dump`  | dump top of stack and registers                            |
+| `exit`  | shutdown kernel                                            |
+| `ps`  | snapshot of current processes                                |
+| `help`  | help info int                                              | 
+| `poke <addr> <value>` |  C64 forever                      |          |  
+| `peek <addr>`         |  C64 and ever                                |
 ## Debugging with GDB
 
 ```bash
