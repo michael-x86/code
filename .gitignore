@@ -10,11 +10,29 @@ build/fs.inc
 # Compiled userland binaries
 bin/
 
+# Intermediate build files
+kernel.bin
+bootloader.bin
+kernel.lst
+
 # ── Copied build scripts / sources (source of truth is build/, kernel/, boot/) ──
 asm
 gen_fs.py
 bootloader.asm
 kernel.asm
+
+# Copied include files (source of truth is kernel/)
+constants.inc
+data.inc
+bss.inc
+paging.inc
+memory.inc
+interrupt.inc
+syscall.inc
+vfs.inc
+shell.inc
+task.inc
+exec.inc
 
 # ── Content directories (populated from kernel/, build/ at build time) ──
 etc/

@@ -1,0 +1,148 @@
+; =============================================================================
+; exec.inc — userland binary loader and executor
+; =============================================================================
+;
+; Searches /bin/<cmd> in the filesystem, maps it into a fresh virtual region,
+; copies the binary in, calls it, then cleans up on return.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; exec_bin — load and run a userland binary from /bin/<argv[0]>
+; -----------------------------------------------------------------------------
+exec_bin:
+    cmp dword [argc], 0
+    je .silent
+
+    ; Build path: "/bin/<command>"
+    mov edi, path_buf
+    mov esi, bin_prefix
+.cp_pref:
+    lodsb
+    stosb
+    test al, al
+    jnz .cp_pref
+    dec edi                      ; back over null terminator
+    mov esi, [argv]
+.cp_cmd:
+    lodsb
+    stosb
+    test al, al
+    jnz .cp_cmd
+
+    ; Look up in filesystem
+    mov esi, path_buf
+    call fs_lookup
+    test eax, eax
+    jz .nf
+    cmp dword [eax + FS_OFS_TYPE], FS_TYPE_EXEC
+    jne .nf
+
+    ; Save binary data pointer and size
+    mov esi, [eax + FS_OFS_DATA]
+    mov ebx, [eax + FS_OFS_SIZE]
+
+    ; Compute page count (round up)
+    mov ecx, ebx
+    add ecx, 4095
+    shr ecx, 12
+
+    ; Find a free virtual range
+    push esi
+    push ebx
+    push ecx
+    call find_free_virt
+    pop ecx
+    pop ebx
+    pop esi
+    jc .oom
+
+    mov [exec_vbase], eax
+    mov [exec_pages], ecx
+
+    ; Map and populate pages
+    push esi
+    push ebx
+    mov edi, eax
+.map_loop:
+    test ecx, ecx
+    jz .map_done
+    push ecx
+    push edi
+    call alloc_page
+    pop edi
+    pop ecx
+    jc .oom_mapped
+    mov ebx, eax
+    mov eax, edi
+    push ecx
+    push edi
+    push esi
+    mov ecx, PAGE_PRESENT_RW
+    call map_page
+    pop esi
+    pop edi
+    pop ecx
+    jc .oom_mapped
+    add edi, PAGE_SIZE
+    dec ecx
+    jmp .map_loop
+.map_done:
+    pop ecx                      ; byte count
+    pop esi                      ; data source
+
+    ; Copy binary into mapped region
+    mov edi, [exec_vbase]
+    cld
+    rep movsb
+
+    ; Register allocation
+    mov eax, [exec_vbase]
+    mov ebx, [exec_pages]
+    call register_allocation
+
+    ; Call the binary
+    mov eax, [exec_vbase]
+    call eax
+
+    ; Free pages on return
+    mov eax, [exec_vbase]
+    mov ebx, [exec_pages]
+    call free_pages
+
+    ; Clear alloc_table entry
+    push eax
+    push ecx
+    mov ecx, alloc_table_count
+    mov edi, alloc_table
+    mov eax, [exec_vbase]
+.find_slot:
+    cmp [edi], eax
+    je .clear_slot
+    add edi, 8
+    loop .find_slot
+    jmp .cleanup_done
+.clear_slot:
+    mov dword [edi], 0
+    mov dword [edi + 4], 0
+.cleanup_done:
+    pop ecx
+    pop eax
+    ret
+
+.oom_mapped:
+    ; Partially mapped — free what we did map
+    pop ebx
+    pop esi
+    mov eax, [exec_vbase]
+    mov ebx, [exec_pages]
+    sub ebx, ecx
+    test ebx, ebx
+    jz .oom
+    call free_pages
+.oom:
+    PRINT_STRING_CR out_mem
+    ret
+.nf:
+    PRINT_STRING_CR command_nf_msg
+.silent:
+    ret
