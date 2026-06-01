@@ -28,8 +28,8 @@ flags          : learning infiltration phased-plasma
 - In-kernel virtual filesystem generated at build time from the project directory
 - Read/write filesystem: `touch`, `write`, `rm` from the prompt
 - Persistence to disk via PIO ATA — files survive reboot **and** kernel rebuilds
-- Linux-style `int 0x80` syscall interface (20 syscalls)
-- Userland binaries linked into `/bin` and loaded on demand: `pwd ls cd cat touch write rm mkdir rmdir vi`
+- Linux-style `int 0x80` syscall interface (20+ syscalls)
+- Userland binaries linked into `/bin` and loaded on demand: `ls pwd etc...`
 - Minimal modal `vi`: `hjkl`, `i`, `ESC`, `x`, `w`, `q`
 
 ## Quick start
