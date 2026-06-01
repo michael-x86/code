@@ -105,8 +105,14 @@ Programs are capped at 4 KB. — `resb` will zero-fill in flat-binary mode and i
 | 17 | create    | esi = path                 | 0 / -1                           |
 | 18 | write     | esi = path, ebx = buf, ecx = n | 0 / -1                       |
 | 19 | unlink    | esi = path                 | 0 / -1                           |
-| 20 | sys_mkdir | esi = path                 | 0 / -1                           |
-| 21 | sys_rmdir | esi = path                 | 0 / -1                           |
+| 20 | mkdir     | esi = path                 | 0 / -1                           |
+| 21 | rmdir     | esi = path                 | 0 / -1                           |
+| 22 | ps        |                            | 0 / -1                           |
+| 23 | dump      | stack and regsisters       |                                  |
+| 24 | alloc     | esi = path                 | ptr to memory                    |
+| 25 | dealloc   | esi = path                 | 0 / -1                           |
+| 26 | peek      | addr                       | dword at [addr]                  |
+| 27 | poke      | addr value                 |                                  |
 Syscalls run with interrupts off (interrupt gate), so the PIT cannot preempt them.
 
 ## How persistence "works"
@@ -129,18 +135,8 @@ The build script backs up the FS region before reassembling the kernel and resto
 
 ## Built-in shell commands (kernel-side)
 
-| Command         | Notes                                  |
-|-----------------|----------------------------------------|
-| `dump`          | dump 16 bytes                          |
-| `regs`          | CPU registers                          |
-| `stack`         | top of stack                           |
-| `heap`          | show heap state                        |
-| `alloc <n>`     | allocate `n` 4 KB pages                |
-| `free <addr>`   | release a previous `alloc`             |
-| `clear`         |                                        |
-| `exit`          | shutdown                               |
-| `sys`           | int 0x80 self-test                     |
-| `help`          |                                        |
+| `heap`          | allocated memory pointers              |
+
 
 ## Userland programs (`/bin/`)
 
