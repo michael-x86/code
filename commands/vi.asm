@@ -1,5 +1,11 @@
 [bits 32]
 [org 0x00000000]
+ 
+; ----------------------------
+;  There can be only one - vi 
+;          
+;  michael@nordstedt.eu       
+; ----------------------------
 
 %define MODE_CMD        0
 %define MODE_INSERT     1
