@@ -35,4 +35,5 @@ msg:
     db "  alloc     allocate heap pages", 13
     db "  dealloc   free heap allocation", 13
     db "  poke      write byte to memory address", 13
-    db "  peek      read byte from memory address", 13, 0
+    db "  peek      read byte from memory address", 13
+    db "  calc      simple integer calculator", 13, 0

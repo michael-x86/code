@@ -203,7 +203,7 @@ cmd_table:
     db 0       ; end marker
 
 ; --- Strings -----------------------------------------------------------------
-sys_msg      db "*** x86 Operating System ***", 0
+sys_msg      db "*** OMNI INDUSTRIES UNIFIED OPERATING SYSTEM ***", 0
 deadbeef     db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF
              db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF
 

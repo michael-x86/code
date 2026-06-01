@@ -20,7 +20,7 @@ _start:
     lea esi, [ebp + arg_buf]
     mov eax, 27             ; sys_asc2int
     int 0x80
-    mov ecx, edx            ; ecx = page count
+    mov ecx, eax            ; ecx = page count
     test ecx, ecx
     jz .usage
 

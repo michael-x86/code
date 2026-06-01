@@ -65,3 +65,4 @@ syscall_table:
     dd sys_hex2int
     dd sys_asc2int
     dd sys_get_proc_info
+    dd sys_itoa

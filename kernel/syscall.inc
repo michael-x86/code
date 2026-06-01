@@ -677,25 +677,25 @@ sys_hex2int:                             ; 26: esi = string → eax = value
     pop ebx
     ret
 
-sys_asc2int:                             ; 27: esi = string → edx = value
-    push eax
+sys_asc2int:                             ; 27: esi = string → eax = value
     push ebx
-    xor edx, edx
+    push edx
+    xor eax, eax
     mov ebx, 10
 .loop:
-    movzx eax, byte [esi]
-    test al, al
+    movzx edx, byte [esi]
+    test dl, dl
     jz .done
-    cmp al, ' '
+    cmp dl, ' '
     je .done
-    sub eax, '0'
-    imul edx, edx, 10
-    add edx, eax
+    sub edx, '0'
+    imul eax, eax, 10
+    add eax, edx
     inc esi
     jmp .loop
 .done:
+    pop edx
     pop ebx
-    pop eax
     ret
 
 sys_get_proc_info:                       ; 28: ebx = ptr to 36-byte buffer → 0/-1
@@ -724,4 +724,38 @@ sys_get_proc_info:                       ; 28: ebx = ptr to 36-byte buffer → 0
     ret
 .error:
     mov eax, -1
+    ret
+
+sys_itoa:                                ; 29: eax = value, edi = dst buffer → edi = end ptr
+    push eax
+    push ebx
+    push ecx
+    push edx
+    mov ecx, 0
+    mov ebx, 10
+    test eax, eax
+    jnz .divide
+    mov byte [edi], '0'
+    inc edi
+    jmp .fin
+.divide:
+    xor edx, edx
+    div ebx
+    push edx
+    inc ecx
+    test eax, eax
+    jnz .divide
+.emit:
+    pop edx
+    mov al, dl
+    add al, '0'
+    mov [edi], al
+    inc edi
+    loop .emit
+.fin:
+    mov byte [edi], 0           ; null-terminate
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
     ret
