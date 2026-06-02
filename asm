@@ -8,7 +8,7 @@ IMG="os.img"
 # Programs to compile
 COMMANDS=(exit help dump alloc dealloc poke peek 
           ps vi pwd ls cd ping cat touch write 
-          rm rmdir mkdir cp mv)
+          rm rmdir mkdir cp mv up cls)
 
 RUN_QEMU=false
 FULLSCREEN=false
