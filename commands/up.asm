@@ -6,8 +6,8 @@ _start:
     ; --- Calculate our Dynamic Base Offset ---
     call .get_base
 .get_base:
-    pop ebp                 ; ebp = absolute runtime address of .get_base
-    sub ebp, .get_base      ; ebp = runtime delta address
+    pop ebp                 
+    sub ebp, .get_base   
 
     ; --- 1. Print "uptime: " ---
     mov eax,1              ; sys_print
@@ -53,12 +53,12 @@ _start:
     int 0x80
 
     ; --- 6. Print Seconds ---
-    pop ebx                 ; restore seconds directly into ebx
-    mov eax, 6              ; sys_print_int
+    pop ebx                ; restore seconds directly into ebx
+    mov eax,6              ; sys_print_int
     int 0x80
 
     ; --- 7. Print Newline ---
-    mov eax, 3              ; sys_newline
+    mov eax,3              ; sys_newline
     int 0x80
 
     popad
