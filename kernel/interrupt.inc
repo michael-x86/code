@@ -121,6 +121,11 @@ irq0:
     dec ecx
     jnz .tick_disp
 
+    ; Skip task switch during ATA PIO data transfers — DRQ times out if
+    ; the task is switched away mid-transfer.
+    cmp byte [disk_busy], 0
+    jne .skip_switch
+
     ; Compute next task index: (current + 1) % 3
     mov eax, [current_task]
     inc eax
@@ -157,6 +162,12 @@ irq0:
 .run1:
     mov esp, [task1_esp]
 .done:
+    mov al, PIC_EOI
+    out PIC_MASTER_CMD, al
+    popad
+    iretd
+
+.skip_switch:
     mov al, PIC_EOI
     out PIC_MASTER_CMD, al
     popad

@@ -248,7 +248,7 @@ fs_resolve:
 
 ata_read:
     pushad
-    sti                          ; allow timer IRQs during disk I/O
+    mov byte [disk_busy], 1    ; prevent task switch for entire disk op
     mov ebx, eax
     mov ebp, ecx
 
@@ -330,16 +330,18 @@ ata_read:
     pop ecx
     dec ecx
     jnz .nxs
+    mov byte [disk_busy], 0
     popad
     ret
 .timeout:
+    mov byte [disk_busy], 0
     popad
     mov eax, -1
     ret
 
 ata_write:
     pushad
-    sti                          ; allow timer IRQs during disk I/O
+    mov byte [disk_busy], 1    ; prevent task switch for entire disk op
     mov ebx, eax
     mov ebp, ecx
 
@@ -430,9 +432,11 @@ ata_write:
     jnz .wf
     jmp .wr_timeout
 .flush_done:
+    mov byte [disk_busy], 0
     popad
     ret
 .wr_timeout:
+    mov byte [disk_busy], 0
     popad
     mov eax, -1
     ret

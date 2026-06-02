@@ -128,7 +128,7 @@ TASK_STACK_SIZE      equ 4096
 ; --- IDT ----------------------------------------------------------------------
 IDT_ENTRIES          equ 256
 IDT_PRESENT          equ 10001110b
-IDT_DPL3             equ 11101110b    ; syscall gate: DPL=3
+IDT_DPL3             equ 11101111b    ; syscall trap gate: DPL=3, preserves IF
 
 ; --- Syscall numbers ----------------------------------------------------------
 %assign SYSCALL_PUTCHAR     0
