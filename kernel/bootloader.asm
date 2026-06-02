@@ -143,7 +143,10 @@ protected_mode:
     add eax, KERNEL_SECTORS
     mov [0x500], eax
 
-    jmp 0x00100000               ; jump to kernel at 1MB
+    ; Transfer control to the kernel physical entry at 1MB.
+    ; CS is already the protected-mode code segment (0x08), so a near jump is sufficient.
+    mov eax, 0x00100000
+    jmp eax
 
 times 510 - ($-$$) db 0
 dw 0xAA55

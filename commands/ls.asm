@@ -21,8 +21,8 @@ _start:
     mov eax,1                   ; sys_print(esi)
     int 0x80
     pop eax
-    test eax,eax                ; type 0 = dir → append '/'
-    jnz .nodir
+    cmp eax, 2                  ; type 2 = directory
+    jne .nodir
     mov ebx,'/'
     mov eax, 0                   ; sys_putchar
     int 0x80

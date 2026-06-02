@@ -13,6 +13,9 @@ exec_bin:
     cmp dword [argc], 0
     je .silent
 
+    ; Ensure superblock metadata is loaded before looking up /bin/<command>.
+    call ensure_fs_ready
+
     ; Build path: "/bin/<command>"
     mov edi, path_buf
     mov esi, bin_prefix

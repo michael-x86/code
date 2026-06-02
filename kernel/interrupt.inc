@@ -93,11 +93,33 @@ page_fault_handler:
 irq0:
     pushad
     inc dword [tick_count]
+
     inc dword [tick_div]
     test dword [tick_div], 1
     jnz .no_flag
     mov byte [tick_flag], 1
 .no_flag:
+
+    ; Update tick display directly in IRQ0 so the counter stays live
+    ; during long syscalls (disk I/O) that block task2's main loop.
+    mov eax, [tick_count]
+    mov edi, VGA_TEXT_BUFFER + (0 * VGA_COLS + 72) * 2
+    mov ecx, 8
+.tick_disp:
+    mov edx, eax
+    shr edx, 28
+    and dl, 0x0F
+    add dl, '0'
+    cmp dl, '9'
+    jbe .tick_store
+    add dl, 7
+.tick_store:
+    mov dh, 0x07
+    mov [edi], dx
+    shl eax, 4
+    add edi, 2
+    dec ecx
+    jnz .tick_disp
 
     ; Compute next task index: (current + 1) % 3
     mov eax, [current_task]

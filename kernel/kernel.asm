@@ -115,10 +115,13 @@ kernel_main:
     rep stosb
     mov byte [cwd_buf], '/'
 
-    call load_fs_persist
-    call load_config
     call cls
     call banner
+
+    ; Lightweight FS init: load base_lba + superblock only (no bitmap).
+    ; This ensures /bin lookups and directory listing work without blocking.
+    call ensure_fs_ready
+
     mov eax, VGA_COLS * 4
     mov [cursor_pos], eax
     call newline
@@ -126,12 +129,10 @@ kernel_main:
 
     ; Start multitasking
     call init_tasks
-    sti
-    mov [task0_esp], esp
-    mov esp, [task0_esp]
     mov dword [current_task], 0
+    mov esp, [task0_esp]
     popad
-    iretd                        ; context-switch into task0_entry
+    iretd                        ; context-switch into task0_entry (EFLAGS has IF=1)
 
 ; ── Initialized mutable data ────────────────────────────────────────────────
 section .data

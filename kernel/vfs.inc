@@ -248,37 +248,9 @@ fs_resolve:
 
 ata_read:
     pushad
+    sti                          ; allow timer IRQs during disk I/O
     mov ebx, eax
     mov ebp, ecx
-
-    ; --- Drive reset / initialization ---
-    ; Set SRST (bit 2) in device control register, wait, then clear it.
-    ; This ensures the drive is in a known state after the BIOS/bootloader
-    ; may have left it in an inconsistent state.
-    mov dx, ATA_DEV_CONTROL
-    mov al, 0x04             ; SRST = 1
-    out dx, al
-    ; Small delay: read status a few times (each read takes ~400ns)
-    mov ecx, 10
-.reset_delay:
-    mov dx, ATA_STATUS_CMD
-    in al, dx
-    dec ecx
-    jnz .reset_delay
-    mov dx, ATA_DEV_CONTROL
-    xor al, al               ; SRST = 0
-    out dx, al
-    ; Wait for BSY to clear after reset
-    mov ecx, 100000
-.reset_wait:
-    mov dx, ATA_STATUS_CMD
-    in al, dx
-    test al, 0x80
-    jz .reset_done
-    dec ecx
-    jnz .reset_wait
-    jmp .timeout
-.reset_done:
 
     ; Select drive (LBA mode, master)
     mov dx, ATA_DRIVE_HEAD
@@ -334,14 +306,23 @@ ata_read:
     mov ecx, ebp
 .nxs:
     mov dx, ATA_STATUS_CMD
+    mov esi, 100000
 .wd:
     in al, dx
     test al, 0x80            ; BSY set? keep waiting
+    jz .rd_check
+    dec esi
     jnz .wd
+    jmp .timeout
+.rd_check:
     test al, 0x01            ; ERR set? abort
     jnz .timeout
     test al, 0x08            ; DRQ set? read data
-    jz .wd
+    jnz .rd_xfer
+    dec esi
+    jnz .wd
+    jmp .timeout
+.rd_xfer:
     mov dx, ATA_DATA_PORT
     push ecx
     mov ecx, 256
@@ -358,32 +339,9 @@ ata_read:
 
 ata_write:
     pushad
+    sti                          ; allow timer IRQs during disk I/O
     mov ebx, eax
     mov ebp, ecx
-
-    ; --- Drive reset / initialization ---
-    mov dx, ATA_DEV_CONTROL
-    mov al, 0x04
-    out dx, al
-    mov ecx, 10
-.wr_reset_delay:
-    mov dx, ATA_STATUS_CMD
-    in al, dx
-    dec ecx
-    jnz .wr_reset_delay
-    mov dx, ATA_DEV_CONTROL
-    xor al, al
-    out dx, al
-    mov ecx, 100000
-.wr_reset_wait:
-    mov dx, ATA_STATUS_CMD
-    in al, dx
-    test al, 0x80
-    jz .wr_reset_done
-    dec ecx
-    jnz .wr_reset_wait
-    jmp .wr_timeout
-.wr_reset_done:
 
     ; Select drive
     mov dx, ATA_DRIVE_HEAD
@@ -436,14 +394,23 @@ ata_write:
     mov ecx, ebp
 .nxs:
     mov dx, ATA_STATUS_CMD
+    mov esi, 100000
 .wd:
     in al, dx
     test al, 0x80            ; BSY set? keep waiting
+    jz .wr_check
+    dec esi
     jnz .wd
+    jmp .wr_timeout
+.wr_check:
     test al, 0x01            ; ERR set? abort
     jnz .wr_timeout
     test al, 0x08            ; DRQ set? write data
-    jz .wd
+    jnz .wr_xfer
+    dec esi
+    jnz .wd
+    jmp .wr_timeout
+.wr_xfer:
     mov dx, ATA_DATA_PORT
     push ecx
     mov ecx, 256
@@ -454,10 +421,15 @@ ata_write:
     mov dx, ATA_STATUS_CMD
     mov al, ATA_CMD_CACHE_FLUSH
     out dx, al
+    mov ecx, 100000
 .wf:
     in al, dx
     test al, 0x80
+    jz .flush_done
+    dec ecx
     jnz .wf
+    jmp .wr_timeout
+.flush_done:
     popad
     ret
 .wr_timeout:
@@ -1227,6 +1199,38 @@ load_fs_persist:
     mov eax, [0x500]             ; physical address, identity-mapped
     mov [fs_base_lba], eax
     call load_superblock
+
+    ; If the superblock is invalid, skip bitmap load to avoid long ATA waits
+    ; based on garbage metadata.
+    cmp dword [sb_buf + SB_MAGIC], FS_MAGIC
+    jne .done
+    mov eax, [sb_buf + SB_TOTAL_BLOCKS]
+    test eax, eax
+    jz .done
+    cmp eax, FS_BITMAP_MAX_BLOCKS
+    ja .done
+
     call load_bitmap
+.done:
+    popad
+    ret
+
+; -----------------------------------------------------------------------------
+; ensure_fs_ready — lightweight one-time FS init for command execution
+;   Loads fs_base_lba and superblock only. Does not load bitmap.
+; -----------------------------------------------------------------------------
+ensure_fs_ready:
+    pushad
+    cmp byte [fs_ready], 1
+    je .ok
+
+    mov eax, [0x500]
+    mov [fs_base_lba], eax
+    call load_superblock
+    cmp dword [sb_buf + SB_MAGIC], FS_MAGIC
+    jne .ok
+    mov byte [fs_ready], 1
+
+.ok:
     popad
     ret

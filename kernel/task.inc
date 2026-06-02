@@ -73,12 +73,14 @@ init_tasks:
 ; Task 0 — idle
 task0_entry:
 .loop:
+    sti
     hlt
     jmp .loop
 
 ; Task 1 — idle
 task1_entry:
 .loop:
+    sti
     hlt
     jmp .loop
 
@@ -129,5 +131,6 @@ task2_entry:
     dec dword [cmd_len]
     call delchar
 .done:
+    sti
     hlt
     jmp task2_entry

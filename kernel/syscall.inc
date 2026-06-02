@@ -154,6 +154,7 @@ sys_list_dir:                            ; 13: ebx = index, edi = dst -> type/-1
     push esi
     push edi
     push ebp
+    mov [tmp_dst], edi
     mov esi, cwd_buf
     call fs_lookup_inode
     cmp eax, -1
@@ -166,7 +167,7 @@ sys_list_dir:                            ; 13: ebx = index, edi = dst -> type/-1
     jae .ld_nf
     push ecx
     push ebx
-    mov ecx, ebp
+    mov ebx, ebp
     call load_inode
     pop ebx
     pop ecx
@@ -183,6 +184,8 @@ sys_list_dir:                            ; 13: ebx = index, edi = dst -> type/-1
     mov ecx, BLOCK_SECTORS
     mov edi, dir_block_buf
     call ata_read
+    cmp eax, -1
+    je .ld_nf
     pop ebp
     pop ecx
     pop ebx
@@ -207,8 +210,8 @@ sys_list_dir:                            ; 13: ebx = index, edi = dst -> type/-1
     add edi, eax
     jmp .ld_ent
 .ld_found:
-    ; Copy name to dst (original edi is at [esp+12])
-    mov eax, [esp + 12]
+    ; Copy name to destination buffer
+    mov eax, [tmp_dst]
     push esi
     movzx ecx, byte [edi + 6] ; name_len
     lea esi, [edi + 8]

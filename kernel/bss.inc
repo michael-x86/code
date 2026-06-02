@@ -35,6 +35,7 @@ persist_buf      resb FS_PERSIST_BUF_SIZE
 ; --- Block filesystem state ---
 alignb 4
 fs_base_lba      resd 1                ; disk LBA where FS region begins
+fs_ready         resb 1                ; 1 once superblock has been loaded
 sb_buf           resb 512              ; superblock cache
 inode_buf        resb INODE_SIZE       ; current inode cache
 inode_sector_buf resb 1024             ; raw sector(s) for inode R/W
