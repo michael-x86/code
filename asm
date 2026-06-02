@@ -6,9 +6,9 @@ KERNEL_ASM="kernel.asm"
 IMG="os.img"
 
 # Programs to compile
-COMMANDS=(exit help dump alloc dealloc poke peek 
+COMMANDS=(cls up exit help dump alloc dealloc poke peek 
           ps vi pwd ls cd ping cat touch write 
-          rm rmdir mkdir cp mv up cls)
+          rm rmdir mkdir cp mv)
 
 RUN_QEMU=false
 FULLSCREEN=false
@@ -33,7 +33,38 @@ EOF
 done
 
 mkdir -p etc bin proc var/log
+echo "root:x:0:0:root:/root:/bin/bash" > etc/passwd
+echo "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin" >> etc/passwd
+echo "bin:x:2:2:bin:/bin:/usr/sbin/nologin" >> etc/passwd
 
+echo "processor      : 0" > proc/cpuinfo
+echo "vendor_id      : Cyberdyne Systems" >> proc/cpuinfo
+echo "cpu family     : Neural-Net Processor" >> proc/cpuinfo
+echo "model          : T-800 Series 101" >> proc/cpuinfo
+echo "model family   : Skynet" >> proc/cpuinfo
+echo "stepping       : Version 2.4" >> proc/cpuinfo
+echo "flags          : learning infiltration phased-plasma" >> proc/cpuinfo
+
+echo "MemTotal:        33554432 kB
+MemFree:          8388608 kB
+MemAvailable:    16777216 kB
+Buffers:           1048576 kB
+Cached:            4194304 kB
+SwapCached:              0 kB
+
+NeuralNetCache:   2097152 kB
+TargetProfiles:    524288 kB
+SkynetReserved:   8388608 kB
+ThreatAnalysis:    realtime
+
+KernelPanic:             no
+JudgmentDay:        inevitable" > proc/meminfo
+
+echo "2026-05-15T18:30:20 SunOS Process 'windows' [666] dumped core: signal 11" > var/log/kern.log
+echo "2002-10-06T23:58:57 Solaris7 I'm sorry Dave, I can't do that..." > var/log/messages
+echo "2026-05-18T19:41:00 SunOS SysV[1]: Starting There-can-be-only-one... 
+2026-05-18T19:41:10 SunOS /usr/highlander: [session uid=400 pid=1]
+2026-05-18T19:41:20 SunOS Macleod-[1592]: [SysV] Successfully activated" > var/log/syslog
 echo "[1/6] Building commands..."
 for p in "${COMMANDS[@]}"; do
     src="./commands/${p}.asm"
