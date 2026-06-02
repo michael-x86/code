@@ -34,8 +34,12 @@ persist_buf      resb FS_PERSIST_BUF_SIZE
 
 ; --- Block filesystem state ---
 alignb 4
+fs_ata_base      resd 1                ; ATA port base (from bootloader handoff)
+fs_ata_drive     resb 1                ; ATA drive select byte (from bootloader handoff)
 fs_base_lba      resd 1                ; disk LBA where FS region begins
 fs_ready         resb 1                ; 1 once superblock has been loaded
+ata_port_base    resd 1                ; cached copy of fs_ata_base for fast port math
+alignb 4
 disk_busy        resb 1                ; set during ATA disk ops to defer task switch
 sb_buf           resb 512              ; superblock cache
 inode_buf        resb INODE_SIZE       ; current inode cache

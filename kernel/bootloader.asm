@@ -2,7 +2,7 @@
 bits 16
 
 ; Constants
-KERNEL_SECTORS  equ 0x18
+KERNEL_SECTORS  equ 0x1B
 KERNEL_LOAD_SEG equ 0x1000
 KERNEL_LOAD_OFF equ 0x0000
 KERNEL_LOAD_ADDR equ 0x10000       ; = KERNEL_LOAD_SEG * 16 + KERNEL_LOAD_OFF
@@ -137,9 +137,13 @@ protected_mode:
     cld
     rep movsb
 
-    ; Store FS base LBA at physical 0x500 for the kernel to read
-    ; FS is on a separate disk (secondary IDE), so LBA = 0
-    mov dword [0x500], 0
+    ; Store FS disk info at physical 0x500 for the kernel to read:
+    ;   [0x500]  dword  ATA port base  = 0x01F0  (primary IDE controller)
+    ;   [0x504]  byte   drive select   = 0xF0   (slave — QEMU index=1)
+    ;   [0x508]  dword  FS base LBA    = 0      (FS starts at LBA 0 of this disk)
+    mov dword [0x500], 0x01F0
+    mov byte  [0x504], 0xF0
+    mov dword [0x508], 0
 
     ; Transfer control to the kernel physical entry at 1MB.
     ; CS is already the protected-mode code segment (0x08), so a near jump is sufficient.

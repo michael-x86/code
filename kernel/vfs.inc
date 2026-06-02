@@ -246,84 +246,118 @@ fs_resolve:
 
 ; ── ATA PIO disk access ────────────────────────────────────────────────────
 
+; ── ATA PIO disk access (port/drive from bootloader handoff) ──────────────
+;
+; The bootloader stores at physical 0x500:
+;   [0x500]  dword  fs_ata_base   — ATA port base (e.g. 0x1F0 primary, 0x170 secondary)
+;   [0x504]  byte   fs_ata_drive  — drive select byte (0xE0 master, 0xF0 slave)
+;   [0x508]  dword  fs_base_lba   — LBA offset where FS region begins
+;
+; All port offsets below are relative to fs_ata_base.
+%define ATA_OFF_DATA      0
+%define ATA_OFF_SECT_CNT  2
+%define ATA_OFF_LBA_LOW   3
+%define ATA_OFF_LBA_MID   4
+%define ATA_OFF_LBA_HIGH  5
+%define ATA_OFF_DRV_HEAD  6
+%define ATA_OFF_STATUS   7
+
 ata_read:
     pushad
-    mov byte [disk_busy], 1    ; prevent task switch during ATA PIO
+    mov byte [disk_busy], 1
     mov ebx, eax
     mov ebp, ecx
+    mov edx, [fs_ata_base]
+    mov [ata_port_base], edx
 
-    ; Select drive (LBA mode, master)
-    mov dx, ATA_DRIVE_HEAD
+    ; Select drive (LBA mode)
     mov eax, ebx
     shr eax, 24
     and al, 0x0F
-    or al, ATA_DRIVE_MASTER
+    or al, [fs_ata_drive]
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_DRV_HEAD
     out dx, al
 
-    ; Small delay for drive selection to take effect
+    ; Small delay
     mov ecx, 4
 .sel_delay:
-    mov dx, ATA_STATUS_CMD
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_STATUS
     in al, dx
     dec ecx
     jnz .sel_delay
 
-    ; Wait for BSY clear and DRDY set with timeout
+    ; Wait for BSY clear
     mov ecx, 100000
 .wb:
-    mov dx, ATA_STATUS_CMD
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_STATUS
     in al, dx
-    test al, 0x80            ; BSY set?
+    test al, 0x80
     jz .ready
     dec ecx
     jnz .wb
     jmp .timeout
 .ready:
-    ; Check for error
     test al, 0x01
     jnz .timeout
-    mov dx, ATA_DRIVE_HEAD
+    ; Re-select drive
     mov eax, ebx
     shr eax, 24
     and al, 0x0F
-    or al, ATA_DRIVE_MASTER
+    or al, [fs_ata_drive]
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_DRV_HEAD
     out dx, al
-    mov dx, ATA_SECTOR_COUNT
+    ; Sector count
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_SECT_CNT
     mov eax, ebp
     out dx, al
-    mov dx, ATA_LBA_LOW
+    ; LBA low
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_LBA_LOW
     mov eax, ebx
     out dx, al
-    mov dx, ATA_LBA_MID
+    ; LBA mid
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_LBA_MID
     shr eax, 8
     out dx, al
-    mov dx, ATA_LBA_HIGH
+    ; LBA high
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_LBA_HIGH
     shr eax, 8
     out dx, al
-    mov dx, ATA_STATUS_CMD
+    ; Send READ command
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_STATUS
     mov al, ATA_CMD_READ
     out dx, al
     mov ecx, ebp
 .nxs:
-    mov dx, ATA_STATUS_CMD
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_STATUS
     mov esi, 100000
 .wd:
     in al, dx
-    test al, 0x80            ; BSY set? keep waiting
+    test al, 0x80
     jz .rd_check
     dec esi
     jnz .wd
     jmp .timeout
 .rd_check:
-    test al, 0x01            ; ERR set? abort
+    test al, 0x01
     jnz .timeout
-    test al, 0x08            ; DRQ set? read data
+    test al, 0x08
     jnz .rd_xfer
     dec esi
     jnz .wd
     jmp .timeout
 .rd_xfer:
-    mov dx, ATA_DATA_PORT
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_DATA
     push ecx
     mov ecx, 256
     rep insw
@@ -341,28 +375,33 @@ ata_read:
 
 ata_write:
     pushad
-    mov byte [disk_busy], 1    ; prevent task switch during ATA PIO
+    mov byte [disk_busy], 1
     mov ebx, eax
     mov ebp, ecx
+    mov edx, [fs_ata_base]
+    mov [ata_port_base], edx
 
     ; Select drive
-    mov dx, ATA_DRIVE_HEAD
     mov eax, ebx
     shr eax, 24
     and al, 0x0F
-    or al, ATA_DRIVE_MASTER
+    or al, [fs_ata_drive]
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_DRV_HEAD
     out dx, al
 
     mov ecx, 4
 .wr_sel_delay:
-    mov dx, ATA_STATUS_CMD
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_STATUS
     in al, dx
     dec ecx
     jnz .wr_sel_delay
 
     mov ecx, 100000
 .wb:
-    mov dx, ATA_STATUS_CMD
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_STATUS
     in al, dx
     test al, 0x80
     jz .wr_ready
@@ -372,59 +411,77 @@ ata_write:
 .wr_ready:
     test al, 0x01
     jnz .wr_timeout
-    mov dx, ATA_DRIVE_HEAD
+    ; Re-select drive
     mov eax, ebx
     shr eax, 24
     and al, 0x0F
-    or al, ATA_DRIVE_MASTER
+    or al, [fs_ata_drive]
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_DRV_HEAD
     out dx, al
-    mov dx, ATA_SECTOR_COUNT
+    ; Sector count
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_SECT_CNT
     mov eax, ebp
     out dx, al
-    mov dx, ATA_LBA_LOW
+    ; LBA low
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_LBA_LOW
     mov eax, ebx
     out dx, al
-    mov dx, ATA_LBA_MID
+    ; LBA mid
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_LBA_MID
     shr eax, 8
     out dx, al
-    mov dx, ATA_LBA_HIGH
+    ; LBA high
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_LBA_HIGH
     shr eax, 8
     out dx, al
-    mov dx, ATA_STATUS_CMD
+    ; Send WRITE command
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_STATUS
     mov al, ATA_CMD_WRITE
     out dx, al
     mov ecx, ebp
 .nxs:
-    mov dx, ATA_STATUS_CMD
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_STATUS
     mov esi, 100000
 .wd:
     in al, dx
-    test al, 0x80            ; BSY set? keep waiting
+    test al, 0x80
     jz .wr_check
     dec esi
     jnz .wd
     jmp .wr_timeout
 .wr_check:
-    test al, 0x01            ; ERR set? abort
+    test al, 0x01
     jnz .wr_timeout
-    test al, 0x08            ; DRQ set? write data
+    test al, 0x08
     jnz .wr_xfer
     dec esi
     jnz .wd
     jmp .wr_timeout
 .wr_xfer:
-    mov dx, ATA_DATA_PORT
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_DATA
     push ecx
     mov ecx, 256
     rep outsw
     pop ecx
     dec ecx
     jnz .nxs
-    mov dx, ATA_STATUS_CMD
+    ; Cache flush
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_STATUS
     mov al, ATA_CMD_CACHE_FLUSH
     out dx, al
     mov ecx, 100000
 .wf:
+    mov dx, [ata_port_base]
+    add dx, ATA_OFF_STATUS
     in al, dx
     test al, 0x80
     jz .flush_done
@@ -1199,8 +1256,16 @@ file_write:
 
 load_fs_persist:
     pushad
-    ; Read FS base LBA from the location stored by the bootloader
-    mov eax, [0x500]             ; physical address, identity-mapped
+    ; Read ATA port base, drive select, and FS base LBA from bootloader handoff
+    ; at physical 0x500 (identity-mapped in the lower 4 MB):
+    ;   [0x500]  dword  ATA port base (e.g. 0x1F0)
+    ;   [0x504]  byte   drive select (0xE0 master, 0xF0 slave)
+    ;   [0x508]  dword  FS base LBA
+    mov eax, [0x500]
+    mov [fs_ata_base], eax
+    mov al, [0x504]
+    mov [fs_ata_drive], al
+    mov eax, [0x508]
     mov [fs_base_lba], eax
     call load_superblock
 
@@ -1229,6 +1294,10 @@ ensure_fs_ready:
     je .ok
 
     mov eax, [0x500]
+    mov [fs_ata_base], eax
+    mov al, [0x504]
+    mov [fs_ata_drive], al
+    mov eax, [0x508]
     mov [fs_base_lba], eax
     call load_superblock
     cmp dword [sb_buf + SB_MAGIC], FS_MAGIC

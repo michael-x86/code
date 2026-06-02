@@ -832,6 +832,248 @@ tab_print_all_matches:
 
 ; ── Built-in commands ──────────────────────────────────────────────────────
 
+; --- fsdump — dump filesystem superblock, inodes, and directory entries ---
+fsdump_cmd:
+    pushad
+
+    ; Ensure superblock is loaded
+    call ensure_fs_ready
+
+    ; ── Superblock header ───────────────────────────────────────────────
+    mov esi, fsd_sb_hdr
+    call print
+    call newline
+
+    ; magic
+    mov esi, fsd_lbl_magic
+    call print
+    mov eax, [sb_buf + SB_MAGIC]
+    call print_hex_dword
+    call newline
+
+    ; block_size
+    mov esi, fsd_lbl_bsz
+    call print
+    mov eax, [sb_buf + SB_BLOCK_SIZE]
+    call print_int_decimal
+    call newline
+
+    ; total_blocks
+    mov esi, fsd_lbl_tot
+    call print
+    mov eax, [sb_buf + SB_TOTAL_BLOCKS]
+    call print_int_decimal
+    call newline
+
+    ; inode_count
+    mov esi, fsd_lbl_ino
+    call print
+    mov eax, [sb_buf + SB_INODE_COUNT]
+    call print_int_decimal
+    call newline
+
+    ; free_blocks
+    mov esi, fsd_lbl_fb
+    call print
+    mov eax, [sb_buf + SB_FREE_BLOCKS]
+    call print_int_decimal
+    call newline
+
+    ; free_inodes
+    mov esi, fsd_lbl_fi
+    call print
+    mov eax, [sb_buf + SB_FREE_INODES]
+    call print_int_decimal
+    call newline
+
+    ; inode_table_lba (FS-relative)
+    mov esi, fsd_lbl_ilba
+    call print
+    mov eax, [sb_buf + SB_INODE_TABLE_LBA]
+    call print_int_decimal
+    call newline
+
+    ; bitmap_lba (FS-relative)
+    mov esi, fsd_lbl_blba
+    call print
+    mov eax, [sb_buf + SB_BITMAP_LBA]
+    call print_int_decimal
+    call newline
+
+    ; data_lba (FS-relative)
+    mov esi, fsd_lbl_dlba
+    call print
+    mov eax, [sb_buf + SB_DATA_LBA]
+    call print_int_decimal
+    call newline
+
+    ; mount_count
+    mov esi, fsd_lbl_mnt
+    call print
+    mov eax, [sb_buf + SB_MOUNT_COUNT]
+    call print_int_decimal
+    call newline
+
+    ; fs_base_lba (disk LBA where FS region starts)
+    mov esi, fsd_lbl_base
+    call print
+    mov eax, [fs_base_lba]
+    call print_int_decimal
+    call newline
+
+    ; ── Inode walk ─────────────────────────────────────────────────────
+    call newline
+    mov esi, fsd_ino_hdr
+    call print
+    call newline
+
+    xor ebp, ebp               ; ebp = inode number
+.ino_loop:
+    cmp ebp, [sb_buf + SB_INODE_COUNT]
+    jae .ino_done
+    mov ebx, ebp
+    call load_inode
+    cmp dword [inode_buf + INOFS_TYPE], INODE_FREE
+    je .ino_next
+
+    ; Print inode number
+    mov eax, ebp
+    call print_int_decimal
+    mov al, ':'
+    call putchar
+    mov al, ' '
+    call putchar
+
+    ; Print type
+    cmp dword [inode_buf + INOFS_TYPE], INODE_DIR
+    je .ino_is_dir
+    mov esi, fsd_type_file
+    call print
+    jmp .ino_type_done
+.ino_is_dir:
+    mov esi, fsd_type_dir
+    call print
+.ino_type_done:
+
+    ; Print size
+    mov esi, fsd_lbl_size
+    call print
+    mov eax, [inode_buf + INOFS_SIZE]
+    call print_int_decimal
+
+    ; Print direct block pointers (non-zero only)
+    mov esi, fsd_lbl_blks
+    call print
+    xor ecx, ecx               ; block pointer index
+.blk_loop:
+    cmp ecx, 12
+    jae .blk_done
+    mov eax, [inode_buf + INOFS_DIRECT + ecx * 4]
+    test eax, eax
+    jz .blk_next
+    push ecx
+    call print_int_decimal
+    mov al, ' '
+    call putchar
+    pop ecx
+.blk_next:
+    inc ecx
+    jmp .blk_loop
+.blk_done:
+    call newline
+
+    ; If directory, dump entries
+    cmp dword [inode_buf + INOFS_TYPE], INODE_DIR
+    jne .ino_next
+    push ebp
+    mov ebx, ebp
+    xor ecx, ecx               ; block index within dir
+.dir_blk_loop:
+    cmp ecx, 12
+    jae .dir_done
+    mov eax, [inode_buf + INOFS_DIRECT + ecx * 4]
+    test eax, eax
+    jz .dir_next_blk
+    ; Read directory data block
+    push ebx
+    push ecx
+    mov ebx, eax
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
+    mov ecx, BLOCK_SECTORS
+    mov edi, dir_block_buf
+    call ata_read
+    pop ecx
+    pop ebx
+    ; Scan entries
+    mov edi, dir_block_buf
+    mov edx, BLOCK_SIZE
+.dir_ent_loop:
+    cmp edx, 8
+    jb .dir_next_blk
+    movzx eax, word [edi + 4]  ; rec_len
+    test eax, eax
+    jz .dir_next_blk
+    cmp eax, 8
+    jb .dir_next_blk
+    cmp eax, edx               ; rec_len must not exceed remaining bytes
+    ja .dir_next_blk
+    ; Bounds-check inode number
+    mov eax, [edi]
+    cmp eax, [sb_buf + SB_INODE_COUNT]
+    jae .dir_skip_ent          ; invalid inode number - skip
+    ; Print indent + name
+    push edx
+    push edi
+    push ecx
+    push ebx
+    mov al, ' '
+    call putchar
+    call putchar
+    call putchar
+    call putchar
+    lea esi, [edi + 8]
+.dir_name_out:
+    lodsb
+    test al, al
+    jz .dir_name_done
+    call putchar
+    jmp .dir_name_out
+.dir_name_done:
+    mov al, ' '
+    call putchar
+    mov al, '-'
+    call putchar
+    mov al, '>'
+    call putchar
+    mov al, ' '
+    call putchar
+    mov eax, [edi]             ; inode number
+    call print_int_decimal
+    call newline
+    pop ebx
+    pop ecx
+    pop edi
+    pop edx
+.dir_skip_ent:
+    movzx eax, word [edi + 4]  ; rec_len (reload after pop)
+    sub edx, eax
+    add edi, eax
+    jmp .dir_ent_loop
+.dir_next_blk:
+    inc ecx
+    jmp .dir_blk_loop
+.dir_done:
+    pop ebp
+
+.ino_next:
+    inc ebp
+    jmp .ino_loop
+.ino_done:
+    popad
+    ret
+
 peek_cmd:
     mov esi, deadbeef
     push eax
@@ -1488,7 +1730,8 @@ load_config:
 ; --- banner — paint the boot message at the top of the screen ---------------
 banner:
     mov esi, sys_msg
-    mov edi, VGA_TEXT_BUFFER + (2 * VGA_COLS + 0) * 2
+    ;mov edi, VGA_TEXT_BUFFER + (2 * VGA_COLS + 0) * 2
+    lea edi, [VGA_TEXT_BUFFER + (2 * VGA_COLS + 0) * 2] ;This should work much more better
     mov ah, VGA_COLOR_GREEN
 .next:
     lodsb

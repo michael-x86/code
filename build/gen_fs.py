@@ -86,14 +86,17 @@ print(f"  Layout: superblock=LBA1, inode_table=LBA{INODE_TABLE_LBA}..{INODE_TABL
 print(f"  Inodes: {INODE_COUNT}, Data blocks: {total_data_blocks}, "
       f"Capacity: {total_data_blocks * BLOCK_SIZE // 1024} KB")
 
+# State (must be defined before use in superblock or elsewhere)
+next_inode = 1  # 0 reserved for root
+next_block = 1  # 1-based: 0 means "no block" in direct block pointers
+
 # Build superblock (512 bytes)
 superblock = bytearray(512)
 struct.pack_into('<I', superblock, 0, FS_MAGIC)           # magic
 struct.pack_into('<I', superblock, 4, BLOCK_SIZE)          # block_size
 struct.pack_into('<I', superblock, 8, total_data_blocks)   # total_blocks
 struct.pack_into('<I', superblock, 12, INODE_COUNT)        # inode_count
-struct.pack_into('<I', superblock, 16, total_data_blocks)  # free_blocks
-struct.pack_into('<I', superblock, 20, INODE_COUNT)        # free_inodes
+# free_blocks and free_inodes populated after all allocations
 struct.pack_into('<I', superblock, 24, INODE_TABLE_LBA)    # inode_table_lba
 struct.pack_into('<I', superblock, 28, INODE_TABLE_LBA + inode_table_sectors)  # bitmap_lba
 struct.pack_into('<I', superblock, 32, data_start_lba)     # data_lba
@@ -222,6 +225,10 @@ for block_num, name, child_inode, file_type in dir_entries:
     entry = make_dirent(child_inode, name, file_type)
     data[pos:pos+len(entry)] = entry
 
+# Update superblock free counts to reflect actual usage
+struct.pack_into('<I', superblock, 16, total_data_blocks - (next_block - 1))  # free_blocks
+struct.pack_into('<I', superblock, 20, INODE_COUNT - next_inode)  # free_inodes
+
 # Build output: superblock + inode table + bitmap + data blocks
 output = bytearray()
 output += superblock
@@ -252,7 +259,7 @@ for vpath, kind, host in entries:
             bn = struct.unpack_from('<I', inode_table, offset)[0]
             file_block_map[bn] = (host, bi * BLOCK_SIZE)
 
-for bnum in range(next_block):
+for bnum in range(1, next_block):
     if bnum in dir_block_data:
         output += dir_block_data[bnum]
     elif bnum in file_block_map:

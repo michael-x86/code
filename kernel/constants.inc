@@ -33,18 +33,15 @@ VGA_COLOR_GREEN      equ 0x02
 PIT_FREQUENCY        equ 100          ; Hz
 PIT_DIVISOR          equ 11932        ; 1193182 / 100
 
-; --- ATA PIO (secondary IDE controller, ports 0x170..0x177) ---------------------
-ATA_DATA_PORT        equ 0x170
-ATA_SECTOR_COUNT     equ 0x172
-ATA_LBA_LOW          equ 0x173
-ATA_LBA_MID          equ 0x174
-ATA_LBA_HIGH         equ 0x175
-ATA_DRIVE_HEAD       equ 0x176
-ATA_STATUS_CMD       equ 0x177
+; --- ATA PIO ----------------------------------------------------------------
+; The kernel does not hardcode a single controller. Instead it reads
+; fs_ata_base (port) and fs_ata_drive (select byte) from the bootloader
+; handoff area at [0x500] and [0x504] before issuing any disk command.
 ATA_CMD_READ         equ 0x20
 ATA_CMD_WRITE        equ 0x30
 ATA_CMD_CACHE_FLUSH  equ 0xE7
 ATA_DRIVE_MASTER     equ 0xE0
+ATA_DRIVE_SLAVE      equ 0xF0
 ATA_DEV_CONTROL      equ 0x376
 ATA_CMD_IDENTIFY     equ 0xEC
 

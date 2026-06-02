@@ -232,6 +232,8 @@ cmd_table:
     dd heap_cmd
     db "sys",   0
     dd sys_cmd
+    db "fsdump", 0
+    dd fsdump_cmd
     db 0       ; end marker
 
 ; --- Strings -----------------------------------------------------------------
@@ -247,6 +249,7 @@ help_me:
     db "heap  -  show heap allocations", 13
     db "clear -  clear screen", 13
     db "sys   -  test int 0x80 syscall", 13
+    db "fsdump-  dump FS superblock, inodes, dirs", 13
     db "exit  -  shutdown", 13, 13, 0
 
 eax_lbl db "EAX: ", 0
@@ -272,6 +275,25 @@ real_mem       db "reality : $", 0
 sys_peek_msg   db "peek = 0x", 0
 bin_prefix     db "/bin/", 0
 command_nf_msg db 13, "command not found", 13, 0
+
+; --- fsdump strings --------------------------------------------------------
+fsd_sb_hdr   db "--- superblock ---", 0
+fsd_ino_hdr  db 13, "--- inodes ---", 0
+fsd_lbl_magic db "  magic:       ", 0
+fsd_lbl_bsz   db "  block_size:  ", 0
+fsd_lbl_tot   db "  total_blocks:", 0
+fsd_lbl_ino   db "  inode_count: ", 0
+fsd_lbl_fb    db "  free_blocks: ", 0
+fsd_lbl_fi    db "  free_inodes: ", 0
+fsd_lbl_ilba  db "  inode_lba:   ", 0
+fsd_lbl_blba  db "  bitmap_lba:  ", 0
+fsd_lbl_dlba  db "  data_lba:    ", 0
+fsd_lbl_mnt   db "  mount_count: ", 0
+fsd_lbl_base  db "  fs_base_lba: ", 0
+fsd_lbl_size  db "  size:", 0
+fsd_lbl_blks  db "  blocks:", 0
+fsd_type_file db "file", 0
+fsd_type_dir  db "dir ", 0
 
 ; --- Config strings ----------------------------------------------------------
 config_path    db "/etc/config", 0
