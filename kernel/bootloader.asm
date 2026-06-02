@@ -138,10 +138,8 @@ protected_mode:
     rep movsb
 
     ; Store FS base LBA at physical 0x500 for the kernel to read
-    ; FS starts right after the kernel: LBA = 1 + KERNEL_SECTORS
-    mov eax, 1
-    add eax, KERNEL_SECTORS
-    mov [0x500], eax
+    ; FS is on a separate disk (secondary IDE), so LBA = 0
+    mov dword [0x500], 0
 
     ; Transfer control to the kernel physical entry at 1MB.
     ; CS is already the protected-mode code segment (0x08), so a near jump is sufficient.

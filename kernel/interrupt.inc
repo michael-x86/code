@@ -121,8 +121,7 @@ irq0:
     dec ecx
     jnz .tick_disp
 
-    ; Skip task switch during ATA PIO data transfers — DRQ times out if
-    ; the task is switched away mid-transfer.
+    ; Skip task switch during ATA PIO — DRQ times out if switched away mid-transfer.
     cmp byte [disk_busy], 0
     jne .skip_switch
 

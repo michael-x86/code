@@ -97,36 +97,35 @@ echo "[5/6] Assembling bootloader..."
 nasm -f bin "$BOOT_ASM" -o "${BUILD_DIR}/bootloader.bin"
 
 echo "[6/6] Linking os.img..."
-FS_BIN_SIZE=$(stat -c%s "${BUILD_DIR}/fs.bin")
-FS_SECTORS=$(((FS_BIN_SIZE + 511) / 512))
-FS_LBA=$((KERNEL_SECTORS + 1))  # FS region starts right after kernel
 
-# Total image size = bootloader(1) + kernel(KERNEL_SECTORS) + fs(FS_SECTORS)
-TOTAL_SECTORS=$((1 + KERNEL_SECTORS + FS_SECTORS))
-TARGET=$((TOTAL_SECTORS * 512))
-
-# Concatenate: bootloader + kernel (padded to sector boundary) + fs.bin
-# Pad kernel to KERNEL_SECTORS * 512 bytes so the disk has zeros between
-# the kernel and the filesystem (prevents BSS corruption during copy)
+# Boot image: bootloader + kernel only (no FS — FS is on a separate disk)
+BOOT_IMG="${BUILD_DIR}/boot.img"
 KERNEL_PADDED=$(mktemp)
 cat "${BUILD_DIR}/kernel.bin" > "$KERNEL_PADDED"
 truncate -s "$KERNEL_BYTES" "$KERNEL_PADDED"
-cat "${BUILD_DIR}/bootloader.bin" "$KERNEL_PADDED" "${BUILD_DIR}/fs.bin" > "$IMG"
-truncate -s "$TARGET" "$IMG"
+cat "${BUILD_DIR}/bootloader.bin" "$KERNEL_PADDED" > "$BOOT_IMG"
 rm -f "$KERNEL_PADDED"
 
+# FS image: raw fs.bin on a separate disk
+FS_IMG="${BUILD_DIR}/fs.img"
+cp "${BUILD_DIR}/fs.bin" "$FS_IMG"
+
+# Final image for compatibility: boot + fs concatenated
+cat "$BOOT_IMG" "$FS_IMG" > "$IMG"
+
 echo ""
-echo "Build complete: $IMG ($(stat -c%s "$IMG") bytes)"
-echo "  Bootloader: LBA 0 (1 sector)"
-echo "  Kernel:     LBA 1..${KERNEL_SECTORS} (${KERNEL_SECTORS} sectors)"
-echo "  FS:         LBA ${FS_LBA}..$((FS_LBA + FS_SECTORS - 1)) (${FS_SECTORS} sectors)"
+echo "Build complete:"
+echo "  Boot: $BOOT_IMG (bootloader + kernel)"
+echo "  FS:   $FS_IMG (filesystem, separate disk)"
+echo "  OS:   $IMG (combined, $(stat -c%s "$IMG") bytes)"
 echo ""
 rm -f "${BUILD_DIR}/kernel.bin" "${BUILD_DIR}/bootloader.bin"
 rm -f "${BUILD_DIR}/fs.bin"
 
 if [[ "$RUN_QEMU" == true ]]; then
     QEMU_ARGS=(
-        -drive format=raw,file="$IMG",index=0,if=ide
+        -drive format=raw,file="$BOOT_IMG",index=0,if=ide
+        -drive format=raw,file="$FS_IMG",index=1,if=ide
         -device isa-debug-exit,iobase=0xf4,iosize=0x04
         -m 128
     )

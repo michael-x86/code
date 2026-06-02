@@ -248,7 +248,7 @@ fs_resolve:
 
 ata_read:
     pushad
-    mov byte [disk_busy], 1    ; prevent task switch for entire disk op
+    mov byte [disk_busy], 1    ; prevent task switch during ATA PIO
     mov ebx, eax
     mov ebp, ecx
 
@@ -341,7 +341,7 @@ ata_read:
 
 ata_write:
     pushad
-    mov byte [disk_busy], 1    ; prevent task switch for entire disk op
+    mov byte [disk_busy], 1    ; prevent task switch during ATA PIO
     mov ebx, eax
     mov ebp, ecx
 

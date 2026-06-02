@@ -36,7 +36,7 @@ persist_buf      resb FS_PERSIST_BUF_SIZE
 alignb 4
 fs_base_lba      resd 1                ; disk LBA where FS region begins
 fs_ready         resb 1                ; 1 once superblock has been loaded
-disk_busy        resb 1                ; set during ATA PIO to defer task switch
+disk_busy        resb 1                ; set during ATA disk ops to defer task switch
 sb_buf           resb 512              ; superblock cache
 inode_buf        resb INODE_SIZE       ; current inode cache
 inode_sector_buf resb 1024             ; raw sector(s) for inode R/W

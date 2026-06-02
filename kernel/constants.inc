@@ -33,22 +33,20 @@ VGA_COLOR_GREEN      equ 0x02
 PIT_FREQUENCY        equ 100          ; Hz
 PIT_DIVISOR          equ 11932        ; 1193182 / 100
 
-; --- ATA PIO ------------------------------------------------------------------
-ATA_DATA_PORT        equ 0x1F0
-ATA_SECTOR_COUNT     equ 0x1F2
-ATA_LBA_LOW          equ 0x1F3
-ATA_LBA_MID          equ 0x1F4
-ATA_LBA_HIGH         equ 0x1F5
-ATA_DRIVE_HEAD       equ 0x1F6
-ATA_STATUS_CMD       equ 0x1F7
+; --- ATA PIO (secondary IDE controller, ports 0x170..0x177) ---------------------
+ATA_DATA_PORT        equ 0x170
+ATA_SECTOR_COUNT     equ 0x172
+ATA_LBA_LOW          equ 0x173
+ATA_LBA_MID          equ 0x174
+ATA_LBA_HIGH         equ 0x175
+ATA_DRIVE_HEAD       equ 0x176
+ATA_STATUS_CMD       equ 0x177
 ATA_CMD_READ         equ 0x20
 ATA_CMD_WRITE        equ 0x30
 ATA_CMD_CACHE_FLUSH  equ 0xE7
 ATA_DRIVE_MASTER     equ 0xE0
-ATA_DEV_CONTROL      equ 0x3F6
+ATA_DEV_CONTROL      equ 0x376
 ATA_CMD_IDENTIFY     equ 0xEC
-ATA_CMD_CACHE_FLUSH  equ 0xE7
-ATA_DRIVE_MASTER     equ 0xE0
 
 ; --- PIC ----------------------------------------------------------------------
 PIC_MASTER_CMD       equ 0x20
