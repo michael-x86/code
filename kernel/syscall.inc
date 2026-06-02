@@ -185,7 +185,10 @@ sys_list_dir:                            ; 13: ebx = index, edi = dst -> type/-1
     mov edi, dir_block_buf
     call ata_read
     cmp eax, -1
-    je .ld_nf
+    jne .ld_read_ok
+    add esp, 12
+    jmp .ld_nf
+.ld_read_ok:
     pop ebp
     pop ecx
     pop ebx
@@ -224,15 +227,28 @@ sys_list_dir:                            ; 13: ebx = index, edi = dst -> type/-1
     pop esi
     ; Get file type
     movzx eax, byte [edi + 7]
-    test al, al
-    jnz .ld_type_ok
-    mov ebx, esi
-    push eax
+    cmp al, 2                 ; could be directory or executable
+    jne .ld_type_file         ; if not 2, it's a normal file (type 1)
+
+    ; It is 2, so we must load the inode to distinguish directory from executable
+    push ebx
+    mov ebx, esi              ; esi = inode number
     call load_inode
-    pop eax
+    pop ebx
     mov eax, [inode_buf + INOFS_TYPE]
+    cmp eax, INODE_DIR
+    je .ld_type_dir
+.ld_type_file:
+    mov eax, 1                ; file (type 1)
+    jmp .ld_type_ok
+.ld_type_dir:
+    mov eax, 2                ; directory (type 2)
 .ld_type_ok:
-    add esp, 20
+    pop ebp
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
     pop ebx
     ret
 .ld_next_blk:

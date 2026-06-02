@@ -833,110 +833,157 @@ tab_print_all_matches:
 ; ── Built-in commands ──────────────────────────────────────────────────────
 
 ; --- fsdump — dump filesystem superblock, inodes, and directory entries ---
+;
+; Output format:
+;   Superblock section — all fields from sb_buf, one label:value per line.
+;   Inode section      — one line per allocated inode (free inodes skipped,
+;                        empty directories skipped):
+;                          <ino>: <type> size=<n> blocks=<b0 b1 ...>
+;                        For directories, each entry is indented:
+;                            <name> -> <child_ino>
+;
+; Sections:
+;   1. Superblock header  — print every superblock field from sb_buf
+;   2. Inode walk         — iterate all inodes, print metadata + dir entries
+;
+; Registers:
+;   ebp = inode number (loop counter)
+;   ebx = inode number passed to load_inode
+;   ecx = block pointer index / directory block index
+;   edx = remaining bytes in directory block buffer
+;   edi = pointer into directory block buffer (current entry)
+;
 fsdump_cmd:
     pushad
 
-    ; Ensure superblock is loaded
+    ; ── Section 1: Superblock header ──────────────────────────────────
+    ; Ensure superblock is loaded into sb_buf.
+    ; Each field is printed as "label: value" on its own line.
+    ; Numeric values are decimal unless noted.
     call ensure_fs_ready
 
-    ; ── Superblock header ───────────────────────────────────────────────
+    ; Print section header
     mov esi, fsd_sb_hdr
     call print
     call newline
 
-    ; magic
+    ; magic — filesystem signature, printed as 8-digit hex
+    ;   sb_buf+0 (dword): FS_MAGIC
     mov esi, fsd_lbl_magic
     call print
     mov eax, [sb_buf + SB_MAGIC]
     call print_hex_dword
     call newline
 
-    ; block_size
+    ; block_size — size of each data block in bytes
+    ;   sb_buf+4 (dword): block size (e.g. 512)
     mov esi, fsd_lbl_bsz
     call print
     mov eax, [sb_buf + SB_BLOCK_SIZE]
     call print_int_decimal
     call newline
 
-    ; total_blocks
+    ; total_blocks — total number of data blocks on disk
+    ;   sb_buf+8 (dword)
     mov esi, fsd_lbl_tot
     call print
     mov eax, [sb_buf + SB_TOTAL_BLOCKS]
     call print_int_decimal
     call newline
 
-    ; inode_count
+    ; inode_count — total number of inodes in the filesystem
+    ;   sb_buf+12 (dword)
     mov esi, fsd_lbl_ino
     call print
     mov eax, [sb_buf + SB_INODE_COUNT]
     call print_int_decimal
     call newline
 
-    ; free_blocks
+    ; free_blocks — number of unallocated data blocks
+    ;   sb_buf+16 (dword)
     mov esi, fsd_lbl_fb
     call print
     mov eax, [sb_buf + SB_FREE_BLOCKS]
     call print_int_decimal
     call newline
 
-    ; free_inodes
+    ; free_inodes — number of unallocated inodes
+    ;   sb_buf+20 (dword)
     mov esi, fsd_lbl_fi
     call print
     mov eax, [sb_buf + SB_FREE_INODES]
     call print_int_decimal
     call newline
 
-    ; inode_table_lba (FS-relative)
+    ; inode_table_lba — FS-relative LBA of the inode table start
+    ;   sb_buf+24 (dword)
     mov esi, fsd_lbl_ilba
     call print
     mov eax, [sb_buf + SB_INODE_TABLE_LBA]
     call print_int_decimal
     call newline
 
-    ; bitmap_lba (FS-relative)
+    ; bitmap_lba — FS-relative LBA of the block allocation bitmap
+    ;   sb_buf+28 (dword)
     mov esi, fsd_lbl_blba
     call print
     mov eax, [sb_buf + SB_BITMAP_LBA]
     call print_int_decimal
     call newline
 
-    ; data_lba (FS-relative)
+    ; data_lba — FS-relative LBA where data blocks begin
+    ;   sb_buf+32 (dword)
     mov esi, fsd_lbl_dlba
     call print
     mov eax, [sb_buf + SB_DATA_LBA]
     call print_int_decimal
     call newline
 
-    ; mount_count
+    ; mount_count — number of times the filesystem has been mounted
+    ;   sb_buf+36 (dword)
     mov esi, fsd_lbl_mnt
     call print
     mov eax, [sb_buf + SB_MOUNT_COUNT]
     call print_int_decimal
     call newline
 
-    ; fs_base_lba (disk LBA where FS region starts)
+    ; fs_base_lba — absolute disk LBA where the FS region starts
+    ;   (not in sb_buf; stored in global fs_base_lba)
     mov esi, fsd_lbl_base
     call print
     mov eax, [fs_base_lba]
     call print_int_decimal
     call newline
 
-    ; ── Inode walk ─────────────────────────────────────────────────────
+    ; ── Section 2: Inode walk ─────────────────────────────────────────
+    ; Iterate inode numbers 0 .. inode_count-1.
+    ; For each loaded inode:
+    ;   - Skip free inodes (type == INODE_FREE)
+    ;   - Skip empty directories (type == INODE_DIR && size == 0)
+    ;   - Print: <ino>: <type> size=<n> blocks=<b0 b1 ...>
+    ;   - If directory, also dump child entries.
     call newline
     mov esi, fsd_ino_hdr
     call print
     call newline
 
-    xor ebp, ebp               ; ebp = inode number
+    xor ebp, ebp               ; ebp = inode number (loop counter)
+    
 .ino_loop:
     cmp ebp, [sb_buf + SB_INODE_COUNT]
     jae .ino_done
     mov ebx, ebp
-    call load_inode
+    call load_inode            ; load inode ebp into inode_buf
     cmp dword [inode_buf + INOFS_TYPE], INODE_FREE
-    je .ino_next
+    je .ino_next               ; skip unallocated inodes
+    cmp dword [inode_buf + INOFS_TYPE], INODE_DIR
+    jne .ino_not_empty_dir
+    cmp dword [inode_buf + INOFS_SIZE], 0
+    je .ino_next               ; skip empty directories
 
-    ; Print inode number
+.ino_not_empty_dir:
+
+    ; Print inode number prefix: "<ino>: "
     mov eax, ebp
     call print_int_decimal
     mov al, ':'
@@ -944,102 +991,118 @@ fsdump_cmd:
     mov al, ' '
     call putchar
 
-    ; Print type
+    ; Print inode type: "dir" or "file"
     cmp dword [inode_buf + INOFS_TYPE], INODE_DIR
     je .ino_is_dir
     mov esi, fsd_type_file
     call print
     jmp .ino_type_done
+
 .ino_is_dir:
     mov esi, fsd_type_dir
     call print
+
 .ino_type_done:
 
-    ; Print size
+    ; Print inode size: " size=<bytes>"
+    ;   inode_buf+4 (dword): file size in bytes (also dir entry data length)
     mov esi, fsd_lbl_size
     call print
     mov eax, [inode_buf + INOFS_SIZE]
     call print_int_decimal
 
-    ; Print direct block pointers (non-zero only)
+    ; Print direct block pointers: " blocks=<b0 b1 ...>"
+    ;   inode_buf+8..55 (12 dwords): direct block numbers; 0 means unused
     mov esi, fsd_lbl_blks
     call print
-    xor ecx, ecx               ; block pointer index
+    xor ecx, ecx               ; ecx = block pointer index (0..11)
+
 .blk_loop:
     cmp ecx, 12
     jae .blk_done
     mov eax, [inode_buf + INOFS_DIRECT + ecx * 4]
     test eax, eax
-    jz .blk_next
+    jz .blk_next               ; skip unused (zero) block pointers
     push ecx
-    call print_int_decimal
+    call print_int_decimal     ; print block number
     mov al, ' '
     call putchar
     pop ecx
+
 .blk_next:
     inc ecx
     jmp .blk_loop
+
 .blk_done:
     call newline
 
-    ; If directory, dump entries
+    ; ── Directory entry dump ──────────────────────────────────────────
+    ; For directory inodes, read each data block and print child entries.
+    ; Each entry line: "    <name> -> <child_ino>"
+    ; Block on-disk address = (block_num * BLOCK_SECTORS) + data_lba + fs_base_lba
     cmp dword [inode_buf + INOFS_TYPE], INODE_DIR
     jne .ino_next
     push ebp
-    mov ebx, ebp
-    xor ecx, ecx               ; block index within dir
+    mov ebx, ebp               ; ebx = inode number (preserved across calls)
+    xor ecx, ecx               ; ecx = directory block index (0..11)
+
 .dir_blk_loop:
     cmp ecx, 12
     jae .dir_done
     mov eax, [inode_buf + INOFS_DIRECT + ecx * 4]
     test eax, eax
-    jz .dir_next_blk
-    ; Read directory data block
+    jz .dir_next_blk           ; skip unused block pointers
+    ; Read directory data block into dir_block_buf
+    ; Disk LBA = block_num * BLOCK_SECTORS + data_lba + fs_base_lba
     push ebx
     push ecx
     mov ebx, eax
-    shl eax, 3
-    add eax, [sb_buf + SB_DATA_LBA]
-    add eax, [fs_base_lba]
+    shl eax, 3                 ; block_num * BLOCK_SECTORS (8 sectors per block)
+    add eax, [sb_buf + SB_DATA_LBA]  ; + FS-relative data region offset
+    add eax, [fs_base_lba]           ; + absolute disk offset
     mov ecx, BLOCK_SECTORS
     mov edi, dir_block_buf
     call ata_read
     pop ecx
     pop ebx
-    ; Scan entries
+    ; Scan directory entries within the block
+    ; Each entry: inode(dword) rec_len(word) name_len(byte) file_type(byte) name...
     mov edi, dir_block_buf
-    mov edx, BLOCK_SIZE
+    mov edx, BLOCK_SIZE        ; edx = remaining bytes in block
+
 .dir_ent_loop:
     cmp edx, 8
-    jb .dir_next_blk
-    movzx eax, word [edi + 4]  ; rec_len
+    jb .dir_next_blk           ; need at least 8 bytes for a valid entry
+    movzx eax, word [edi + 4]  ; rec_len (total entry size including name)
     test eax, eax
-    jz .dir_next_blk
+    jz .dir_next_blk           ; zero rec_len = end of entries
     cmp eax, 8
-    jb .dir_next_blk
+    jb .dir_next_blk           ; rec_len below minimum struct size
     cmp eax, edx               ; rec_len must not exceed remaining bytes
     ja .dir_next_blk
-    ; Bounds-check inode number
-    mov eax, [edi]
+    ; Bounds-check inode number against filesystem inode_count
+    mov eax, [edi]             ; entry inode number
     cmp eax, [sb_buf + SB_INODE_COUNT]
-    jae .dir_skip_ent          ; invalid inode number - skip
-    ; Print indent + name
+    jae .dir_skip_ent          ; invalid inode number — skip
+    ; Print "    <name> -> <child_ino>"
     push edx
     push edi
     push ecx
     push ebx
     mov al, ' '
+    call putchar               ; 4-space indent
     call putchar
     call putchar
     call putchar
-    call putchar
-    lea esi, [edi + 8]
+    lea esi, [edi + 8]         ; name starts at offset 8 in directory entry
+
 .dir_name_out:
     lodsb
     test al, al
     jz .dir_name_done
     call putchar
     jmp .dir_name_out
+
 .dir_name_done:
     mov al, ' '
     call putchar
@@ -1049,21 +1112,24 @@ fsdump_cmd:
     call putchar
     mov al, ' '
     call putchar
-    mov eax, [edi]             ; inode number
+    mov eax, [edi]             ; child inode number
     call print_int_decimal
     call newline
     pop ebx
     pop ecx
     pop edi
     pop edx
+
 .dir_skip_ent:
     movzx eax, word [edi + 4]  ; rec_len (reload after pop)
-    sub edx, eax
-    add edi, eax
+    sub edx, eax               ; advance remaining-byte counter
+    add edi, eax               ; advance to next entry
     jmp .dir_ent_loop
+
 .dir_next_blk:
     inc ecx
     jmp .dir_blk_loop
+
 .dir_done:
     pop ebp
 
@@ -1741,3 +1807,57 @@ banner:
     jmp .next
 .done:
     ret
+
+; --- ls — list directory entries (built-in) ---------------------------------
+ls_cmd:
+    pushad
+    xor ebx, ebx                 ; index = 0
+.ls_loop:
+    push ebx
+    mov edi, dir_buf
+    mov word [edi], 0
+    call sys_list_dir            ; sys_list_dir(ebx, edi) -> eax = type or -1
+    pop ebx
+    cmp eax, -1
+    je .ls_done
+
+    push ebx
+    push eax                     ; save type
+    mov esi, dir_buf
+    call print
+    pop eax
+    cmp eax, 2                   ; type 2 = directory
+    jne .ls_nodir
+    mov al, '/'
+    call putchar
+.ls_nodir:
+    call newline
+    pop ebx
+    inc ebx
+    jmp .ls_loop
+.ls_done:
+    popad
+    ret
+
+; --- cd — change directory (built-in) ---------------------------------------
+cd_cmd:
+    pushad
+    mov eax, [argc]
+    cmp eax, 2
+    jl .cd_home
+    mov esi, [argv + 4]
+    jmp .cd_do
+.cd_home:
+    mov esi, .cd_home_path
+.cd_do:
+    call sys_chdir
+    cmp eax, -1
+    jne .cd_done
+    mov esi, .cd_err_msg
+    call print_cr
+.cd_done:
+    popad
+    ret
+
+.cd_home_path: db "/root", 0
+.cd_err_msg:   db "cd: no such directory", 0

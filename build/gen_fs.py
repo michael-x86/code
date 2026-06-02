@@ -226,8 +226,14 @@ for block_num, name, child_inode, file_type in dir_entries:
     data[pos:pos+len(entry)] = entry
 
 # Update superblock free counts to reflect actual usage
-struct.pack_into('<I', superblock, 16, total_data_blocks - (next_block - 1))  # free_blocks
+struct.pack_into('<I', superblock, 16, total_data_blocks - next_block)  # free_blocks
 struct.pack_into('<I', superblock, 20, INODE_COUNT - next_inode)  # free_inodes
+
+# Mark used blocks in bitmap (0 to next_block-1)
+for i in range(next_block):
+    byte_idx = i // 8
+    bit_idx = i % 8
+    bitmap[byte_idx] |= (1 << bit_idx)
 
 # Build output: superblock + inode table + bitmap + data blocks
 output = bytearray()
@@ -244,6 +250,11 @@ output += bitmap
 data_lba_offset = data_start_lba * 512
 current_offset = len(output)
 output += b'\x00' * (data_lba_offset - current_offset)
+
+# The kernel treats block_num 0 as "no block" and calculates sector as block_num * 8 + data_lba.
+# This means the first valid block (block 1) must be at data_lba + 8 sectors.
+# We pad one block (8 sectors) so that block 1 aligns correctly.
+output += b'\x00' * BLOCK_SIZE
 
 # Map file blocks: (inode_num, block_index) -> (host_path, file_offset)
 file_block_map = {}

@@ -815,22 +815,42 @@ dir_lookup:
     movzx eax, word [edi + 4]
     test eax, eax
     jz .next_block
+
+    ; Robust name comparison (respecting name_len and search null terminator)
     push ecx
-    push edi
     push esi
-    lea edi, [edi + 8]
-    call str_eq
-    pop esi
+    push edi
+    movzx ecx, byte [edi + 6] ; entry name_len
+    lea edi, [edi + 8]        ; entry name
+.cmp_lp:
+    test ecx, ecx
+    jz .cmp_end
+    mov al, [esi]
+    mov ah, [edi]
+    cmp al, ah
+    jne .cmp_fail
+    inc esi
+    inc edi
+    dec ecx
+    jmp .cmp_lp
+.cmp_end:
+    cmp byte [esi], 0         ; search name must also end here
+    jne .cmp_fail
     pop edi
+    pop esi
     pop ecx
-    test eax, eax
-    jz .found_it
+    jmp .found_it
+.cmp_fail:
+    pop edi
+    pop esi
+    pop ecx
+
     movzx eax, word [edi + 4]
     sub ecx, eax
     add edi, eax
     jmp .scan_entry
 .found_it:
-    mov eax, [edi]
+    mov eax, [edi]             ; child inode number is at [edi]
     pop ebp
     pop edi
     pop esi
@@ -998,11 +1018,11 @@ fs_lookup_inode:
     push edx
     push esi
     push edi
+    mov ebx, 0               ; current inode = root
     cmp byte [esi], '/'
     jne .not_found
     cmp byte [esi + 1], 0
     je .root_found
-    mov ebx, 0               ; current inode = root
     inc esi
 .component:
     mov edi, path_buf
@@ -1164,11 +1184,13 @@ file_write:
     call write_inode
     ; Zero the new block
     push ebx
+    push ecx
     mov edi, file_block_buf
     mov ecx, BLOCK_SIZE / 4
     xor eax, eax
     cld
     rep stosd
+    pop ecx
     pop ebx
     mov ecx, [inode_buf + INOFS_DIRECT + ecx * 4]
     ; Write zeroed block to disk

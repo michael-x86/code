@@ -234,6 +234,10 @@ cmd_table:
     dd sys_cmd
     db "fsdump", 0
     dd fsdump_cmd
+    db "ls",    0
+    dd ls_cmd
+    db "cd",    0
+    dd cd_cmd
     db 0       ; end marker
 
 ; --- Strings -----------------------------------------------------------------
@@ -250,6 +254,8 @@ help_me:
     db "clear -  clear screen", 13
     db "sys   -  test int 0x80 syscall", 13
     db "fsdump-  dump FS superblock, inodes, dirs", 13
+    db "ls    -  list directory entries", 13
+    db "cd    -  change directory", 13
     db "exit  -  shutdown", 13, 13, 0
 
 eax_lbl db "EAX: ", 0
