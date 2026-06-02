@@ -1,9 +1,13 @@
-; ls - list entries in current working directory
 [bits 32]
 [org 0x00000000]
 
 
 _start:
+    call .get_base
+.get_base:
+    pop ebp
+    sub ebp, .get_base          ; Calculate runtime delta offset
+
     xor ebx, ebx                 ; index = 0
 .loop:
     push ebx
@@ -35,7 +39,6 @@ _start:
 .done:
     ret
 
-section .bss
-;----------------------------
-alignb 16
-name: resb 64 
+align 16
+name: 
+      times 64 db 0 
