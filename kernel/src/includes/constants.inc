@@ -82,6 +82,7 @@ VGA_TEXT_BUFFER    equ 0xC00B8000
 VGA_ROWS           equ 25
 VGA_COLS           equ 80
 VGA_COLOR_GREEN    equ 0x02     ; green-on-black, our default shell color
+VGA_COLOR_BANNER   equ 0x20     ; black-on-green, used for the top banner row
 
 
 ; --- VGA Mode 13h graphics ---------------------------------------------------

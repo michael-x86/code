@@ -119,7 +119,7 @@ irq0:
     jbe .tick_store
     add dl, 7
 .tick_store:
-    mov dh, 0x07
+    mov dh, VGA_COLOR_BANNER
     mov [edi], dx
     shl eax, 4
     add edi, 2
@@ -275,7 +275,7 @@ print_tick:
     jbe .store
     add dl, 7
 .store:
-    mov dh, 0x07
+    mov dh, VGA_COLOR_BANNER
     mov [edi], dx
     shl eax, 4
     add edi, 2

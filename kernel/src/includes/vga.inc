@@ -121,32 +121,36 @@ print_cr:
 
 
 ; -----------------------------------------------------------------------------
-; cls — clear the screen and reset the cursor to (0, 0)
-;-- We use rep stosd to fill the buffer with green-on-black space
-;-- (0x0720) two cells at a time, halving the iteration count.
+; cls — clear the screen below the pinned banner, cursor to start of row 1
+;-- We use rep stosd to fill rows 1..24 with green-on-black space (0x0720)
+;-- two cells at a time. Row 0 is the pinned banner: it is left intact and
+;-- repainted so the bar survives a `clear`.
 ; -----------------------------------------------------------------------------
 cls:
-    mov edi, VGA_TEXT_BUFFER
-    mov ecx, VGA_COLS * VGA_ROWS / 2
+    mov edi, VGA_TEXT_BUFFER + VGA_COLS * 2
+    mov ecx, VGA_COLS * (VGA_ROWS - 1) / 2
     mov eax, 0x07200720                  ; green-on-black space x 2
     rep stosd
-    xor eax, eax
-    mov [cursor_pos], eax
+    call banner
+    mov dword [cursor_pos], VGA_COLS     ; start of row 1
     call cursor
     ret
 
 
 ; -----------------------------------------------------------------------------
 ; scroll — shift the screen up by one line, clear the bottom line
+;
+; Row 0 is the pinned banner bar and is left untouched: we shift rows
+; 2..24 up into rows 1..23 and clear row 24.
 ; -----------------------------------------------------------------------------
 scroll:
     push esi
     push edi
     push ecx
     push eax
-    mov esi, VGA_TEXT_BUFFER + VGA_COLS * 2
-    mov edi, VGA_TEXT_BUFFER
-    mov ecx, VGA_COLS * (VGA_ROWS - 1)
+    mov esi, VGA_TEXT_BUFFER + VGA_COLS * 2 * 2
+    mov edi, VGA_TEXT_BUFFER + VGA_COLS * 2
+    mov ecx, VGA_COLS * (VGA_ROWS - 2)
 .lp1:
     mov ax, [esi]
     mov [edi], ax
@@ -234,12 +238,27 @@ delchar:
 
 
 ; -----------------------------------------------------------------------------
-; banner — paint the boot message on row 2 of the screen
+; banner — paint the boot message across the top row
+;
+; Row 0 is a solid green bar: every cell is filled with a black-on-green
+; space first, then sys_msg is written over the left of the row in black
+; text. The tick counter (cols 72-79) is redrawn on top by print_tick in
+; the same black-on-green color.
 ; -----------------------------------------------------------------------------
 banner:
+    ; Fill the whole top row with black-on-green spaces.
+    mov edi, VGA_TEXT_BUFFER
+    mov ecx, VGA_COLS
+    mov ax, (VGA_COLOR_BANNER << 8) | ' '
+.fill:
+    mov [edi], ax
+    add edi, 2
+    loop .fill
+
+    ; Write the banner text over the row, black on green.
     mov esi, sys_msg
-    lea edi, [VGA_TEXT_BUFFER + (2 * VGA_COLS + 0) * 2]
-    mov ah, VGA_COLOR_GREEN
+    mov edi, VGA_TEXT_BUFFER
+    mov ah, VGA_COLOR_BANNER
 .next:
     lodsb
     test al, al

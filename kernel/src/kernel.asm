@@ -172,9 +172,8 @@ kernel_main:
     ; now that the FS is readable but before any input is accepted.
     call load_config
 
-    mov eax, VGA_COLS * 4
+    mov eax, VGA_COLS                    ; start of row 1 (row 0 is the banner)
     mov [cursor_pos], eax
-    call newline
     call prompt
 
     call init_tasks
