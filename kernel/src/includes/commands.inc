@@ -228,13 +228,250 @@ sys_cmd:
 
 
 ; -----------------------------------------------------------------------------
+; count_digits — number of decimal digits in an unsigned value
+;   in:  eax = value
+;   out: eax = digit count (1 for 0)
+; -----------------------------------------------------------------------------
+count_digits:
+    push ebx
+    push ecx
+    push edx
+    mov ebx, 10
+    xor ecx, ecx
+    test eax, eax
+    jnz .lp
+    mov ecx, 1
+    jmp .done
+.lp:
+    xor edx, edx
+    div ebx
+    inc ecx
+    test eax, eax
+    jnz .lp
+.done:
+    mov eax, ecx
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+
+
+; -----------------------------------------------------------------------------
+; print_human — print eax bytes as a human-readable size
+;   in:  eax = value in bytes
+;
+; < 1 KB prints as "<n>B"; otherwise one decimal place with a K/M/G
+; suffix (e.g. "4.0K", "1.5M", "20.0M").
+; -----------------------------------------------------------------------------
+print_human:
+    pushad
+    cmp eax, 1024
+    jb .bytes
+    cmp eax, 1048576
+    jb .kb
+    cmp eax, 1073741824
+    jb .mb
+    mov esi, 1073741824
+    push 'G'
+    jmp .scaled
+.mb:
+    mov esi, 1048576
+    push 'M'
+    jmp .scaled
+.kb:
+    mov esi, 1024
+    push 'K'
+.scaled:
+    xor edx, edx
+    div esi                              ; eax = whole, edx = remainder
+    mov ebp, edx                         ; ebp = remainder (frac source)
+    call print_int_decimal               ; print whole part
+    mov al, '.'
+    call putchar
+    mov eax, ebp                         ; frac = rem * 10 / divisor
+    xor edx, edx
+    mov ecx, 10
+    mul ecx
+    div esi
+    add al, '0'
+    call putchar
+    pop eax                              ; suffix char pushed above
+    call putchar
+    popad
+    ret
+.bytes:
+    call print_int_decimal
+    mov al, 'B'
+    call putchar
+    popad
+    ret
+
+
+; -----------------------------------------------------------------------------
+; human_len — character width of print_human's output for a value
+;   in:  eax = value in bytes
+;   out: eax = number of characters print_human would emit
+; -----------------------------------------------------------------------------
+human_len:
+    push ebx
+    push ecx
+    push edx
+    cmp eax, 1024
+    jb .b
+    cmp eax, 1048576
+    jb .k
+    cmp eax, 1073741824
+    jb .m
+    mov ebx, 1073741824
+    jmp .scaled
+.m:
+    mov ebx, 1048576
+    jmp .scaled
+.k:
+    mov ebx, 1024
+.scaled:
+    xor edx, edx
+    div ebx                              ; eax = whole part
+    call count_digits
+    add eax, 3                           ; '.', frac digit, suffix
+    jmp .done
+.b:
+    call count_digits
+    add eax, 1                           ; 'B'
+.done:
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+
+
+; -----------------------------------------------------------------------------
+; print_pad — print ecx spaces (no-op if ecx <= 0)
+;   in:  ecx = count (signed)
+; -----------------------------------------------------------------------------
+print_pad:
+    push eax
+    push ecx
+    test ecx, ecx
+    jle .done
+.lp:
+    mov al, ' '
+    push ecx
+    call putchar
+    pop ecx
+    dec ecx
+    jnz .lp
+.done:
+    pop ecx
+    pop eax
+    ret
+
+
+; -----------------------------------------------------------------------------
+; print_uint_field — print an unsigned value right-justified in a field
+;   in:  eax = value, ecx = field width
+; -----------------------------------------------------------------------------
+print_uint_field:
+    pushad
+    mov esi, eax                         ; save value
+    mov edi, ecx                         ; save width
+    call count_digits                    ; eax = digit count
+    mov ecx, edi
+    sub ecx, eax                         ; pad = width - digits
+    call print_pad
+    mov eax, esi
+    call print_int_decimal
+    popad
+    ret
+
+
+; -----------------------------------------------------------------------------
+; print_human_field — print a human-readable size right-justified
+;   in:  eax = value in bytes, ecx = field width
+; -----------------------------------------------------------------------------
+print_human_field:
+    pushad
+    mov esi, eax                         ; save value
+    mov edi, ecx                         ; save width
+    call human_len                       ; eax = printed width
+    mov ecx, edi
+    sub ecx, eax                         ; pad = width - len
+    call print_pad
+    mov eax, esi
+    call print_human
+    popad
+    ret
+
+
+; -----------------------------------------------------------------------------
+; print_str_field — print a string left-justified, padded to a field width
+;   in:  esi = string, ecx = field width
+; -----------------------------------------------------------------------------
+print_str_field:
+    pushad
+    mov edi, esi
+    xor edx, edx
+.cnt:
+    cmp byte [edi], 0
+    je .gotlen
+    inc edi
+    inc edx
+    jmp .cnt
+.gotlen:
+    mov edi, ecx                         ; save width
+    call print                           ; prints esi
+    mov ecx, edi
+    sub ecx, edx                         ; pad = width - len
+    call print_pad
+    popad
+    ret
+
+
+; -----------------------------------------------------------------------------
 ; ls_cmd — list the current working directory
 ;
 ; Repeatedly calls sys_list_dir with incrementing index until it
 ; returns -1. Appends '/' to directory entries for visual distinction.
+;
+; Options (any combination, e.g. "ls -lh"):
+;   -l   long listing: a type char and the size precede each name
+;   -h   show sizes in human-readable units (only affects -l output)
 ; -----------------------------------------------------------------------------
 ls_cmd:
     pushad
+    mov byte [ls_opt_l], 0
+    mov byte [ls_opt_h], 0
+
+    ; --- Parse option arguments (argv[1..argc-1]) ----------------------
+    mov ecx, [argc]
+    mov ebx, 1
+.opt_arg:
+    cmp ebx, ecx
+    jae .opt_done
+    mov esi, [argv + ebx * 4]
+    cmp byte [esi], '-'
+    jne .opt_next
+    inc esi
+.opt_char:
+    mov al, [esi]
+    test al, al
+    jz .opt_next
+    cmp al, 'l'
+    jne .opt_chk_h
+    mov byte [ls_opt_l], 1
+    jmp .opt_adv
+.opt_chk_h:
+    cmp al, 'h'
+    jne .opt_adv
+    mov byte [ls_opt_h], 1
+.opt_adv:
+    inc esi
+    jmp .opt_char
+.opt_next:
+    inc ebx
+    jmp .opt_arg
+.opt_done:
+
     xor ebx, ebx
 .ls_loop:
     push ebx
@@ -246,6 +483,10 @@ ls_cmd:
     je .ls_done
     push ebx
     push eax
+    cmp byte [ls_opt_l], 1
+    jne .ls_name
+    call ls_print_long                   ; type char + size columns
+.ls_name:
     mov esi, dir_buf
     call print
     pop eax
@@ -261,6 +502,58 @@ ls_cmd:
 .ls_done:
     popad
     ret
+
+
+; -----------------------------------------------------------------------------
+; ls_print_long — print the "-l" type char + size columns for one entry
+;
+; The entry name is in dir_buf. Resolves it against the cwd, loads the
+; inode, and prints "<typechar> <size>  " leaving the cursor before the
+; name. On lookup failure prints placeholder columns so the row still
+; lines up.
+; -----------------------------------------------------------------------------
+ls_print_long:
+    pushad
+    mov esi, dir_buf
+    mov edi, resolve_buf
+    call fs_resolve
+    mov esi, resolve_buf
+    call fs_lookup_inode
+    cmp eax, -1
+    je .unknown
+    mov ebx, eax
+    call load_inode
+    cmp dword [inode_buf + INOFS_TYPE], INODE_DIR
+    jne .file_char
+    mov al, 'd'
+    jmp .put_char
+.file_char:
+    mov al, '-'
+.put_char:
+    call putchar
+    mov al, ' '
+    call putchar
+    mov eax, [inode_buf + INOFS_SIZE]
+    cmp byte [ls_opt_h], 1
+    jne .dec
+    mov ecx, 8
+    call print_human_field
+    jmp .after
+.dec:
+    mov ecx, 9
+    call print_uint_field
+.after:
+    mov al, ' '
+    call putchar
+    mov al, ' '
+    call putchar
+    popad
+    ret
+.unknown:
+    PRINT_STRING ls_unknown_cols
+    popad
+    ret
+
 
 
 ; -----------------------------------------------------------------------------
@@ -652,6 +945,260 @@ fsck_cmd:
     ret
 
 
+; -----------------------------------------------------------------------------
+; df_cmd — report total / used / free space on the filesystem
+;
+; Reads the cached superblock and prints one table row with the disk
+; size, used and available bytes (human-readable), and a usage percent.
+; -----------------------------------------------------------------------------
+df_cmd:
+    pushad
+    call ensure_fs_ready
+
+    PRINT_STRING df_hdr
+    call newline
+
+    mov eax, [sb_buf + SB_TOTAL_BLOCKS]
+    mov ebx, [sb_buf + SB_BLOCK_SIZE]
+    mul ebx
+    mov [df_total], eax
+    mov eax, [sb_buf + SB_FREE_BLOCKS]
+    mov ebx, [sb_buf + SB_BLOCK_SIZE]
+    mul ebx
+    mov [df_free], eax
+    mov eax, [df_total]
+    sub eax, [df_free]
+    mov [df_used], eax
+
+    mov esi, df_fsname
+    mov ecx, 14
+    call print_str_field
+    mov eax, [df_total]
+    mov ecx, 8
+    call print_human_field
+    mov eax, [df_used]
+    mov ecx, 9
+    call print_human_field
+    mov eax, [df_free]
+    mov ecx, 9
+    call print_human_field
+
+    ; --- usage percent = used * 100 / total -----------------------------
+    mov eax, [df_used]
+    mov ebx, 100
+    mul ebx
+    mov ebx, [df_total]
+    test ebx, ebx
+    jz .zero
+    xor edx, edx
+    div ebx
+    jmp .havep
+.zero:
+    xor eax, eax
+.havep:
+    mov ecx, 6
+    call print_uint_field
+    mov al, '%'
+    call putchar
+    call newline
+    popad
+    ret
+
+
+; -----------------------------------------------------------------------------
+; du_cmd — summarize directory space usage (recursive)
+;
+; Argument: an optional path (defaults to the current directory). Walks
+; the directory tree and prints, post-order, the cumulative size of each
+; directory followed by its path. Size is the sum of the byte sizes of
+; the files contained in (and below) each directory.
+; -----------------------------------------------------------------------------
+du_cmd:
+    pushad
+    call ensure_fs_ready
+
+    mov eax, [argc]
+    cmp eax, 2
+    jl .usecwd
+    mov esi, [argv + 4]
+    mov edi, du_path
+    call fs_resolve
+    jmp .resolved
+.usecwd:
+    mov esi, cwd_buf
+    mov edi, du_path
+.cp:
+    lodsb
+    stosb
+    test al, al
+    jnz .cp
+.resolved:
+    mov esi, du_path
+    call fs_lookup_inode
+    cmp eax, -1
+    je .nf
+    mov ebx, eax
+    call load_inode
+    cmp dword [inode_buf + INOFS_TYPE], INODE_DIR
+    jne .notdir
+    call du_walk
+    popad
+    ret
+.notdir:
+    PRINT_STRING_CR du_notdir
+    popad
+    ret
+.nf:
+    PRINT_STRING_CR du_nf
+    popad
+    ret
+
+
+; -----------------------------------------------------------------------------
+; du_walk — recursively total the file bytes under a directory
+;   in:  ebx = directory inode number
+;        du_path = NUL-terminated absolute path of that directory
+;   out: eax = cumulative byte size of the subtree
+;
+; Prints one line ("<size>  <path>") for the directory after visiting
+; its children (post-order). To survive recursion clobbering the shared
+; inode_buf / dir_block_buf, the directory inode and the current data
+; block are re-read before each entry is examined; the cursor offset is
+; the only per-entry state kept.
+;
+; Stack frame (ebp-relative locals):
+;   [ebp-4]  dir inode      [ebp-16] cursor offset in block
+;   [ebp-8]  subtotal       [ebp-20] saved path length (child restore)
+;   [ebp-12] block index    [ebp-24] entry rec_len (advance amount)
+; -----------------------------------------------------------------------------
+du_walk:
+    push ebp
+    mov ebp, esp
+    sub esp, 24
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+    mov [ebp-4], ebx
+    mov dword [ebp-8], 0
+    mov dword [ebp-12], 0
+.blk:
+    mov ecx, [ebp-12]
+    cmp ecx, 12
+    jae .blkdone
+    mov ebx, [ebp-4]
+    call load_inode
+    mov ecx, [ebp-12]
+    mov eax, [inode_buf + INOFS_DIRECT + ecx * 4]
+    test eax, eax
+    jz .nextblk
+    mov dword [ebp-16], 0
+.ent:
+    mov eax, [ebp-16]
+    cmp eax, BLOCK_SIZE - 8
+    jae .nextblk
+    ; Re-load the directory inode and its current data block; recursion
+    ; into a child directory may have clobbered both shared buffers.
+    mov ebx, [ebp-4]
+    call load_inode
+    mov ecx, [ebp-12]
+    mov eax, [inode_buf + INOFS_DIRECT + ecx * 4]
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
+    mov ecx, BLOCK_SECTORS
+    mov edi, dir_block_buf
+    call ata_read
+    mov edi, dir_block_buf
+    add edi, [ebp-16]
+    movzx edx, word [edi + 4]             ; rec_len
+    test edx, edx
+    jz .nextblk
+    cmp edx, 8
+    jb .nextblk
+    mov [ebp-24], edx
+    mov eax, [edi]                        ; child inode number
+    test eax, eax
+    jz .advance
+    cmp eax, [sb_buf + SB_INODE_COUNT]
+    jae .advance
+    mov ebx, eax
+    call load_inode
+    cmp dword [inode_buf + INOFS_TYPE], INODE_DIR
+    je .child_dir
+    ; --- file: add its size to the running subtotal --------------------
+    mov eax, [inode_buf + INOFS_SIZE]
+    add [ebp-8], eax
+    jmp .advance
+.child_dir:
+    mov eax, [edi]                        ; child inode (re-read; edi valid)
+    push eax
+    ; append "/" + name to du_path, remembering the original length
+    mov esi, du_path
+    xor ecx, ecx
+.dlen:
+    cmp byte [esi], 0
+    je .dgot
+    inc esi
+    inc ecx
+    jmp .dlen
+.dgot:
+    mov [ebp-20], ecx
+    cmp ecx, 1                            ; path "/" already ends in '/'
+    je .no_sep
+    mov byte [esi], '/'
+    inc esi
+.no_sep:
+    movzx ecx, byte [edi + 6]             ; name_len
+    lea ebx, [edi + 8]
+.cpname:
+    test ecx, ecx
+    jz .cpdone
+    mov al, [ebx]
+    mov [esi], al
+    inc esi
+    inc ebx
+    dec ecx
+    jmp .cpname
+.cpdone:
+    mov byte [esi], 0
+    pop ebx                               ; child inode
+    call du_walk
+    add [ebp-8], eax
+    mov edi, du_path                      ; truncate path back
+    add edi, [ebp-20]
+    mov byte [edi], 0
+.advance:
+    mov eax, [ebp-16]
+    add eax, [ebp-24]
+    mov [ebp-16], eax
+    jmp .ent
+.nextblk:
+    inc dword [ebp-12]
+    jmp .blk
+.blkdone:
+    mov eax, [ebp-8]
+    mov ecx, 8
+    call print_human_field
+    mov al, ' '
+    call putchar
+    mov al, ' '
+    call putchar
+    mov esi, du_path
+    call print
+    call newline
+    mov eax, [ebp-8]
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    mov esp, ebp
+    pop ebp
+    ret
+
+
 section .rodata
 
 ; Magic bytes that peek_cmd reads from.
@@ -668,7 +1215,9 @@ help_me:
     db  "clear -  clear screen", 13
     db  "sys   -  test int 0x80 syscall", 13
     db  "fsdump-  dump FS superblock, inodes, dirs", 13
-    db  "ls    -  list directory entries", 13
+    db  "ls    -  list directory (opts: -l -h)", 13
+    db  "df    -  show filesystem disk space", 13
+    db  "du    -  show directory space usage", 13
     db  "cd    -  change directory", 13
     db  "exit  -  shutdown", 13, 13, 0
 
@@ -724,6 +1273,13 @@ fsck_clean        db "fsck: clean, no corruption detected", 0
 fsck_total        db "fsck: ", 0
 fsck_total_suffix db " corrupt inode(s) detected", 0
 
+; df / du messages.
+df_hdr            db "Filesystem        Size     Used    Avail   Use%", 0
+df_fsname         db "/", 0
+du_nf             db "du: no such file or directory", 0
+du_notdir         db "du: not a directory", 0
+ls_unknown_cols   db "?          ", 0
+
 
 ; -----------------------------------------------------------------------------
 ; cmd_table — null-terminated list of built-in commands
@@ -765,6 +1321,10 @@ cmd_table:
     dd  fsck_cmd
     db  "ls",    0
     dd  ls_cmd
+    db  "df",    0
+    dd  df_cmd
+    db  "du",    0
+    dd  du_cmd
     db  "cd",    0
     dd  cd_cmd
     db  0

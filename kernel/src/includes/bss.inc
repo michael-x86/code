@@ -46,12 +46,20 @@ hist_buf         resb HIST_COUNT_MAX * HIST_RECORD_SIZE
 
 ; --- Directory listing scratch (used by commands.inc / ls_cmd) -------------
 dir_buf          resb 512
+ls_opt_l         resb 1                   ; ls -l (long listing) flag
+ls_opt_h         resb 1                   ; ls -h (human-readable sizes) flag
 
 
 ; --- VFS / path state (used by vfs.inc) -------------------------------------
 cwd_buf          resb CWD_BUF_SIZE        ; current working directory
 resolve_buf      resb CWD_BUF_SIZE        ; scratch for fs_resolve output
 path_buf         resb CWD_BUF_SIZE        ; scratch for parent path during create/mkdir
+
+; --- du / df scratch (used by commands.inc) ---------------------------------
+du_path          resb 256                 ; running path during the du tree walk
+df_total         resd 1                   ; df: total bytes
+df_used          resd 1                   ; df: used bytes
+df_free          resd 1                   ; df: free bytes
 
 ; --- Scratch slots used by individual syscall handlers -----------------------
 ; tmp_dst is sys_list_dir's destination buffer pointer (saved across the
