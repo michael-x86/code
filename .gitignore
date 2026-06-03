@@ -16,10 +16,6 @@ bootloader.bin
 kernel.lst
 
 # ── Copied build scripts / sources (source of truth is build/, kernel/, boot/) ──
-asm
-gen_fs.py
-bootloader.asm
-kernel.asm
 
 # Copied include files (source of truth is kernel/)
 
@@ -50,6 +46,5 @@ build/*.img
 .github/ai-context/
 build/*.png
 build/*.ppm
-kernel/src/mono_kernel.asm
 build/boot.img
 build/boot.img

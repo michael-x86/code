@@ -79,11 +79,6 @@ exec_bin:
     mov ecx, ebx
     add ecx, 4095
     shr ecx, 12                          ; round up to a page
-    push eax
-    mov eax, ecx
-    call print_hex_dword
-    call newline
-    pop eax
     push eax                             ; save inode number
     push ebx                             ; save byte count
     push ecx                             ; save page count
@@ -95,6 +90,15 @@ exec_bin:
 
     mov [exec_vbase], eax
     mov [exec_pages], ecx
+
+    pushad                               ; DEBUG
+    call print_hex_dword                 ; eax = vbase
+    mov al, 'P'
+    call putchar
+    mov eax, ecx
+    call print_hex_dword                 ; page count
+    call newline
+    popad
 
     ; --- Allocate and map one page at a time ----------------------------
     push eax                             ; save inode number
