@@ -22,17 +22,6 @@ bootloader.asm
 kernel.asm
 
 # Copied include files (source of truth is kernel/)
-constants.inc
-data.inc
-bss.inc
-paging.inc
-memory.inc
-interrupt.inc
-syscall.inc
-vfs.inc
-shell.inc
-task.inc
-exec.inc
 
 # ── Content directories (populated from kernel/, build/ at build time) ──
 etc/
@@ -62,3 +51,5 @@ build/*.img
 build/*.png
 build/*.ppm
 kernel/src/mono_kernel.asm
+build/boot.img
+build/boot.img

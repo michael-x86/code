@@ -13,7 +13,7 @@ IMG="${BUILD_DIR}/os.img"
 # Programs to compile
 COMMANDS=(exit help env dump alloc dealloc poke peek
           ps vi pwd ls cd ping cat touch write
-          rm rmdir mkdir cp mv calc invaders)
+          rm rmdir mkdir cp mv calc invaders zork)
 
 RUN_QEMU=false
 FULLSCREEN=false
@@ -73,8 +73,8 @@ for p in "${COMMANDS[@]}"; do
     fi
     nasm -f bin "$src" -o "$out"
     sz=$(stat -c%s "$out")
-    if (( sz > 4096 )); then
-        echo "ERROR: $src compiled to $sz bytes (max 4096)" >&2
+    if (( sz > 65536 )); then
+        echo "ERROR: $src compiled to $sz bytes (max 65536)" >&2
         exit 1
     fi
     echo "  + bin/$p ($sz bytes)"
