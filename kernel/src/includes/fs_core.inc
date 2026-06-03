@@ -689,8 +689,8 @@ file_read:
 
 .read_done:
     mov eax, ebp
-    sub eax, [esp + 28]                  ; original edi (eax slot in pushad frame)
-    mov [esp + 28], eax                  ; patch the return value
+    sub eax, [esp]                       ; original edi (dest start) = bytes read
+    mov [esp + 28], eax                  ; patch the eax slot in the pushad frame
     popad
     ret
 
