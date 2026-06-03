@@ -28,6 +28,27 @@ INODE_SIZE    = 128
 INODE_COUNT   = 256
 INODE_TABLE_LBA = 2
 FS_MAGIC      = 0xEF53
+INOFS_CRC     = 126      # word: CRC-16 of inode bytes [0, INOFS_CRC)
+
+
+# CRC-16/CCITT (poly 0x1021, init 0xFFFF, MSB-first) — must match ecc.inc.
+def _build_crc16_table():
+    table = []
+    for i in range(256):
+        c = i << 8
+        for _ in range(8):
+            c = ((c << 1) ^ 0x1021) if (c & 0x8000) else (c << 1)
+            c &= 0xFFFF
+        table.append(c)
+    return table
+
+_CRC16_TABLE = _build_crc16_table()
+
+def crc16(data):
+    crc = 0xFFFF
+    for b in data:
+        crc = ((crc << 8) ^ _CRC16_TABLE[((crc >> 8) ^ b) & 0xFF]) & 0xFFFF
+    return crc
 
 # Default directories to create at build time
 default_dirs = ["/", "/bin", "/proc", "/var", "/var/log", "/usr", "/dev", "/lib", "/etc"]
@@ -241,6 +262,17 @@ for i in range(next_block):
     byte_idx = i // 8
     bit_idx = i % 8
     bitmap[byte_idx] |= (1 << bit_idx)
+
+# Stamp each allocated inode with its CRC-16 (matches write_inode in the
+# kernel). Free inodes (type 0) carry no checksum and are left untouched
+# so the kernel's verify_inode skips them.
+for inum in range(INODE_COUNT):
+    off = inum * INODE_SIZE
+    itype = struct.unpack_from('<I', inode_table, off)[0]
+    if itype == 0:
+        continue
+    crc = crc16(inode_table[off:off + INOFS_CRC])
+    struct.pack_into('<H', inode_table, off + INOFS_CRC, crc)
 
 # Build output: superblock + inode table + bitmap + data blocks
 output = bytearray()

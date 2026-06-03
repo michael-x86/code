@@ -598,6 +598,60 @@ fsdump_cmd:
     ret
 
 
+; -----------------------------------------------------------------------------
+; fsck_cmd — verify every inode's CRC and report corruption
+;
+; Walks the inode table, calling verify_inode on each. Free inodes carry
+; no checksum and are skipped by verify_inode. Reports each corrupt inode
+; number and a final tally, or "clean" if every inode verifies.
+; -----------------------------------------------------------------------------
+fsck_cmd:
+    pushad
+    call ensure_fs_ready
+    mov esi, fsck_hdr
+    call print
+    call newline
+
+    xor ebp, ebp                        ; inode number
+    xor edx, edx                        ; corrupt counter
+.loop:
+    cmp ebp, [sb_buf + SB_INODE_COUNT]
+    jae .done
+    mov ebx, ebp
+    call verify_inode                   ; al = 1 if corrupt
+    test al, al
+    jz .next
+    inc edx
+    push edx
+    mov esi, fsck_bad
+    call print
+    mov eax, ebp
+    call print_int_decimal
+    call newline
+    pop edx
+.next:
+    inc ebp
+    jmp .loop
+.done:
+    test edx, edx
+    jnz .summary
+    mov esi, fsck_clean
+    call print
+    call newline
+    popad
+    ret
+.summary:
+    mov esi, fsck_total
+    call print
+    mov eax, edx
+    call print_int_decimal
+    mov esi, fsck_total_suffix
+    call print
+    call newline
+    popad
+    ret
+
+
 section .rodata
 
 ; Magic bytes that peek_cmd reads from.
@@ -663,6 +717,13 @@ fsd_lbl_blks  db "  blocks:", 0
 fsd_type_file db "file", 0
 fsd_type_dir  db "dir ", 0
 
+; fsck (inode CRC verification) messages.
+fsck_hdr          db "fsck: verifying inode checksums...", 0
+fsck_bad          db "  CORRUPT inode ", 0
+fsck_clean        db "fsck: clean, no corruption detected", 0
+fsck_total        db "fsck: ", 0
+fsck_total_suffix db " corrupt inode(s) detected", 0
+
 
 ; -----------------------------------------------------------------------------
 ; cmd_table — null-terminated list of built-in commands
@@ -700,6 +761,8 @@ cmd_table:
     dd  sys_cmd
     db  "fsdump", 0
     dd  fsdump_cmd
+    db  "fsck", 0
+    dd  fsck_cmd
     db  "ls",    0
     dd  ls_cmd
     db  "cd",    0

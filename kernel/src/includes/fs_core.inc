@@ -240,6 +240,7 @@ load_inode:
 ; -----------------------------------------------------------------------------
 write_inode:
     pushad
+    call stamp_inode_crc                 ; refresh integrity checksum
     mov eax, ebx
     imul eax, INODE_SIZE
     mov ecx, eax
