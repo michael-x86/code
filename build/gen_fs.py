@@ -202,6 +202,13 @@ for vpath, kind, host in entries:
 # Write directory entries into data blocks
 dir_block_data = {}
 for dir_path, inum in path_to_inode.items():
+    # Only directory inodes own dir-entry blocks. Files are listed in
+    # path_to_inode too, but their data blocks hold file content and must
+    # NOT be registered here (otherwise the write loop below would clobber
+    # the file content with a zero-filled "directory" block).
+    inode_type = struct.unpack_from('<I', inode_table, inum * INODE_SIZE)[0]
+    if inode_type != 2:
+        continue
     offset = inum * INODE_SIZE + 12
     block_num = struct.unpack_from('<I', inode_table, offset)[0]
     if block_num == 0:
