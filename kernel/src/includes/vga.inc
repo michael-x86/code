@@ -287,4 +287,4 @@ shutdown:
 
 section .rodata
 
-sys_msg  db  "*** OMNI INDUSTRIES UNIFIED OPERATING SYSTEM ***", 0
+sys_msg  db  "ONO-SENDAI HosakaONE: ready.", 0
