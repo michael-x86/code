@@ -1,59 +1,552 @@
 ═══════════════════════════════════════════════════════════════
-                   32-BIT x86 ASSEMBLY CHEAT SHEET
+              32-BIT x86 ASSEMBLY CHEAT SHEET
+              ────────────────────────────────
+                michael-x86/code  (this OS)
+              NASM flat binary, no libc, no ELF
 ═══════════════════════════════════════════════════════════════
 
-── REGISTERS ──────────────────────────────────────────────────
+This project is a 32-bit x86 OS: BIOS → bootloader → 32-bit
+protected mode → paging → higher-half kernel → int 0x80
+syscalls → userland programs in /bin. All sources are NASM
+flat binaries, linked with `nasm -f bin`. The OS has 36
+syscalls, 16 built-in shell commands, and 25 userland
+programs in /bin/. This cheatsheet is the project-specific
+reference for writing kernel and userland code here.
 
-  32-bit    16-bit    8-bit (high/low)    Purpose
-  ─────────────────────────────────────────────────────
-  eax       ax        ah/al               Accumulator
-  ebx       bx        bh/bl               Base
-  ecx       cx        ch/cl               Counter
-  edx       dx        dh/dl               Data
-  esi       si        sil                 Source Index
-  edi       di        dil                 Dest Index
-  ebp       bp        bpl                 Base Pointer
-  esp       sp        spl                 Stack Pointer
+  Source layout
+  ─────────────
+  bootloader.asm                BIOS → 32-bit, GDT, paging off
+  kernel/  constants.inc        selectors, ports, syscall nums
+  kernel/  syscall.inc          int 0x80 dispatcher + handlers
+  kernel/  shell.inc            built-in shell command table
+  commands/  *.asm              userland programs (one .asm each)
+  build/  asm                   build script (the real one)
 
-  Segment: cs ds es fs gs ss
-  EIP = instruction pointer, EFLAGS = flags
+  Build & run
+  ───────────
+  ./asm                         build only
+  ./asm -r                      build + run in QEMU window
+  ./asm -f                      build + run fullscreen
+  ./asm -d                      build + GDB on :1234, halt at start
+  ./asm -h                      show help
+  ./asm -i                      build code search index (and exit)
 
-── CALLING CONVENTIONS ────────────────────────────────────────
 
-  cdecl (C default, 32-bit):
-    Args pushed right-to-left on stack
-    Caller cleans stack
-    Return: eax (edx:eax for 64-bit)
-    Caller-saved: eax, ecx, edx
-    Callee-saved: ebx, esi, edi, ebp
+═══════════════════════════════════════════════════════════════
+PART 1 ── THIS PROJECT'S REGISTERS AND ABI
+═══════════════════════════════════════════════════════════════
 
-  stdcall (Win32 API):
-    Args pushed right-to-left on stack
-    Callee cleans stack (ret N)
-    Return: eax
-    Same register rules as cdecl
+── REGISTERS (i386) ───────────────────────────────────────────
 
-  fastcall (MS):
-    First 2 args in ecx, edx → rest on stack
-    Callee cleans stack
-    Return: eax
+  32-bit    16-bit   8-bit     Role in this project
+  ──────────────────────────────────────────────────────────
+  eax       ax       ah/al     Syscall number (input) / return value
+                                 of every int 0x80 call. Also the
+                                 primary accumulator in arithmetic.
+  ebx       bx       bh/bl     Syscall arg 1. Holds file path
+                                 buffers, byte count for sys_write,
+                                 hex addr for sys_peek / sys_poke /
+                                 sys_read_mem / sys_write_mem.
+  ecx       cx       ch/cl     Syscall arg 2. Hold count for
+                                 sys_write / sys_print_n, byte value
+                                 for sys_poke / sys_write_mem, decimal
+                                 string for sys_asc2int result usage.
+  edx       dx       dh/dl     Syscall arg 3. Return high half of
+                                 mul/div (edx:eax). Used for I/O
+                                 port numbers in kernel PIO code.
+  esi       si       —         Syscall arg 4. Pointer to NUL-terminated
+                                 string for sys_print / sys_print_cr /
+                                 sys_chdir / sys_create / sys_unlink /
+                                 sys_mkdir / sys_rmdir / sys_write /
+                                 sys_stat / sys_print_n / sys_hex2int.
+  edi       di       —         Syscall arg 5. Destination buffer for
+                                 sys_getcwd / sys_list_dir / sys_get_arg
+                                 / sys_stat / sys_get_config / sys_itoa.
+  ebp       bp       —         Syscall arg 6 (rare). USERLAND: holds
+                                 the program's runtime base vaddr for
+                                 the entire run (see USERLAND BINARY
+                                 ABI below). KERNEL: frame pointer in
+                                 functions that use locals.
+  esp       sp       —         Stack pointer. Implicitly preserved
+                                 across syscalls. The kernel does NOT
+                                 push a return address for int 0x80;
+                                 the userland program does `ret` to
+                                 go back to exec_bin.
 
-  thiscall (MS C++):
-    this in ecx, args on stack
-    Callee cleans stack
+  Segment:   cs (code) ds/es/ss (data, flat)  fs/gs (unused)
+  EIP        next instruction
+  EFLAGS     flags (CF ZF SF OF PF AF DF IF …)
 
-  System calls (Linux int 0x80):
-    eax = syscall number
-    Args: ebx, ecx, edx, esi, edi, ebp
-    Return: eax
+  ── Register role in this kernel's handlers (syscall.inc) ──
+  Each syscall_isr pushes edi, esi, edx, ecx, ebx, ebp in that
+  order before calling the handler, and pops them back in the
+  reverse order before iretd. Handlers can therefore trash any
+  of the five arg registers freely. Handlers must NOT pop
+  eip/eipd — use iretd, not ret.
+
+  ── Register role in the userland loader (exec.inc) ──
+  exec_bin allocates a virtual range with find_free_virt, copies
+  the binary into it, then `call eax`s [exec_vbase]. On return
+  (`ret`), exec_bin recycles the pages and re-draws the prompt.
+
+
+── USERLAND BINARY ABI (every commands/*.asm follows this) ───
+
+  The kernel loader places each program at an ARBITRARY
+  virtual address. Programs must be position-independent.
+
+  Rule 1 — Anchor ebp on entry
+  ────────────────────────────
+  The first instruction of every program MUST be:
+
+      _start:
+          call .get_base
+      .get_base:
+          pop ebp
+          sub ebp, .get_base
+          ; … your code, ebp is now the program's load vaddr …
+
+  Mechanism:
+    1. `call .get_base` pushes the return address (the
+       absolute runtime address of the next instruction).
+    2. `pop ebp` pulls that address into ebp.
+    3. `sub ebp, .get_base` subtracts the file offset of
+       .get_base (always 5 in the standard pattern) so ebp
+       becomes the program's load address — not the return
+       address. .get_base is 5 bytes: e8 00 00 00 00.
+
+  After this prologue, ebp is the load vaddr for the whole
+  run. Treat it as read-only — never push, pop, or modify it.
+
+  Rule 2 — Use lea reg,[ebp + label] for every data reference
+  ─────────────────────────────────────────────────────────────
+  | FORBIDDEN                        | REQUIRED                       |
+  |----------------------------------|--------------------------------|
+  | mov esi, msg                     | lea esi, [ebp + msg]           |
+  | mov edi, buf                     | lea edi, [ebp + buf]           |
+  | mov al, [usage_msg]              | mov al, [ebp + usage_msg]      |
+  | mov [stat_buf], eax              | mov [ebp + stat_buf], eax      |
+  | cmp dword [info], 0              | cmp dword [ebp + info], 0      |
+
+  Numeric immediates are fine: `mov eax, 1`, `mov ecx, 26`.
+  Only label references need the indirection.
+
+  Rule 3 — Buffers in the file, not in section .bss
+  ──────────────────────────────────────────────────
+  The loader copies file_size bytes from disk into the first
+  mapped page and does NOT zero the rest. Anything in
+  `section .bss` lands in uninitialized memory (whatever the
+  page allocator last had in that frame) — not safe to use.
+
+  Use trailing `times N db 0` blocks in .text (or in
+  .rodata) instead:
+
+      align 4
+      arg_buf:  times 128 db 0   ; in-file zero buffer
+
+  Rule 4 — End with `ret`
+  ───────────────────────
+  `ret` returns control to exec_bin, which recycles the
+  pages and redraws the prompt. Don't `hlt` or `jmp $`.
+
+  Maximum program size: 4 KB (one page). The build script
+  rejects anything larger. If you need more working space,
+  call sys_alloc_pages (int 0x80 with eax=23, ecx=bytes) —
+  the returned vaddr is yours to keep for the duration of
+  the run and is freed automatically when you `ret`.
+
+
+── KERNEL SYSCALL ABI (int 0x80) ─────────────────────────────
+
+  Mechanism: trap gate at INT 0x80, DPL=3 (IDT_DPL3 = 0xEF).
+  Interrupts are OFF while a syscall handler runs.
+
+  Register contract
+  ─────────────────
+  eax = syscall number (input), return value (output)
+  ebx = arg 1   (file path / byte count / hex addr / char / …)
+  ecx = arg 2   (length / byte value / …)
+  edx = arg 3
+  esi = arg 4   (most often: pointer to NUL-term string)
+  edi = arg 5   (most often: pointer to destination buffer)
+  ebp = arg 6   (rare — used by a few FS calls)
+
+  Caller-saved across the syscall: eax (return value).
+  All other GPRs are preserved by every handler.
+
+  Bad syscall number (eax >= SYSCALL_COUNT = 36) returns -1.
+  Each handler returns -1 on its own failure path, 0 (or a
+  positive value) on success. There is no errno.
+
+  Calling sequence (NASM)
+  ───────────────────────
+      mov  ebx, 1              ; arg 1
+      mov  esi, msg_addr       ; arg 4
+      mov  eax, 1              ; sys_print
+      int  0x80
+      ; eax = 0 on success, -1 on failure
+
+
+── KERNEL MEMORY MAP (after paging) ──────────────────────────
+
+  0x00000000 + 0x00100000   0–1 MB   BIOS, VGA low alias (identity-mapped)
+  0x00100000 + 0x00400000   1–4 MB   kernel low alias
+  0x00400000                4 MB     kernel image (low copy, identity-mapped)
+  0x00800000                8 MB     heap region 0
+  0x00C00000               12 MB     heap region 1
+  0x01000000               16 MB     heap region 2 (allocator pool ends here)
+  0x000B8000               B8000     VGA text framebuffer (physical)
+
+  After paging, all kernel code uses the higher-half mirror:
+  0xC00B8000               VGA text framebuffer (use this)
+  0xC0100000               kernel image (entry / code / data / bss)
+  0xC0800000  … 0xC1400000  heap (12 MB, backed by three PDEs)
+                            (PDE 770..772; pages handed out page-on-demand)
+  0xC0000000  … 0xC0400000  low 4 MB mirror (VGA + boot handoff)
+
+  Bootloader: physical 0x7C00, runs in real mode first, then
+              16-bit protected mode with a temporary GDT,
+              then jumps to 32-bit kernel entry at 0xC0100000
+              (after copying the kernel to 0x00100000 first).
+
+  page_bitmap (32 KB in BSS) tracks ownership of 1 GB of 4 KB
+  physical frames. The userland loader hands out ranges from
+  heap_start (0xC0800000) upward via find_free_virt.
+
+  Source of truth: kernel/src/includes/constants.inc.
+
+
+═══════════════════════════════════════════════════════════════
+PART 2 ── THIS PROJECT'S SYSCALL TABLE (all 36)
+═══════════════════════════════════════════════════════════════
+
+  All entries:  int 0x80
+  Args:         ebx ecx edx esi edi
+  Return:       eax (0 / positive = ok, -1 = error)
+  Source:       kernel/src/includes/syscall.inc, constants.inc
+
+  ── I/O primitives (0–6) ───────────────────────────────────
+
+  0  putchar        ebx=char               0
+  1  print          esi=ptr (NUL-term)     0
+  2  print_cr       esi=ptr (CR=0x0D→nl)   0
+  3  newline        —                      0
+  4  cls            —                      0
+  5  print_hex      ebx=value              0
+  6  print_int      ebx=signed decimal     0
+
+  ── Input / time / shutdown (7–9) ──────────────────────────
+
+  7  get_key        —                      ASCII code (0 if buffer empty)
+  8  get_tick       —                      PIT tick count (100 Hz)
+  9  shutdown       —                      does not return
+
+  ── Raw memory + cwd (10–11) ───────────────────────────────
+
+  10 read_mem       ebx=address            dword at [ebx]
+  11 getcwd         edi=dst                0 (writes NUL-term path)
+
+  ── Filesystem (12–21) ─────────────────────────────────────
+
+  12 chdir          esi=path               0 / -1
+  13 list_dir       ebx=idx, edi=dst       type byte / -1 (writes basename)
+  14 get_arg        ebx=idx, edi=dst       0 / -1 (writes argv[i])
+  15 stat           esi=path, edi=info(12B) 0 / -1
+                   info layout: [type:4][size:4][reserved:4]
+                   type 0 = free, 1 = file, 2 = dir
+  16 print_n        esi=ptr, ecx=n         0   (LF→nl, CR→skip, TAB→space)
+  17 create         esi=path               0 / -1  (regular file)
+  18 write          esi=path, ebx=buf, ecx=n  0 / -1
+  19 unlink         esi=path               0 / -1  (regular file only)
+  20 mkdir          esi=path               0 / -1
+  21 rmdir          esi=path               0 / -1  (empty dir only)
+
+  ── Process / task info (22, 28) ───────────────────────────
+
+  22 get_ps_info    ebx=16-byte dst        0 / -1
+                   writes [0..3] = current_task (0/1/2)
+                         [4..7]  = task0_esp
+                         [8..11] = task1_esp
+                         [12..15]= task2_esp
+  28 get_proc_info  ebx=36-byte dst        0 / -1
+                   writes 36-byte record describing the current
+                   userland process: exec vbase, page count, name
+
+  ── Page-level heap (23, 24) ───────────────────────────────
+
+  23 alloc_pages    ecx=byte count         vaddr / -1
+                   (rounds up to next page; backs with one
+                    heap PDE worth of 4 KB frames)
+  24 free_pages     ebx=vaddr              0 / -1
+
+  ── Raw memory write (25) ──────────────────────────────────
+
+  25 write_mem      ebx=addr, ecx=byte     0
+                   writes a single byte to [ebx]
+
+  ── Parsing (26, 27) ───────────────────────────────────────
+
+  26 hex2int        esi=string             parsed value
+                   (optional 0x / 0X prefix, both cases)
+  27 asc2int        esi=decimal string     parsed value
+
+  ── Misc (29–31) ───────────────────────────────────────────
+
+  29 itoa           eax=value, edi=dst     edi advanced past NUL
+  30 get_config     ebx=key (0..3), edi=dst  0 / -1
+                   keys: 0=timezone, 1=datefmt, 2=timefmt, 3=layout
+                   writes NUL-term decimal string
+  31 stack_dump     —                      0 (prints regs + 8 dwords of stack)
+
+  ── Malloc-style heap (32, 33) ─────────────────────────────
+
+  32 alloc          ebx=page count         vaddr / -1
+                   (same idea as #23 but in pages, not bytes)
+  33 dealloc        ebx=vaddr              0 / -1
+
+  ── Single-byte raw memory (34, 35) ────────────────────────
+
+  34 peek           ebx=addr               byte at [ebx]
+  35 poke           ebx=addr, ecx=byte     0
+
+
+═══════════════════════════════════════════════════════════════
+PART 3 ── BUILT-IN SHELL COMMANDS (kernel-side, in cmd_table)
+═══════════════════════════════════════════════════════════════
+
+  Source: kernel/src/includes/commands.inc → cmd_table
+  These run in ring 0 (kernel mode). They are dispatched by
+  dispatch_command in shell.inc when argv[0] matches. If no
+  built-in matches, exec_bin looks up the name in /bin/.
+
+  Built-ins (in dispatch order)
+  ─────────────────────────────
+  peek         display 16 bytes at the 0xDEADBEEF magic.
+               (16 bytes, hex, space-separated)
+  regs         print saved register set via show_regs.
+               Shows eax ecx edx ebx esp ebp esi edi as
+               hex dwords, with a 4-byte label prefix.
+  stack        show_stack: top 8 dwords of the current stack.
+  clear        cls: clear VGA screen, home cursor.
+  quit         shutdown (alias for exit).
+  exit         shutdown (calls sys_shutdown equivalent).
+  help         print built-in help text via help_msg.
+  echo         print argv[1] followed by newline.
+  alloc        allocate heap pages.
+               argv[1] = decimal page count → find_free_virt +
+               alloc_page + map_page each. Prints "heap
+               pointer : 0xXXXXXXXX" on success.
+  free         release a previous allocation.
+               argv[1] = hex base vaddr; looked up in
+               alloc_table. Prints "memory released" or
+               "invalid allocation".
+  heap         walk alloc_table, print every live base
+               vaddr in 0xXXXXXXXX form, then total free
+               bytes via calc_free_heap.
+  sys          int 0x80 self-test: prints sys_peek_msg, then
+               sys_read_mem of the string pointer, then
+               sys_print_hex. If wired up, you'll see
+               "peek = 0x6B656570" (ASCII 'peek').
+  fsdump       dump FS superblock fields, then walk every
+               in-use inode and print its type/size/direct
+               block pointers. For directories, also prints
+               the child entries indented.
+  fsck         verify every in-use inode's CRC-16 with
+               verify_inode. Reports each corrupt inode
+               number and a final tally, or "fsck: clean".
+  ls           list cwd. Calls sys_list_dir (eax=13) with
+               incrementing index until it returns -1.
+               Appends '/' to directory entries.
+  cd           change directory.
+               argv[1] = path, or "cd" alone → "/root".
+               Calls sys_chdir; on failure prints
+               "cd: no such directory".
+
+  Notes
+  ─────
+  • All built-ins read arguments from the parser-populated
+    argv[] table, not from raw shell input.
+  • `ls` and `cd` are duplicated: they also exist in the
+    userland commands list (per the COMMANDS array in
+    build/asm), but the source files commands/ls.asm and
+    commands/cd.asm do not exist, so the build script
+    skips them and the kernel built-in is the one that runs.
+  • `help` is the kernel built-in. commands/help.asm is a
+    separate userland program with a different message.
+
+
+═══════════════════════════════════════════════════════════════
+PART 4 ── USERLAND PROGRAMS (compiled from commands/*.asm)
+═══════════════════════════════════════════════════════════════
+
+  Source:  commands/<name>.asm
+  Output:  build/bin/<name>
+  Limit:   64 KB (the build script rejects anything larger)
+  Loader:  exec_bin in kernel/src/includes/exec.inc
+  Returns to shell via `ret` (loader recycles the page).
+
+  The build is driven by the COMMANDS array in build/asm:
+
+      COMMANDS=(exit help env dump alloc dealloc poke peek
+                ps vi pwd ls cd ping cat touch write
+                rm rmdir mkdir cp mv calc invaders zork)
+
+  ── Userland programs at a glance ───────────────────────────
+
+  Program     Args                  Description
+  ──────      ────                  ───────────
+  exit        —                     sys_shutdown (eax=9)
+  help        —                     print the help banner
+                                     (commands/help.asm)
+  env         —                     print /etc/config values
+                                     via sys_get_config (eax=30)
+                                     keys 0..3 → timezone /
+                                     datefmt / timefmt / layout
+  dump        <hexaddr> <hexcount>  hex dump (16 bytes/line)
+                                     uses sys_hex2int (eax=26)
+                                     and sys_print_hex (eax=5)
+                                     directly via print_hex_dword
+  alloc       <pagecount>           sys_alloc_pages (eax=23)
+                                     prints base vaddr
+  dealloc     <hexaddr>             sys_free_pages (eax=24)
+  poke        <hexaddr> <hexbyte>   sys_write_mem (eax=25)
+                                     writes one byte
+  peek        <hexaddr>             sys_hex2int (eax=26) on
+                                     the string, then `int 0x80`
+                                     with the parsed byte (in
+                                     practice: read 1 byte)
+  ps          —                     sys_get_ps_info (eax=22)
+                                     + sys_get_proc_info (eax=28)
+                                     prints current task, per-task
+                                     ESPs, and current userland
+                                     process info
+  vi          <file>                modal editor
+                                     HJKL = move, i = insert,
+                                     x = delete, w = write, q = quit
+                                     reads via sys_stat / sys_print_n,
+                                     writes via sys_create / sys_write
+  pwd         —                     sys_getcwd (eax=11) + print
+  ping        —                     prints canned ping output
+                                     (no real ICMP — just smoke
+                                     test that print works)
+  cat         <file>                sys_get_arg → sys_stat
+                                     (must be a regular file) →
+                                     sys_print_n (eax=16)
+                                     renders \n as newline, \t
+                                     as space
+  touch       <file>                sys_get_arg → sys_create
+  write       <file> <text...>      join argv[2..] with spaces,
+                                     append \n, then sys_write
+                                     (eax=18)
+  rm          <file>                sys_stat (must be type 1) →
+                                     sys_unlink (eax=19)
+  rmdir       <dir>                 sys_stat (must be type 0) →
+                                     sys_rmdir (eax=21)
+  mkdir       <dir>                 sys_mkdir (eax=20)
+  cp          <src> <dst>           copy a regular file
+  mv          <src> <dst>           rename by copy + unlink
+  calc        <num1> <op> <num2>    simple 32-bit unsigned int
+                                     calculator, supports + - * / %
+                                     and combined form "2+2"
+                                     uses sys_asc2int (eax=27)
+                                     and sys_print_int (eax=6)
+  invaders    —                     Space Invaders in text-mode
+                                     VGA, A/D = move, Space = fire,
+                                     Q = quit
+  zork        —                     interactive fiction (~26 KB)
+  argtest     <args...>             print each arg on its own
+                                     line. NOT in the default
+                                     COMMANDS array — append
+                                     "argtest" to enable.
+
+  ── Typical program template (use this for new commands) ────
+
+      ; mycmd — one-line description
+      [bits 32]
+      [org 0x00000000]
+
+      _start:
+          call .get_base
+      .get_base:
+          pop ebp
+          sub ebp, .get_base
+
+          ; --- fetch argv[1] ---
+          mov ebx, 1
+          lea edi, [ebp + arg_buf]
+          mov eax, 14         ; sys_get_arg
+          int 0x80
+          cmp eax, -1
+          je .usage
+
+          ; --- do the work ---
+          ; (use lea reg,[ebp + label] for all data refs)
+
+          ret
+
+      usage_msg: db "usage: mycmd ...", 13, 0
+
+      ; --- in-file zero buffers, NOT section .bss ---
+      align 4
+      arg_buf: times 128 db 0
+
+  ── Common arg-fetch boilerplate ────────────────────────────
+
+      mov ebx, N                ; argv index (0 = program name)
+      lea edi, [ebp + arg_buf]  ; destination buffer
+      mov eax, 14               ; sys_get_arg
+      int 0x80
+      cmp eax, -1
+      je .no_arg                ; or .usage
+
+  ── Common path → "stat then act" pattern ───────────────────
+
+      lea esi, [ebp + path_buf]
+      lea edi, [ebp + stat_buf] ; 12 bytes
+      mov eax, 15               ; sys_stat
+      int 0x80
+      cmp eax, -1
+      je .not_found
+      cmp dword [ebp + stat_buf], TYPE    ; 0=dir, 1=file
+      jne .wrong_kind
+
+  ── Parsing a number (hex) ──────────────────────────────────
+
+      lea esi, [ebp + num_buf]
+      mov eax, 26               ; sys_hex2int
+      int 0x80
+      ; eax = parsed dword (accepts 0x prefix, both cases)
+
+  ── Parsing a number (decimal) ──────────────────────────────
+
+      lea esi, [ebp + num_buf]
+      mov eax, 27               ; sys_asc2int
+      int 0x80
+
+  ── Printing a hex dword ────────────────────────────────────
+
+      mov ebx, my_value
+      mov eax, 5                ; sys_print_hex
+      int 0x80
+
+  ── Printing a decimal dword ───────────────────────────────
+
+      mov ebx, my_value
+      mov eax, 6                ; sys_print_int
+      int 0x80
+
+
+═══════════════════════════════════════════════════════════════
+PART 5 ── x86 INSTRUCTION QUICK REFERENCE
+═══════════════════════════════════════════════════════════════
 
 ── DATA SIZES ─────────────────────────────────────────────────
 
-  byte    = 8 bits    (db)
-  word    = 16 bits   (dw)
-  dword   = 32 bits   (dd)
-  qword   = 64 bits   (dq, FPU only)
-  tword   = 80 bits   (dt, FPU only)
+  byte    = 8 bits    (db / resb)
+  word    = 16 bits   (dw / resw)
+  dword   = 32 bits   (dd / resd)
+  qword   = 64 bits   (dq / resq)
+  tword   = 80 bits   (dt / rest) — x87 only
 
 ── ADDRESSING MODES ──────────────────────────────────────────
 
@@ -61,7 +554,8 @@
   mov eax, [ebx + 4]          ; base + displacement
   mov eax, [ebx + ecx*4]      ; base + index*scale
   mov eax, [ebx + ecx*4 + 8]  ; base + index*scale + disp
-  mov eax, [label]            ; absolute address
+  mov eax, [label]            ; absolute address (kernel only)
+  lea esi, [ebp + msg]        ; address-of (preferred for label refs)
 
   Scale: 1, 2, 4, or 8
   Any 32-bit GPR can be base or index (except ESP as index)
@@ -73,14 +567,15 @@
   movsx dst, src              ; sign-extend
   lea   dst, [mem]            ; load effective address
   xchg  dst, src              ; swap
-  cmovcc dst, src             ; conditional move (Pentium Pro+)
+  cmovcc dst, src             ; conditional move (P6+)
   push  src                   ; push dword
   pop   dst                   ; pop dword
-  pushad                      ; push all 8 GPRs (28h bytes)
+  pushad                      ; push all 8 GPRs (32 bytes)
   popad                       ; pop all 8 GPRs
   pushfd                      ; push EFLAGS
   popfd                       ; pop EFLAGS
-  lds/les/lfs/lgs/lss         ; load far pointer (seg:offset)
+  movsb/movsw/movsd           ; [esi] → [edi] (b/w/d)
+  lds/les/lfs/lgs/lss         ; load far pointer (seg:off)
 
 ── ARITHMETIC ─────────────────────────────────────────────────
 
@@ -91,18 +586,16 @@
   inc   dst                   ; dst++
   dec   dst                   ; dst--
   neg   dst                   ; negate
-  cmp   op1, op2              ; compare (sets flags)
+  cmp   op1, op2              ; compare (sets flags only)
 
   mul   src                   ; unsigned: edx:eax = eax * src
   imul  src                   ; signed:   edx:eax = eax * src
   imul  dst, src              ; dst = dst * src
   imul  dst, src, imm         ; dst = src * imm
-
-  div   src                   ; unsigned: eax=quot, edx=rem (of edx:eax)
+  div   src                   ; unsigned: eax=quot, edx=rem
   idiv  src                   ; signed version
-  cdq                         ; sign-extend eax into edx:eax (before div)
-
-  aaa/aas/aam/aad             ; ASCII adjust (BCD arithmetic)
+  cdq                         ; sign-extend eax into edx:eax
+  aaa/aas/aam/aad             ; ASCII adjust (BCD)
   daa/das                     ; decimal adjust (packed BCD)
 
 ── LOGICAL / BITWISE ──────────────────────────────────────────
@@ -115,8 +608,8 @@
 
   shl   dst, count            ; shift left
   shr   dst, count            ; shift right (unsigned)
-  sar   dst, count            ; shift right (signed, arithmetic)
-  sal   dst, count            ; same as shl
+  sar   dst, count            ; shift right (signed)
+  sal   dst, count            ; alias of shl
   rol   dst, count            ; rotate left
   ror   dst, count            ; rotate right
   rcl   dst, count            ; rotate through carry left
@@ -133,39 +626,37 @@
 
 ── FLAGS (EFLAGS) ─────────────────────────────────────────────
 
-  CF  Carry       ZF  Zero       SF  Sign
-  OF  Overflow    PF  Parity     AF  Aux Carry
-  DF  Direction   TF  Trap       IF  Interrupt
-  NT  Nested Task RF  Resume     VM  Virtual 8086
-  AC  Alignment   VIF VIP        ID  CPUID
+  CF Carry    ZF Zero      SF Sign       OF Overflow
+  PF Parity   AF AuxCarry  DF Direction  IF Interrupt
+  TF Trap     NT NestedTask  RF Resume  VM V86
+  AC Alignment  VIF VIP    ID CPUID
 
   pushfd / popfd to read/write EFLAGS
 
 ── CONDITIONAL JUMPS ──────────────────────────────────────────
 
-  Mnemonic        Condition               After CMP A, B
+  Mnemonic       Condition               After CMP A, B
   ─────────────────────────────────────────────────────
-  je / jz         ZF=1                    A == B
-  jne / jnz       ZF=0                    A != B
-  jg / jnle       ZF=0 && SF=OF           A > B  (signed)
-  jge / jnl       SF=OF                   A >= B (signed)
-  ja / jnbe       CF=0 && ZF=0           A > B  (unsigned)
-  jae / jnb       CF=0                    A >= B (unsigned)
-  jl / jnge       SF!=OF                  A < B  (signed)
-  jle / jng       ZF=1 || SF!=OF          A <= B (signed)
-  jb / jnae       CF=1                    A < B  (unsigned)
-  jbe / jna       CF=1 || ZF=1            A <= B (unsigned)
-  jo              OF=1                    overflow
-  jno             OF=0                    no overflow
-  js              SF=1                    negative
-  jns             SF=0                    non-negative
-  jp / jpe        PF=1                    parity even
-  jnp / jpo       PF=0                    parity odd
-  jcxz            CX=0                    (16-bit)
-  jecxz           ECX=0                   (32-bit)
+  je / jz        ZF=1                    A == B
+  jne / jnz      ZF=0                    A != B
+  jg / jnle      ZF=0 && SF=OF           A > B  (signed)
+  jge / jnl      SF=OF                   A >= B (signed)
+  ja / jnbe      CF=0 && ZF=0            A > B  (unsigned)
+  jae / jnb      CF=0                    A >= B (unsigned)
+  jl / jnge      SF != OF                A < B  (signed)
+  jle / jng      ZF=1 || SF != OF        A <= B (signed)
+  jb / jnae      CF=1                    A < B  (unsigned)
+  jbe / jna      CF=1 || ZF=1            A <= B (unsigned)
+  jo             OF=1                    overflow
+  jno            OF=0                    no overflow
+  js             SF=1                    negative
+  jns            SF=0                    non-negative
+  jp / jpe       PF=1                    parity even
+  jnp / jpo      PF=0                    parity odd
+  jecxz          ECX=0                   (32-bit)
 
-  SETcc reg       ; set byte if condition true
-  CMOVcc dst, src ; conditional move (Pentium Pro+)
+  SETcc reg        ; set byte if condition true
+  CMOVcc dst, src  ; conditional move (P6+)
 
 ── CONTROL FLOW ───────────────────────────────────────────────
 
@@ -174,378 +665,67 @@
   call  target                ; push EIP, jump
   call  reg                   ; indirect call
   ret                         ; pop EIP
-  ret   N                     ; pop EIP, esp += N (stdcall)
-  int   0x80                  ; Linux syscall
+  ret   N                     ; pop EIP, esp += N
+  int   0x80                  ; syscall (this OS's main API)
   int   3                     ; debug breakpoint
   int   1                     ; single-step debug
   into                        ; interrupt on overflow
-  iret                        ; return from interrupt
+  iret / iretd                ; return from interrupt
   loop  target                ; dec ecx, jnz target
   loope/loopz                 ; loop while equal/zero
-  loopne/loopnz               ; loop while not equal/not zero
+  loopne/loopnz               ; loop while not equal
   enter N, 0                  ; stack frame setup
   leave                       ; mov esp, ebp; pop ebp
 
 ── STRING / BLOCK OPERATIONS ──────────────────────────────────
 
-  movsb/movsw/movsd           ; copy [esi] → [edi]
-  cmpsb/cmpsw/cmpsd           ; compare [esi] vs [edi]
-  scasb/scasw/scasd           ; scan al/ax/eax vs [edi]
-  lodsb/lodsd                 ; load [esi] → al/eax
-  stosb/stosd                 ; store al/eax → [edi]
+  movsb / movsw / movsd       ; copy [esi] → [edi]
+  cmpsb / cmpsw / cmpsd       ; compare [esi] vs [edi]
+  scasb / scasw / scasd       ; scan al/ax/eax vs [edi]
+  lodsb / lodsw / lodsd       ; load [esi] → al/ax/eax
+  stosb / stosw / stosd       ; store al/ax/eax → [edi]
 
   rep                         ; repeat ecx times
-  repe/repz                   ; repeat while equal
-  repne/repnz                 ; repeat while not equal
+  repe / repz                 ; repeat while equal
+  repne / repnz               ; repeat while not equal
 
   CLD (DF=0, forward) / STD (DF=1, backward)
 
-── SYSTEM CALLS (Linux 32-bit, int 0x80) ────────────────────
+── SEGMENTS & SELECTORS (this project) ───────────────────────
 
-  eax = syscall, args: ebx ecx edx esi edi ebp
+  Flat model. Bootloader installs a flat 4 GB GDT with code
+  at 0x08 (CODE_SEG) and data at 0x10 (DATA_SEG). All
+  data segments DS/ES/SS/FS/GS use 0x10. CS = 0x08 in
+  the kernel. RPL = 0 throughout (no userspace yet —
+  userland runs in ring 0 too, but uses the syscall
+  interface for privilege boundary).
 
-  1   sys_exit        2   sys_fork        3   sys_read
-  4   sys_write       5   sys_open        6   sys_close
-  7   sys_waitpid     8   sys_creat       9   sys_link
-  10  sys_unlink      11  sys_execve      12  sys_chdir
-  13  sys_time        14  sys_mknod       15  sys_chmod
-  19  sys_lseek       20  sys_getpid      33  sys_access
-  36  sys_sync        37  sys_kill        38  sys_rename
-  39  sys_mkdir       40  sys_rmdir       41  sys_dup
-  42  sys_pipe        43  sys_times       45  sys_brk
-  47  sys_getgid      48  sys_geteuid     49  sys_getegid
-  54  sys_ioctl       57  sys_setpgid     60  sys_umask
-  63  sys_dup2        64  sys_getppid     65  sys_getpgrp
-  77  sys_getrusage   78  sys_gettimeofday
-  82  sys_select      83  sys_symlink     85  sys_readlink
-  90  sys_mmap        91  sys_munmap      93  sys_ftruncate
-  94  sys_fchmod      99  sys_stat        102 sys_socketcall
-  104 sys_setitimer   106 sys_lstat       107 sys_fstat
-  116 sys_sysinfo     120 sys_clone       122 sys_uname
-  125 sys_mprotect    140 sys_llseek      141 sys_getdents
-  146 sys_futex       158 sys_sched_yield
-  162 sys_nanosleep   174 sys_rt_sigaction
-  175 sys_rt_sigprocmask  183 sys_getcwd
-  191 sys_getrlimit   192 sys_mmap2       195 sys_stat64
-  197 sys_fstat64     221 sys_getdents64
-  240 sys_futex       243 sys_set_thread_area
-  252 sys_exit_group  258 sys_set_tid_address
-  270 sys_tgkill      295 sys_openat
-  330 sys_pipe2
+  DPL 0 = kernel. IDT_DPL3 (0xEF) is the gate byte for
+  the INT 0x80 trap gate, letting userland (DPL=3) call
+  the syscall.
 
-  mmap2: ebx=addr, ecx=len, edx=prot, esi=flags,
-         edi=fd, ebp=offset (in 4096-byte pages)
+── PAGING (this project) ─────────────────────────────────────
 
-── FLOATING POINT (x87) ───────────────────────────────────────
+  4 KB pages, 32-bit two-level (PDE → PTE). Kernel paging
+  set up in kernel/src/includes/paging.inc:
 
-  ST(0) through ST(7) — 8-deep stack, 80-bit extended precision
+  - Identity-maps the first 4 MB (BIOS / VGA / boot handoff)
+  - Higher-half mirror at 0xC0000000+ for kernel use
+  - PTE flag = PAGE_PRESENT_RW = 3 (present + R/W, no user
+    bit — ring 0 only)
+  - Page-on-demand heap backed by PDE 770..772 (12 MB)
 
-  fld   mem32/64             ; push float/double
-  fld   st(i)                ; push existing register
-  fld1/fldz/fldpi/fldl2e     ; push constants
-  fst   mem/st(i)            ; store (no pop)
-  fstp  mem/st(i)            ; store and pop
-  fild  mem16/32/64          ; push integer as float
-  fist  mem16/32             ; store as integer (no pop)
-  fistp mem16/32/64          ; store as integer and pop
-  fisttp mem16/32/64         ; truncate to integer (SSE3)
-
-  fadd  / fsub  / fmul  / fdiv
-  faddp / fsubp / fmulp / fdivp    ; and pop
-  fadd  st(i), st(0)         ; st(i) += st(0)
-  fadd  st(0), st(i)         ; st(0) += st(i)
-  fsubr / fdivr              ; reversed operand subtract/divide
-
-  fsqrt  / fscale  / fpatan  / fprem  / fprem1
-  fsin   / fcos   / fsincos
-  fchs   / fabs   / ftst
-  fxch   st(i)               ; swap st(0) and st(i)
-  fcom   mem/st(i)           ; compare st(0) with operand
-  fcomp  mem/st(i)           ; compare and pop
-  fcompp                     ; compare st(0) with st(1), pop twice
-  fcomi  st(i)               ; compare, set CPU flags (P6+)
-  fcomip st(i)               ; compare, set flags, pop
-  fucomi st(i)               ; unordered compare (NaN-safe)
-  fucomip st(i)              ; unordered compare, pop
-  fstsw  ax                  ; store status word → AX
-  fnstsw ax                  ; same, no wait
-  fclex / fnclex             ; clear exceptions
-  fstenv / fnstenv           ; save environment
-  fldenv                     ; restore environment
-  fsave  / fnsave            ; save full state
-  frstor                     ; restore full state
-  finit / fninit             ; initialize FPU
-  ffreep st(i)               ; free register (undocumented)
-
-── SSE (128-bit XMM0-XMM7) ───────────────────────────────────
-
-  movss   xmm, xmm/mem32     ; scalar single load
-  movss   mem32, xmm         ; scalar single store
-  movsd   xmm, xmm/mem64     ; scalar double load
-  movaps  xmm, xmm/mem128    ; aligned packed single
-  movups  xmm, xmm/mem128    ; unaligned packed single
-  movdqa  xmm, xmm/mem128    ; aligned integer
-  movdqu  xmm, xmm/mem128    ; unaligned integer
-  movd    xmm, reg/mem32     ; dword to XMM
-  movq    xmm, reg/mem64     ; qword to XMM
-
-  addss/addps/addsd/addpd    ; add (scalar/packed, single/double)
-  subss/subps/subsd/subpd    ; subtract
-  mulss/mulsd/mulps/mulpd    ; multiply
-  divss/divps/divsd/divpd    ; divide
-  sqrtss/sqrtsd/sqrtps/sqrtpd ; square root
-  minss/minsd/minps/minpd    ; minimum
-  maxss/maxsd/maxps/maxpd    ; maximum
-  rcpss/rcpps                ; reciprocal
-  rsqrtss/rsqrtps            ; reciprocal sqrt
-
-  andps/andpd/andnps/andnpd  ; bitwise AND / ANDN
-  orps/orpd                  ; bitwise OR
-  xorps/xorpd                ; bitwise XOR
-
-  cmpss xmm, xmm/mem, imm8   ; compare scalar single
-  cmpsd xmm, xmm/mem, imm8   ; compare scalar double
-  cmpps xmm, xmm/mem, imm8   ; compare packed single
-  cmppd xmm, xmm/mem, imm8   ; compare packed double
-  ucomiss xmm, xmm/mem       ; unordered compare scalar single
-  ucomisd xmm, xmm/mem       ; unordered compare scalar double
-
-  cvtsi2ss xmm, reg/mem32    ; int32 → scalar float
-  cvtsi2sd xmm, reg/mem32    ; int32 → scalar double
-  cvtss2si reg, xmm/mem32    ; scalar float → int32
-  cvtsd2si reg, xmm/mem64    ; scalar double → int32
-  cvtss2sd xmm, xmm/mem32    ; single → double
-  cvtsd2ss xmm, xmm/mem64    ; double → single
-  cvtps2pd xmm, xmm/mem64    ; packed single → packed double
-  cvtpd2ps xmm, xmm/mem128   ; packed double → packed single
-  cvtdq2ps xmm, xmm/mem128   ; packed int32 → packed float
-  cvtps2dq xmm, xmm/mem128   ; packed float → packed int32
-  cvttps2dq xmm, xmm/mem128  ; truncate packed float → int32
-
-  unpcklps/unpckhps          ; interleave low/high singles
-  unpcklpd/unpckhpd          ; interleave low/high doubles
-  shufps xmm, xmm/mem, imm8   ; shuffle packed singles
-  shufpd xmm, xmm/mem, imm8   ; shuffle packed doubles
-  movhlps xmm, xmm           ; high 64 → low 64
-  movlhps xmm, xmm           ; low 64 → high 64
-  movmskps reg, xmm          ; extract sign bits (packed)
-  movmskpd reg, xmm          ; extract sign bits (packed)
-
-  pavgb/pavgw                ; packed average
-  pminub/pmaxub              ; packed min/max unsigned byte
-  pminsw/pmaxsw              ; packed min/max signed word
-  pmulhuw                    ; packed multiply high unsigned
-  pmaddwd                    ; packed multiply and add
-  psadbw                     ; packed sum of absolute differences
-  pshufw mm, mm/mem, imm8    ; shuffle packed words (MMX)
-  pshufd xmm, xmm/mem, imm8  ; shuffle packed dwords (SSE2)
-  pshuflw xmm, xmm/mem, imm8 ; shuffle low words
-  pshufhw xmm, xmm/mem, imm8 ; shuffle high words
-
-  ldmxcsr mem32              ; load MXCSR
-  stmxcsr mem32              ; store MXCSR
-  sfence                     ; store fence
-  lfence                     ; load fence
-  mfence                     ; memory fence
-
-── SSE2 INTEGER (XMM) ─────────────────────────────────────────
-
-  paddb/paddw/paddd/paddq    ; packed add
-  psubb/psubw/psubd/psubq    ; packed sub
-  paddsb/paddsw              ; packed add signed saturated
-  psubsb/psubsw              ; packed sub signed saturated
-  paddusb/paddusw            ; packed add unsigned saturated
-  psubusb/psubusw            ; packed sub unsigned saturated
-  pmullw/pmulhw/pmulhuw      ; packed multiply
-  pmuludq                    ; packed multiply unsigned dword
-  pand/por/pxor/pxor         ; bitwise
-  pandn                      ; AND NOT
-  pslldq xmm, imm8           ; byte shift left
-  psrldq xmm, imm8           ; byte shift right
-  pslld/psllw/psllq          ; bit shift left
-  psrad/psraw                ; arithmetic shift right
-  psrld/psrlw/psrlq          ; logical shift right
-  pcmpeqb/pcmpeqw/pcmpeqd   ; compare equal
-  pcmpgtb/pcmpgtw/pcmpgtd   ; compare greater than (signed)
-  packsswb/packssdw          ; pack with signed saturation
-  packuswb                   ; pack with unsigned saturation
-  punpcklbw/wd/dq            ; unpack low
-  punpckhbw/wd/dq            ; unpack high
-  movdqa/movdqu              ; aligned/unaligned move
-
-── SSE3 / SSSE3 / SSE4 ───────────────────────────────────────
-
-  SSE3:  addsubps/pd, haddps/pd, movsldup, movshdup,
-         movddup, fisttp, lddqu, monitor, mwait
-
-  SSSE3: pshufb, phaddw/d/sw, phsubw/d/sw, pmaddubsw,
-         pmulhrsw, psignb/w/d, pabsb/w/d, palignr
-
-  SSE4.1: pmovsxbd/bw/wd, pmovzxbd/bw/wd,
-          pmuldq, pmulld, dpps/dppd, blendps/pd/vps/vd,
-          roundps/ss/sd/pd, insertps, extractps,
-          pminsb/pmaxsb, pminuw/pmaxuw,
-          pminsd/pmaxsd, pminud/pmaxud,
-          ptest, phminposuw, mpsadbw, packusdw
-
-  SSE4.2: crc32, pcmpgtq, pcmpistrm, pcmpistri,
-          pcmpestrm, pcmpestri, popcnt
-
-── MMX (MM0-MM7, aliased to x87 ST) ─────────────────────────
-
-  movd mm, reg/mem32         ; dword to MMX
-  movq mm, mm/mem64          ; qword to MMX
-  packsswb/wd                ; pack with saturation
-  punpcklbw/hbw/lbw          ; unpack
-  paddb/w/d                  ; add
-  psubb/w/d                  ; sub
-  pmullw/pmulhw              ; multiply
-  pand/por/pxor/pandn        ; bitwise
-  pcmpeqb/w/d                ; compare equal
-  pcmpgtb/w/d                ; compare greater
-  psllw/d/q                  ; shift left
-  psrlw/d/q                  ; shift right
-  psraw/d                    ; arithmetic shift right
-  emms                       ; empty MMX state (REQUIRED before x87!)
-
-── COMMON PATTERNS ────────────────────────────────────────────
-
-  ; Function prologue (cdecl)
-      push ebp
-      mov  ebp, esp
-      sub  esp, N          ; N bytes of locals
-
-  ; Function epilogue
-      mov  esp, ebp
-      pop  ebp
-      ret
-
-  ; Function epilogue (stdcall, callee cleans args)
-      mov  esp, ebp
-      pop  ebp
-      ret  N              ; N = arg bytes to pop
-
-  ; Access stack args (cdecl, after prologue)
-      mov  eax, [ebp+8]    ; arg1
-      mov  eax, [ebp+12]   ; arg2
-      mov  eax, [ebp+16]   ; arg3
-
-  ; Local vars
-      mov  eax, [ebp-4]    ; local 1
-      mov  eax, [ebp-8]    ; local 2
-
-  ; Loop
-      xor  ecx, ecx        ; i = 0
-  .loop:
-      ; ... body ...
-      inc  ecx
-      cmp  ecx, N
-      jl   .loop
-
-  ; While loop
-  .top:
-      test eax, eax
-      jz   .done
-      ; ... body ...
-      jmp  .top
-  .done:
-
-  ; If / else
-      cmp  eax, ebx
-      jne  .else
-      ; ... if body ...
-      jmp  .endif
-  .else:
-      ; ... else body ...
-  .endif:
-
-  ; Switch (jump table)
-      cmp  eax, MAX_CASE
-      ja   .default
-      jmp  [jump_table + eax*4]
-  .case0: ...
-  .case1: ...
-
-  ; String length
-      mov  edi, str
-      xor  ecx, ecx
-      not  ecx             ; ecx = -1 (max count)
-      xor  al, al          ; search for null
-      repne scasb
-      not  ecx
-      dec  ecx             ; length in ecx
-
-  ; Memory copy
-      mov  esi, src
-      mov  edi, dst
-      mov  ecx, len
-      rep  movsb           ; copy ecx bytes
-
-  ; Struct member access
-      ; struct at [ebp+8], member offset 12
-      mov  eax, [ebp+8]    ; struct ptr
-      mov  ebx, [eax+12]   ; member
-
-  ; Min / Max
-      cmp  eax, ebx
-      jle  .no_swap
-      xchg eax, ebx
-  .no_swap:
-
-  ; Absolute value
-      cdq                  ; edx = sign mask of eax
-      xor  eax, edx
-      sub  eax, edx
-
-  ; Sign extend
-      movsx eax, byte [val]  ; byte → dword
-      movsx eax, word [val]  ; word → dword
-
-  ; Linux syscall (int 0x80)
-      mov  eax, 4           ; sys_write
-      mov  ebx, 1           ; fd = stdout
-      mov  ecx, msg         ; buffer
-      mov  edx, len         ; length
-      int  0x80
-
-  ; Linux exit
-      mov  eax, 1           ; sys_exit
-      xor  ebx, ebx         ; status 0
-      int  0x80
-
-── SEGMENTS & SELECTORS ───────────────────────────────────────
-
-  Real mode:  physical = segment * 16 + offset
-  Protected:  segment → descriptor table → base + limit
-  Flat model: cs/ds/es/fs/gs all base=0, limit=4GB
-
-  GDT entry: base(32), limit(20), access(8), flags(4)
-  LDT: local descriptor table per task
-  TSS: task state segment
-
-  Descriptor privilege: DPL 0 (kernel) .. 3 (user)
-  CPL = current privilege level (low 2 bits of CS)
-  RPL = requestor privilege level (low 2 bits of selector)
-
-── PROTECTED MODE CONCEPTS ───────────────────────────────────
-
-  CR0: PE (protected mode), PG (paging), WP (write protect)
-  CR3: page directory physical address (PDBR)
-  CR4: PAE, PSE, OSFXSR, OSXMMEXCPT
-
-  Paging (4KB pages):
-    32-bit linear → [PDE 10 bits][PTE 10 bits][offset 12 bits]
+  Layout:
+    [PDE 10][PTE 10][offset 12]
     PDE → page table base, PTE → physical page base
     PDE/PTE flags: P, R/W, U/S, PWT, PCD, A, D, PS
 
-  PAE (36-bit physical):
-    3-level: [PDPTE 2][PDE 9][PTE 9][offset 12]
-    4KB pages, 64-bit PDE/PTE with NX bit
+  CR0: PE (protected), PG (paging), ET, WP, AM, …
+  CR2: faulting linear address (on #PF)
+  CR3: page directory physical address (PDBR)
+  CR4: PSE, PAE, MCE, OSFXSR, OSXMMEXCPT
 
-  PSE (4MB pages):
-    PDE.PS=1 → single 4MB page, no PTE
-
-── INTERRUPTS & EXCEPTIONS ───────────────────────────────────
+── INTERRUPTS & EXCEPTIONS (this project) ───────────────────
 
   Vector  Exception              Error Code?
   ──────────────────────────────────────────
@@ -558,7 +738,6 @@
   6     #UD  Invalid opcode      No
   7     #NM  Device not avail    No
   8     #DF  Double fault        Yes (0)
-  9     Coprocessor overrun      No
   10    #TS  Invalid TSS         Yes
   11    #NP  Segment not present Yes
   12    #SS  Stack fault         Yes
@@ -578,32 +757,329 @@
 
   CR2 = faulting linear address (on #PF)
 
-── BCD / DECIMAL ──────────────────────────────────────────────
+  Hardware IRQs in this project:
+    IRQ0 (INT 0x20)  PIT 100 Hz — scheduler tick
+    IRQ1 (INT 0x21)  Keyboard — feeds ring buffer + shell
+    IRQ14 (INT 0x2E) Primary IDE — ATA PIO done (if used)
+    INT 0x80         Syscall gate (DPL=3)
 
-  daa     ; adjust AL after add (packed BCD)
-  das     ; adjust AL after sub (packed BCD)
-  aaa     ; adjust AL after add (unpacked BCD)
-  aas     ; adjust AL after sub (unpacked BCD)
-  aam     ; adjust AX after multiply (unpacked BCD)
-  aad     ; adjust AX before divide (unpacked BCD)
+── FLOATING POINT (x87) ───────────────────────────────────────
 
-── UNDOCUMENTED / OBSCURE ─────────────────────────────────────
+  ST(0)–ST(7) — 8-deep stack, 80-bit extended precision
 
-  salc    ; set AL if carry (undocumented, not 64-bit)
-  ud2     ; guaranteed invalid opcode (official)
-  icebp   ; ICE breakpoint (undocumented, 1 byte)
-  loadall ; load all CPU state (286/386 only)
-  smi     ; system management interrupt (not an instruction)
+  fld   mem32/64             ; push float/double
+  fld   st(i)                ; push existing register
+  fld1/fldz/fldpi/fldl2e     ; push constants
+  fst   mem/st(i)            ; store (no pop)
+  fstp  mem/st(i)            ; store and pop
+  fild  mem16/32/64          ; push integer as float
+  fist  mem16/32             ; store as integer (no pop)
+  fistp mem16/32/64          ; store as integer and pop
+  fisttp mem16/32/64         ; truncate to integer (SSE3)
+
+  fadd / fsub / fmul / fdiv
+  faddp / fsubp / fmulp / fdivp  ; and pop
+  fadd st(i), st(0)         ; st(i) += st(0)
+  fsubr / fdivr              ; reversed operand
+  fsqrt / fscale / fpatan / fprem / fprem1
+  fsin / fcos / fsincos
+  fchs / fabs / ftst
+  fxch st(i)                ; swap st(0) and st(i)
+  fcom mem/st(i)            ; compare st(0) with operand
+  fcomp mem/st(i)           ; compare and pop
+  fcompp                    ; compare st(0) with st(1), pop twice
+  fcomi st(i)               ; compare, set CPU flags (P6+)
+  fcomip st(i)              ; compare, set flags, pop
+  fucomi st(i)              ; unordered compare (NaN-safe)
+  fucomip st(i)             ; unordered compare, pop
+  fstsw ax                  ; store status word → AX
+  fnstsw ax                 ; same, no wait
+  fclex / fnclex            ; clear exceptions
+  fstenv / fnstenv          ; save environment
+  fldenv                    ; restore environment
+  fsave / fnsave            ; save full state
+  frstor                    ; restore full state
+  finit / fninit            ; initialize FPU
+
+── SSE (128-bit XMM0–XMM7) ───────────────────────────────────
+
+  movss xmm, xmm/mem32       ; scalar single load
+  movss mem32, xmm           ; scalar single store
+  movsd xmm, xmm/mem64       ; scalar double load
+  movaps xmm, xmm/mem128     ; aligned packed single
+  movups xmm, xmm/mem128     ; unaligned packed single
+  movdqa xmm, xmm/mem128     ; aligned integer
+  movdqu xmm, xmm/mem128     ; unaligned integer
+  movd  xmm, reg/mem32       ; dword to XMM
+  movq  xmm, reg/mem64       ; qword to XMM
+
+  addss/addps/addsd/addpd    ; add (scalar/packed, single/double)
+  subss/subps/subsd/subpd    ; subtract
+  mulss/mulsd/mulps/mulpd    ; multiply
+  divss/divps/divsd/divpd    ; divide
+  sqrtss/sqrtsd/sqrtps/sqrtpd ; square root
+  minss/minsd/minps/minpd    ; minimum
+  maxss/maxsd/maxps/maxpd    ; maximum
+  rcpss/rcpps                ; reciprocal
+  rsqrtss/rsqrtps            ; reciprocal sqrt
+
+  andps/andpd/andnps/andnpd  ; bitwise AND / ANDN
+  orps/orpd                  ; bitwise OR
+  xorps/xorpd                ; bitwise XOR (use to zero a reg)
+
+  cmpss/cmpsd/cmpps/cmppd xmm, xmm/mem, imm8
+  ucomiss/ucomisd xmm, xmm/mem
+  cvtsi2ss/cvtsi2sd xmm, reg/mem32
+  cvtss2si/cvtsd2si reg, xmm/mem
+  cvtss2sd/cvtsd2ss xmm, xmm/mem
+  cvtps2pd/cvtpd2ps xmm, xmm/mem
+  cvtdq2ps/cvtps2dq/cvttps2dq xmm, xmm/mem
+
+  unpcklps/unpckhps          ; interleave low/high singles
+  unpcklpd/unpckhpd          ; interleave low/high doubles
+  shufps/shufpd xmm, xmm/mem, imm8
+  movhlps/movlhps xmm, xmm
+  movmskps/movmskpd reg, xmm
+
+  pavgb/pavgw
+  pminub/pmaxub/pminsw/pmaxsw
+  pmulhuw/pmaddwd/psadbw
+  pshufw mm, mm/mem, imm8
+  pshufd xmm, xmm/mem, imm8
+  pshuflw/pshufhw xmm, xmm/mem, imm8
+
+  ldmxcsr mem32 / stmxcsr mem32
+  sfence / lfence / mfence
+
+── SSE2 INTEGER (XMM) ─────────────────────────────────────────
+
+  paddb/paddw/paddd/paddq    ; packed add
+  psubb/psubw/psubd/psubq    ; packed sub
+  paddsb/paddsw              ; packed add signed saturated
+  psubsb/psubsw              ; packed sub signed saturated
+  paddusb/paddusw            ; packed add unsigned saturated
+  psubusb/psubusw            ; packed sub unsigned saturated
+  pmullw/pmulhw/pmulhuw      ; packed multiply
+  pmuludq                    ; packed multiply unsigned dword
+  pand/por/pxor              ; bitwise
+  pandn                      ; AND NOT
+  pslldq xmm, imm8           ; byte shift left
+  psrldq xmm, imm8           ; byte shift right
+  pslld/psllw/psllq          ; bit shift left
+  psrad/psraw                ; arithmetic shift right
+  psrld/psrlw/psrlq          ; logical shift right
+  pcmpeqb/pcmpeqw/pcmpeqd   ; compare equal
+  pcmpgtb/pcmpgtw/pcmpgtd   ; compare greater than (signed)
+  packsswb/packssdw          ; pack with signed saturation
+  packuswb                   ; pack with unsigned saturation
+  punpcklbw/wd/dq            ; unpack low
+  punpckhbw/wd/dq            ; unpack high
+  movdqa/movdqu              ; aligned/unaligned move
+
+── SSE3 / SSSE3 / SSE4 ───────────────────────────────────────
+
+  SSE3:   addsubps/pd, haddps/pd, movsldup, movshdup,
+          movddup, fisttp, lddqu, monitor, mwait
+  SSSE3:  pshufb, phaddw/d/sw, phsubw/d/sw, pmaddubsw,
+          pmulhrsw, psignb/w/d, pabsb/w/d, palignr
+  SSE4.1: pmovsxbd/bw/wd, pmovzxbd/bw/wd, pmuldq, pmulld,
+          dpps/dppd, blendps/pd/vps/vd, roundps/ss/sd/pd,
+          insertps, extractps, pminsb/pmaxsb, pminuw/pmaxuw,
+          pminsd/pmaxsd, pminud/pmaxud, ptest, phminposuw,
+          mpsadbw, packusdw
+  SSE4.2: crc32, pcmpgtq, pcmpistrm, pcmpistri, pcmpestrm,
+          pcmpestri, popcnt
+
+── MMX (MM0–MM7, aliased to x87 ST) ─────────────────────────
+
+  movd mm, reg/mem32         ; dword to MMX
+  movq mm, mm/mem64          ; qword to MMX
+  packsswb/wd                ; pack with saturation
+  punpcklbw/hbw/lbw          ; unpack
+  paddb/w/d                  ; add
+  psubb/w/d                  ; sub
+  pmullw/pmulhw              ; multiply
+  pand/por/pxor/pandn        ; bitwise
+  pcmpeqb/w/d                ; compare equal
+  pcmpgtb/w/d                ; compare greater
+  psllw/d/q                  ; shift left
+  psrlw/d/q                  ; shift right
+  psraw/d                    ; arithmetic shift right
+  emms                       ; empty MMX state (REQUIRED before x87!)
+
+
+═══════════════════════════════════════════════════════════════
+PART 6 ── COMMON PATTERNS (this project)
+═══════════════════════════════════════════════════════════════
+
+── USERLAND PROGRAM LIFECYCLE ───────────────────────────────
+
+  exec_bin (kernel/src/includes/exec.inc) does roughly:
+
+      find_free_virt       ; pick a free page-aligned vaddr
+      map all 4 KB pages   ; identity-map from that range
+      ; copy file_size bytes from disk to the new vaddr
+      mov eax, [exec_vbase]
+      call eax             ; run _start
+      ; on ret, free_pages(exec_vbase), re-prompt
+
+  Implications for your program:
+  • You only get 4 KB. If you need more, call sys_alloc_pages
+    at run time (eax=23) and the loader does NOT free that —
+    the kernel reclaims everything when you ret.
+  • Your data must be in-file. Section .bss is unsafe.
+  • You have no argc/argv in the conventional sense. Use
+    sys_get_arg (eax=14) to read individual arguments, and
+    sys_get_arg with ebx=0 to get your own program name.
+  • You do not get a stack segment — there's no separate
+    user stack. Calls in userland share the kernel's stack
+    while exec_bin is on it. Keep your call depth small.
+
+── KERNEL FUNCTION PROLOGUE / EPILOGUE ──────────────────────
+
+      push ebp
+      mov  ebp, esp
+      sub  esp, N          ; N bytes of locals
+      ; … body …
+      mov  esp, ebp
+      pop  ebp
+      ret
+
+  Access stack args (cdecl, after prologue):
+      mov  eax, [ebp+8]    ; arg1 (return address is at [ebp+4])
+      mov  eax, [ebp+12]   ; arg2
+  Local vars:
+      mov  eax, [ebp-4]    ; local 1
+      mov  eax, [ebp-8]    ; local 2
+
+── LOOP / BRANCH / SWITCH PATTERNS ──────────────────────────
+
+  Loop (i = 0; i < N; i++):
+      xor  ecx, ecx
+  .loop:
+      ; … body …
+      inc  ecx
+      cmp  ecx, N
+      jl   .loop
+
+  While loop:
+  .top:
+      test eax, eax
+      jz   .done
+      ; … body …
+      jmp  .top
+  .done:
+
+  If / else:
+      cmp  eax, ebx
+      jne  .else
+      ; … if body …
+      jmp  .endif
+  .else:
+      ; … else body …
+  .endif:
+
+  Switch (jump table):
+      cmp  eax, MAX_CASE
+      ja   .default
+      jmp  [jump_table + eax*4]
+  .case0: …
+  .case1: …
+
+  Min / Max:
+      cmp  eax, ebx
+      jle  .no_swap
+      xchg eax, ebx
+  .no_swap:
+
+  Absolute value:
+      cdq                  ; edx = sign mask of eax
+      xor  eax, edx
+      sub  eax, edx
+
+  Sign extend:
+      movsx eax, byte [val]  ; byte → dword
+      movsx eax, word [val]  ; word → dword
+
+  String length:
+      mov  edi, str
+      xor  ecx, ecx
+      not  ecx             ; ecx = -1
+      xor  al, al
+      repne scasb
+      not  ecx
+      dec  ecx             ; length in ecx
+
+  Memory copy:
+      mov  esi, src
+      mov  edi, dst
+      mov  ecx, len
+      rep  movsb
+
+  Struct member access:
+      mov  eax, [ebp+8]    ; struct ptr
+      mov  ebx, [eax+12]   ; member at offset 12
+
+── ZERO / PUSH-POP IDIOMS ──────────────────────────────────
+
+  Zero a register:
+      xor  eax, eax        ; preferred (3 bytes, no dependency)
+      ; or: and eax, 0
+      ; or: sub eax, eax
+
+  Save/restore all GPRs:
+      pushad                ; 4 bytes
+      ; … body …
+      popad                 ; 4 bytes
+
+  Read-modify-write EFLAGS:
+      pushfd
+      ; … modifies flags via cli / sti / etc. …
+      popfd
+
+
+═══════════════════════════════════════════════════════════════
+PART 7 ── NASM REFERENCE (used by this project)
+═══════════════════════════════════════════════════════════════
+
+── NASM DIRECTIVES ───────────────────────────────────────────
+
+  section .text / .data / .bss / .rodata
+  global _start
+  db / dw / dd / dq / dt
+  resb / resw / resd / resq / rest    ; reserve (bss)
+  equ  NAME, value
+  %define MACRO val
+  %macro name argc
+  %endmacro
+  %if / %elif / %else / %endif
+  %rep N / %endrep
+  %include "file"
+  times N db 0
+  align N / alignb N
+  incbin "file"
+  __BITS__                     ; 16, 32, or 64
+
+  ── Conventions used in this project ──
+  • Kernel uses [org 0xC0100000]; bootloader uses [org 0x7C00].
+  • Userland programs use [org 0x00000000] (eip is recomputed
+    at run time via the ebp-base ABI — see Part 1).
+  • `[bits 32]` is the first line of every kernel and userland
+    file. The bootloader uses [bits 16] in real mode and
+    `[bits 32]` after entering protected mode.
+  • Macros: PRINT_STRING pushes esi, calls print, pops esi.
+    PRINT_STRING_CR does the same with print_cr. Use them in
+    kernel-side built-in commands.
 
 ── OPCODES QUICK REFERENCE ────────────────────────────────────
 
   90       nop
   90       xchg eax, eax (same thing)
-  0F 05    syscall (not 32-bit, but 64-bit)
+  0F 05    syscall (not 32-bit — 64-bit only)
   0F 34    sysenter
   0F 35    sysexit
   CC       int 3
-  CD 80    int 0x80
+  CD 80    int 0x80             ; ← this OS's syscall entry
   CF       iret
   F4       hlt
   FA       cli
@@ -618,44 +1094,15 @@
   0F 31    rdtsc
   0F 32    rdmsr
   0F 01    group: sgdt/sidt/smsw/lgdt/lidt/lmsw/invlpg/lldt/lstr
-
-── NASM DIRECTIVES ───────────────────────────────────────────
-
-  section .text / .data / .bss
-  global _start
-  extern printf
-  db / dw / dd / dq / dt
-  resb / resw / resd / resq    ; reserve (bss)
-  equ  NAME, value
-  %define MACRO val
-  %macro name argc
-  %endmacro
-  %if / %elif / %else / %endif
-  %rep N / %endrep
-  %include "file"
-  times N db 0
-  align N
-  incbin "file"
-  __?BITS__?                   ; 16, 32, or 64
-
-── GAS (AT&T) SYNTAX ─────────────────────────────────────────
-
-  .text / .data / .bss
-  .globl _start
-  .byte / .word / .long / .quad / .ascii / .asciz
-  .equ / .set
-  .macro name / .endm
-  .rept N / .endr
-  .align N
-  .space N, val
-  .incbin "file"
-  .code16 / .code32 / .code64
-
-  AT&T: movl $42, %eax       ; src, dst (opposite of Intel!)
-  AT&T: movl (%ebx), %eax    ; () instead of []
-  AT&T: movl 8(%ebx,%ecx,4), %eax  ; disp(base, index, scale)
-  AT&T: movl $label, %eax    ; immediate = address
-  AT&T: movl label, %eax     ; memory = contents
+  E8 rel32 call near
+  E9 rel32 jmp near
+  EB rel8  jmp short
+  0F 84/85 jz / jnz near
+  74/75    jz / jnz short
+  0F 8x    conditional near jumps (jg, jl, ja, jb, …)
+  7x       conditional short jumps
+  C3       ret
+  C2 xx xx ret N
 
 ── CONDITION FLAGS QUICK REF ──────────────────────────────────
 
