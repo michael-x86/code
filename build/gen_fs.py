@@ -29,6 +29,10 @@ INODE_COUNT   = 256
 INODE_TABLE_LBA = 2
 FS_MAGIC      = 0xEF53
 INOFS_CRC     = 126      # word: CRC-16 of inode bytes [0, INOFS_CRC)
+INOFS_SIND    = 60       # dword: single-indirect block pointer
+DIRECT_COUNT  = 12       # direct block pointers per inode
+PTRS_PER_BLOCK = BLOCK_SIZE // 4            # 1024 pointers per indirect block
+MAX_FILE_BLOCKS = DIRECT_COUNT + PTRS_PER_BLOCK
 
 
 # CRC-16/CCITT (poly 0x1021, init 0xFFFF, MSB-first) — must match ecc.inc.
@@ -172,6 +176,9 @@ def make_dirent(inode_num, name, file_type):
 # Track directory entries: (block_num, name, child_inode, file_type)
 dir_entries = []
 
+# Single-indirect pointer blocks: block_num -> 4 KB packed pointer table.
+indirect_block_data = {}
+
 def add_dir_entry(dir_inode, name, child_inode, file_type):
     offset = dir_inode * INODE_SIZE + 12
     block_num = struct.unpack_from('<I', inode_table, offset)[0]
@@ -213,9 +220,25 @@ for vpath, kind, host in entries:
         blocks_needed = (sz + BLOCK_SIZE - 1) // BLOCK_SIZE
         if blocks_needed == 0:
             blocks_needed = 1
-        for b in range(min(blocks_needed, 12)):
+        if blocks_needed > MAX_FILE_BLOCKS:
+            raise RuntimeError(
+                f"{vpath}: {sz} bytes needs {blocks_needed} blocks, "
+                f"exceeds single-indirect limit of {MAX_FILE_BLOCKS}")
+        # Direct blocks (0..DIRECT-1).
+        for b in range(min(blocks_needed, DIRECT_COUNT)):
             block_num = alloc_block()
             set_inode_block(inum, b, block_num)
+        # Single-indirect blocks (DIRECT..) live in a pointer block.
+        if blocks_needed > DIRECT_COUNT:
+            ind_block = alloc_block()
+            struct.pack_into('<I', inode_table, inum * INODE_SIZE + INOFS_SIND,
+                             ind_block)
+            ptr_table = bytearray(BLOCK_SIZE)
+            for b in range(DIRECT_COUNT, blocks_needed):
+                data_block = alloc_block()
+                struct.pack_into('<I', ptr_table, (b - DIRECT_COUNT) * 4,
+                                 data_block)
+            indirect_block_data[ind_block] = ptr_table
         path_to_inode[vpath] = inum
         file_type = 2 if kind == "exec" else 1
         add_dir_entry(parent_inum, name, inum, file_type)
@@ -304,14 +327,26 @@ for vpath, kind, host in entries:
         blocks_needed = (sz + BLOCK_SIZE - 1) // BLOCK_SIZE
         if blocks_needed == 0:
             blocks_needed = 1
-        for bi in range(min(blocks_needed, 12)):
+        # Direct blocks.
+        for bi in range(min(blocks_needed, DIRECT_COUNT)):
             offset = inum * INODE_SIZE + 12 + bi * 4
             bn = struct.unpack_from('<I', inode_table, offset)[0]
             file_block_map[bn] = (host, bi * BLOCK_SIZE)
+        # Single-indirect blocks: read pointers from the indirect table.
+        if blocks_needed > DIRECT_COUNT:
+            ind_block = struct.unpack_from(
+                '<I', inode_table, inum * INODE_SIZE + INOFS_SIND)[0]
+            ptr_table = indirect_block_data[ind_block]
+            for bi in range(DIRECT_COUNT, blocks_needed):
+                bn = struct.unpack_from('<I', ptr_table,
+                                        (bi - DIRECT_COUNT) * 4)[0]
+                file_block_map[bn] = (host, bi * BLOCK_SIZE)
 
 for bnum in range(1, next_block):
     if bnum in dir_block_data:
         output += dir_block_data[bnum]
+    elif bnum in indirect_block_data:
+        output += indirect_block_data[bnum]
     elif bnum in file_block_map:
         host, offset = file_block_map[bnum]
         with open(host, 'rb') as f:

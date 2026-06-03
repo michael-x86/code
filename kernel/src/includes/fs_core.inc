@@ -324,6 +324,7 @@ ialloc:
 ; -----------------------------------------------------------------------------
 ifree:
     pushad
+    mov ebp, ebx                         ; preserve inode number across bfree
     call load_inode
     mov ecx, 12
     lea esi, [inode_buf + INOFS_DIRECT]
@@ -345,15 +346,35 @@ ifree:
     mov eax, [inode_buf + INOFS_SIND]
     test eax, eax
     jz .no_sind
+    ; Read the full indirect block, then free every data block it names.
     push eax
-    mov ecx, 1
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
+    mov ecx, BLOCK_SECTORS
     mov edi, indirect_buf
     call ata_read
-    pop eax
+    xor ecx, ecx
+.free_ind:
+    cmp ecx, PTRS_PER_BLOCK
+    jae .free_ind_done
+    mov eax, [indirect_buf + ecx * 4]
+    test eax, eax
+    jz .free_ind_next
+    push ecx
+    mov ebx, eax
+    call bfree
+    pop ecx
+.free_ind_next:
+    inc ecx
+    jmp .free_ind
+.free_ind_done:
+    pop eax                              ; the indirect block itself
     mov ebx, eax
     call bfree
     mov dword [inode_buf + INOFS_SIND], 0
 .no_sind:
+    mov ebx, ebp                         ; restore inode number for write_inode
     mov dword [inode_buf + INOFS_TYPE], INODE_FREE
     mov dword [inode_buf + INOFS_SIZE], 0
     call write_inode
@@ -614,6 +635,176 @@ dir_add_entry:
     ret
 
 
+; --- Block mapping (direct + single-indirect) --------------------------------
+;
+; A file's logical blocks 0..INODE_DIRECT_COUNT-1 are named by the inode's
+; direct pointers. Logical blocks INODE_DIRECT_COUNT..MAX_FILE_BLOCKS-1 are
+; named by the single-indirect block, a data block holding PTRS_PER_BLOCK
+; block numbers. bmap_get resolves a logical block to a physical one (read
+; path); bmap_alloc does the same but allocates missing blocks (write path).
+
+; -----------------------------------------------------------------------------
+; fs_zero_block — overwrite a physical data block with zeros on disk
+;   in:  eax = physical block number
+;   preserves: all registers
+;
+; Uses file_block_buf as scratch. file_write re-reads the block right
+; after allocating it, so clobbering the buffer here is harmless.
+; -----------------------------------------------------------------------------
+fs_zero_block:
+    pushad
+    mov ebp, eax                         ; physical block number
+    mov edi, file_block_buf
+    mov ecx, BLOCK_SIZE / 4
+    xor eax, eax
+    cld
+    rep stosd
+    mov eax, ebp
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
+    mov ecx, BLOCK_SECTORS
+    mov esi, file_block_buf
+    call ata_write
+    popad
+    ret
+
+
+; -----------------------------------------------------------------------------
+; bmap_get — map a logical file block index to a physical block number
+;   in:  eax = logical block index, inode_buf already loaded
+;   out: eax = physical block number, 0 if the block is unmapped (a hole)
+;   preserves: ebx, ecx, edx, esi, edi, ebp
+; -----------------------------------------------------------------------------
+bmap_get:
+    cmp eax, INODE_DIRECT_COUNT
+    jb .direct
+    sub eax, INODE_DIRECT_COUNT
+    cmp eax, PTRS_PER_BLOCK
+    jae .hole                            ; beyond single-indirect range
+    push ebx
+    push ecx
+    push edx
+    push edi
+    mov edx, eax                         ; index within the indirect block
+    mov eax, [inode_buf + INOFS_SIND]
+    test eax, eax
+    jz .hole_pop
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
+    mov ecx, BLOCK_SECTORS
+    mov edi, indirect_buf
+    call ata_read
+    mov eax, [indirect_buf + edx * 4]
+    pop edi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+.hole_pop:
+    pop edi
+    pop edx
+    pop ecx
+    pop ebx
+.hole:
+    xor eax, eax
+    ret
+.direct:
+    mov eax, [inode_buf + INOFS_DIRECT + eax * 4]
+    ret
+
+
+; -----------------------------------------------------------------------------
+; bmap_alloc — like bmap_get, but allocate the data block (and the
+;              single-indirect block, if needed) when it is not yet mapped
+;   in:  eax = logical block index, ebx = inode number, inode_buf loaded
+;   out: eax = physical block number, -1 on allocation failure
+;   preserves: ebx, ebp   (clobbers eax, ecx, edx, esi, edi)
+;
+; Newly allocated data blocks are zero-filled on disk so a sparse write
+; never exposes stale contents. The inode and the indirect block are
+; written through immediately, matching the FS's crash-safe policy.
+; -----------------------------------------------------------------------------
+bmap_alloc:
+    push eax                             ; save logical index
+    call bmap_get
+    test eax, eax
+    jz .need
+    add esp, 4                           ; already mapped — discard saved index
+    ret
+.need:
+    pop eax                              ; eax = logical block index
+    cmp eax, INODE_DIRECT_COUNT
+    jb .direct
+
+    ; --- Single-indirect slot --------------------------------------------
+    sub eax, INODE_DIRECT_COUNT
+    mov [bmap_slot], eax
+
+    ; Allocate and zero the data block.
+    call balloc
+    cmp eax, -1
+    je .fail
+    mov [bmap_data], eax
+    call fs_zero_block
+
+    ; Make sure the inode owns a single-indirect block.
+    mov eax, [inode_buf + INOFS_SIND]
+    test eax, eax
+    jnz .load_ind
+    call balloc
+    cmp eax, -1
+    je .fail
+    mov [inode_buf + INOFS_SIND], eax
+    call write_inode
+    ; Brand-new indirect block: start from an all-zero pointer table.
+    mov edi, indirect_buf
+    mov ecx, BLOCK_SIZE / 4
+    xor eax, eax
+    cld
+    rep stosd
+    jmp .ind_ready
+.load_ind:
+    ; Read the existing pointer table into indirect_buf.
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
+    mov ecx, BLOCK_SECTORS
+    mov edi, indirect_buf
+    call ata_read
+.ind_ready:
+    mov ecx, [bmap_slot]
+    mov eax, [bmap_data]
+    mov [indirect_buf + ecx * 4], eax    ; link data block into the table
+    mov eax, [inode_buf + INOFS_SIND]
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
+    mov ecx, BLOCK_SECTORS
+    mov esi, indirect_buf
+    call ata_write
+    mov eax, [bmap_data]
+    ret
+
+.direct:
+    mov [bmap_slot], eax
+    call balloc
+    cmp eax, -1
+    je .fail
+    mov [bmap_data], eax
+    call fs_zero_block
+    mov ecx, [bmap_slot]
+    mov eax, [bmap_data]
+    mov [inode_buf + INOFS_DIRECT + ecx * 4], eax
+    call write_inode
+    mov eax, [bmap_data]
+    ret
+.fail:
+    mov eax, -1
+    ret
+
+
 ; --- File read ---------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
@@ -625,8 +816,8 @@ dir_add_entry:
 ; that the caller has already mapped (we just memcpy from the per-block
 ; cache into it). The implementation is a per-block loop: load the
 ; block, copy the relevant slice, advance. We clamp the read to the
-; file size and stop at the 12th direct block (indirect blocks aren't
-; implemented here).
+; file size and resolve each logical block through bmap_get, so direct
+; and single-indirect blocks are both handled.
 ; -----------------------------------------------------------------------------
 file_read:
     pushad
@@ -648,9 +839,10 @@ file_read:
     je .read_done
     mov eax, [file_offset]
     shr eax, 12                          ; block index
-    cmp eax, 12
+    cmp eax, MAX_FILE_BLOCKS
     jae .read_done
-    mov ecx, [inode_buf + INOFS_DIRECT + eax * 4]
+    call bmap_get                        ; eax = physical block (0 = hole)
+    mov ecx, eax
     test ecx, ecx
     jz .read_done
 
@@ -719,61 +911,25 @@ file_write:
     je .wr_done
     mov eax, [file_offset]
     shr eax, 12
-    cmp eax, 12
+    cmp eax, MAX_FILE_BLOCKS
     jae .wr_done
 
-    mov ecx, [inode_buf + INOFS_DIRECT + eax * 4]
-    test ecx, ecx
-    jnz .wr_block_ok
-
-    ; --- Allocate a new block and link it into the inode ------------------
-    call balloc
+    ; Map the logical block to a physical one, allocating the data block
+    ; (and the single-indirect block, if needed) on the fly. edx holds
+    ; the physical block across the read-modify-write below.
+    call bmap_alloc
     cmp eax, -1
     je .wr_err
-    mov ecx, [file_offset]
-    shr ecx, 12
-    push ebx
-    call load_inode
-    pop ebx
-    mov [inode_buf + INOFS_DIRECT + ecx * 4], eax
-    call write_inode
-    ; Zero the new block in file_block_buf and write it to disk.
-    push ebx
-    push ecx
-    mov edi, file_block_buf
-    mov ecx, BLOCK_SIZE / 4
-    xor eax, eax
-    cld
-    rep stosd
-    pop ecx
-    pop ebx
-    mov ecx, [inode_buf + INOFS_DIRECT + ecx * 4]
-    push ebx
-    mov ebx, ecx
-    shl ecx, 3
-    add ecx, [sb_buf + SB_DATA_LBA]
-    add ecx, [fs_base_lba]
-    mov eax, ecx
-    mov ecx, BLOCK_SECTORS
-    mov esi, file_block_buf
-    call ata_write
-    pop ebx
+    mov edx, eax
 
-.wr_block_ok:
-    ; Read the existing block (might be a freshly-zeroed one).
-    mov eax, [file_offset]
-    shr eax, 12
-    mov ecx, [inode_buf + INOFS_DIRECT + eax * 4]
-    push ebx
-    mov ebx, ecx
-    shl ecx, 3
-    add ecx, [sb_buf + SB_DATA_LBA]
-    add ecx, [fs_base_lba]
-    mov eax, ecx
+    ; Read the existing block (freshly-zeroed if just allocated).
+    mov eax, edx
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
     mov ecx, BLOCK_SECTORS
     mov edi, file_block_buf
     call ata_read
-    pop ebx
 
     mov eax, [file_offset]
     and eax, 0xFFF
@@ -794,21 +950,15 @@ file_write:
     pop edi
     pop esi
     ; Write the modified block back.
-    push ebx
     push ecx
-    mov eax, [file_offset]
-    shr eax, 12
-    mov ecx, [inode_buf + INOFS_DIRECT + eax * 4]
-    mov ebx, ecx
-    shl ecx, 3
-    add ecx, [sb_buf + SB_DATA_LBA]
-    add ecx, [fs_base_lba]
-    mov eax, ecx
+    mov eax, edx
+    shl eax, 3
+    add eax, [sb_buf + SB_DATA_LBA]
+    add eax, [fs_base_lba]
     mov ecx, BLOCK_SECTORS
     mov esi, file_block_buf
     call ata_write
     pop ecx
-    pop ebx
     add ebp, ecx
     add [file_offset], ecx
     sub [file_bytes_left], ecx
