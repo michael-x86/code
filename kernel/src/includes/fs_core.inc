@@ -674,10 +674,12 @@ file_read:
 .rd_copy:
     push esi
     push edi
+    push ecx                             ; preserve the copy count: rep movsb
     lea esi, [file_block_buf + eax]
     mov edi, ebp
     cld
     rep movsb
+    pop ecx                              ; ...zeroes ecx, so restore it here
     pop edi
     pop esi
     add ebp, ecx
@@ -782,10 +784,12 @@ file_write:
 .wr_copy:
     push esi
     push edi
+    push ecx                             ; preserve the copy count: rep movsb
     lea edi, [file_block_buf + eax]
     mov esi, ebp
     cld
     rep movsb
+    pop ecx                              ; ...zeroes ecx, so restore it here
     pop edi
     pop esi
     ; Write the modified block back.
