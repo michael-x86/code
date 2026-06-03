@@ -71,6 +71,7 @@ kernel_phys_end_var    dd  0
 ; argv[0] for diagnostics.
 exec_vbase   dd  0
 exec_pages   dd  0
+exec_inode   dd  0
 exec_name    times 32 db 0
 
 

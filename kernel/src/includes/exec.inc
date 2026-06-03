@@ -68,42 +68,25 @@ exec_bin:
     jne .nf
 
     ; --- Determine the file size from its inode --------------------------
-    ; eax = inode number (preserved across load_inode). The binary is
-    ; read directly into the mapped region below, so it may span many
-    ; pages instead of being capped at a single block.
-    mov ebx, [inode_buf + INOFS_SIZE]    ; ebx = file size in bytes
-    test ebx, ebx
+    ; eax = inode number (preserved across load_inode). We stash it so the
+    ; binary can be read straight into the mapped region after we map it,
+    ; which lets a binary span many pages instead of one block.
+    mov [exec_inode], eax
+    mov ecx, [inode_buf + INOFS_SIZE]    ; ecx = file size in bytes
+    test ecx, ecx
     jz .nf                               ; empty file: nothing to run
 
     ; --- Find a free virtual range ---------------------------------------
-    mov ecx, ebx
     add ecx, 4095
-    shr ecx, 12                          ; round up to a page
-    push eax                             ; save inode number
-    push ebx                             ; save byte count
-    push ecx                             ; save page count
-    call find_free_virt
-    pop ecx
-    pop ebx
-    pop eax
+    shr ecx, 12                          ; round up to whole pages
+    call find_free_virt                  ; eax = vbase (ecx preserved)
     jc .oom
 
     mov [exec_vbase], eax
     mov [exec_pages], ecx
 
-    pushad                               ; DEBUG
-    call print_hex_dword                 ; eax = vbase
-    mov al, 'P'
-    call putchar
-    mov eax, ecx
-    call print_hex_dword                 ; page count
-    call newline
-    popad
-
     ; --- Allocate and map one page at a time ----------------------------
-    push eax                             ; save inode number
-    push ebx                             ; save byte count
-    mov edi, [exec_vbase]
+    mov edi, eax                         ; edi = running virtual address
 .map_loop:
     test ecx, ecx
     jz .map_done
@@ -126,11 +109,11 @@ exec_bin:
     dec ecx
     jmp .map_loop
 .map_done:
-    pop ecx                              ; byte count
-    pop ebx                              ; inode number
 
     ; --- Read the binary straight into the mapped region -----------------
+    mov ebx, [exec_inode]                ; ebx = inode number
     mov edi, [exec_vbase]
+    mov ecx, [inode_buf + INOFS_SIZE]    ; ecx = byte count
     xor edx, edx                         ; offset 0
     call file_read                       ; ebx=inode, edi=dest, ecx=count
     cmp eax, -1
@@ -197,8 +180,7 @@ exec_bin:
 
 .oom_mapped:
     ; We partially mapped before the failure — free what we did map.
-    pop ebx
-    pop esi
+    ; The stack is balanced at every jump site here, so nothing to pop.
     mov eax, [exec_vbase]
     mov ebx, [exec_pages]
     sub ebx, ecx

@@ -2,6 +2,7 @@
 
 # Final disk image
 os.img
+boot.img
 
 # Generated filesystem include
 fs.inc
@@ -46,5 +47,4 @@ build/*.img
 .github/ai-context/
 build/*.png
 build/*.ppm
-build/boot.img
-build/boot.img
+
