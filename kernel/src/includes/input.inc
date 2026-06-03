@@ -1,0 +1,124 @@
+; =============================================================================
+; input.inc — keyboard scancode → ASCII translation, keymap tables
+; =============================================================================
+;
+; PS/2 scancode set 1 produces byte values 0x00..0x7F on key press
+;-- (top bit set = key release). IRQ1 pushes the raw scancode into
+;-- kbd_buf; get_key pops one and translates it via the active keymap.
+;
+; Keymaps are 256-byte tables indexed by scancode. Two slots for each
+;-- layout: normal and shift-held. The current /etc/config parser
+;-- swaps the active pointers at boot.
+;
+; The shell's task 2 also recognizes the extended scancodes for the
+;-- arrow keys (0x48 up, 0x50 down) directly off the raw byte — those
+;-- are not characters, they are history-navigation commands. That
+;-- special-casing is in get_key below.
+; =============================================================================
+
+
+section .text
+
+
+; -----------------------------------------------------------------------------
+; get_key — pop one key from kbd_buf and translate to ASCII
+;--   out: al = ASCII character (0 if the buffer is empty)
+;--
+;-- Returns 0 both for "no key waiting" and for "we already handled this
+;-- key internally" (history navigation). The shell's task 2 calls this
+;-- in a loop and treats 0 as "nothing to do".
+; -----------------------------------------------------------------------------
+get_key:
+    mov eax, [kbd_tail]
+    cmp eax, [kbd_head]
+    je .empty
+    mov bl, [kbd_buf + eax]
+    inc eax
+    and eax, KBD_BUF_SIZE - 1
+    mov [kbd_tail], eax
+    mov al, bl
+    test al, al
+    jz .empty
+
+    ; Arrow keys: history navigation (consume the key, return 0).
+    cmp al, 0x48                        ; up arrow
+    jne .check_down
+    call hist_back
+    xor al, al
+    ret
+.check_down:
+    cmp al, 0x50                        ; down arrow
+    jne .translate
+    call hist_frwd
+    xor al, al
+    ret
+.translate:
+    cmp al, 128
+    jae .invalid
+    movzx eax, al
+    cmp byte [kbd_shift], 0
+    jne .shifted
+.normal:
+    mov ebx, [keymap_active]
+    mov al, [ebx + eax]
+    ret
+.shifted:
+    mov ebx, [keymap_shift_active]
+    mov al, [ebx + eax]
+    ret
+.empty:
+    xor al, al
+    ret
+.invalid:
+    mov al, '?'                          ; printable placeholder
+    ret
+
+
+section .rodata
+
+
+; -----------------------------------------------------------------------------
+; US keymap (PS/2 scancode set 1 → ASCII)
+;-- Unhandled scancodes produce 0; get_key's .invalid path replaces 0
+;-- (when it's the high-bit-clear case) with '?'. The 0x3B pad fills the
+;-- gap between the main block (0x00..0x3A) and the right-hand cluster.
+; -----------------------------------------------------------------------------
+keymap:
+    db  0, 27, '1','2','3','4','5','6','7','8'
+    db  '9','0','-','=',  8,  9
+    db  'q','w','e','r','t','y','u','i'
+    db  'o','p','[',']', 13,  0
+    db  'a','s','d','f','g','h','j','k'
+    db  'l',';', 39, '`',  0,'\\'
+    db  'z','x','c','v','b','n','m'
+    db  ',','.','/',  0, '*',  0, ' '
+    times 0x3B - ($ - keymap) db 0
+    db  '<'
+    times 256 - ($ - keymap) db 0
+
+
+; -----------------------------------------------------------------------------
+; US shift keymap
+; -----------------------------------------------------------------------------
+keymap_shift:
+    db  0, 27, '!','@','#','$','%','^','&','*'
+    db  '(',')','_','+',  8,  9
+    db  'Q','W','E','R','T','Y','U','I'
+    db  'O','P','{','}', 13,  0
+    db  'A','S','D','F','G','H','J','K'
+    db  'L',':','"','~',  0, '|'
+    db  'Z','X','C','V','B','N','M'
+    db  '<','>','?',  0, '*',  0, ' '
+    times 0x3B - ($ - keymap_shift) db 0
+    db  '<'
+    times 256 - ($ - keymap_shift) db 0
+
+
+; -----------------------------------------------------------------------------
+; Swedish keymap — see table.inc for the per-scancode tables
+; (keymap_se_normal / keymap_se_shift). They live in their own file so
+; each entry can be on its own `db` line with the scancode in a comment;
+; that makes the "one byte per scancode" constraint visually obvious
+; and prevents accidental shifts from UTF-8 multi-byte literals.
+; -----------------------------------------------------------------------------
+%include "table.inc"

@@ -6,12 +6,12 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 BOOT_ASM="${PROJECT_DIR}/kernel/bootloader.asm"
-KERNEL_ASM="${PROJECT_DIR}/kernel/kernel.asm"
-KERNEL_INC_DIR="${PROJECT_DIR}/kernel"
+KERNEL_ASM="${PROJECT_DIR}/kernel/src/kernel.asm"
+KERNEL_INC_DIR="${PROJECT_DIR}/kernel/src/includes"
 IMG="${BUILD_DIR}/os.img"
 
 # Programs to compile
-COMMANDS=(exit help dump alloc dealloc poke peek
+COMMANDS=(exit help env dump alloc dealloc poke peek
           ps vi pwd ls cd ping cat touch write
           rm rmdir mkdir cp mv calc invaders)
 
@@ -85,7 +85,7 @@ cd "$BUILD_DIR"
 python3 gen_fs.py "$BUILD_DIR" fs.bin | sed 's/^/  /'
 
 echo "[3/6] Assembling kernel..."
-nasm -f bin "$KERNEL_ASM" -o "${BUILD_DIR}/kernel.bin" -I "${KERNEL_INC_DIR}/"
+nasm -f bin "$KERNEL_ASM" -o "${BUILD_DIR}/kernel.bin" -I "${KERNEL_INC_DIR}/" -w-label-redef-late
 
 KERNEL_SIZE=$(stat -c%s "${BUILD_DIR}/kernel.bin")
 KERNEL_SECTORS=$(((KERNEL_SIZE + 511) / 512))
@@ -123,17 +123,24 @@ rm -f "${BUILD_DIR}/kernel.bin" "${BUILD_DIR}/bootloader.bin"
 rm -f "${BUILD_DIR}/fs.bin"
 
 if [[ "$RUN_QEMU" == true ]]; then
+    # Boot disk on primary master (ide.0, unit=0), FS disk on primary slave
+    # (ide.0, unit=1) — matches the bootloader's handoff at [0x500..0x50C],
+    # which sets fs_ata_base=0x1F0 and fs_ata_drive=0xF0 (primary slave).
+    # Both disks on the same controller means index=0/1 with if=ide works
+    # correctly here (QEMU assigns them as master/slave on the same bus).
+    #NEW ARGS (explicit bus assignment, secondary controller):
     #QEMU_ARGS=(
-    #    -drive format=raw,file="$BOOT_IMG",index=0,if=ide
-    #    -drive format=raw,file="$FS_IMG",index=1,if=ide
+    #    -drive id=boot,format=raw,file="$BOOT_IMG",if=none
+    #    -drive id=fs,format=raw,file="$FS_IMG",if=none
+    #    -device ide-hd,bus=ide.0,drive=boot,unit=0
+    #    -device ide-hd,bus=ide.1,drive=fs,unit=0
     #    -device isa-debug-exit,iobase=0xf4,iosize=0x04
     #    -m 128
     #)
+    #OLD ARGS (master/slave on primary controller — matches bootloader):
     QEMU_ARGS=(
-        -drive id=boot,format=raw,file="$BOOT_IMG",if=none
-        -drive id=fs,format=raw,file="$FS_IMG",if=none
-        -device ide-hd,bus=ide.0,drive=boot,unit=0
-        -device ide-hd,bus=ide.1,drive=fs,unit=0
+        -drive format=raw,file="$BOOT_IMG",index=0,if=ide
+        -drive format=raw,file="$FS_IMG",index=1,if=ide
         -device isa-debug-exit,iobase=0xf4,iosize=0x04
         -m 128
     )

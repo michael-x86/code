@@ -931,3 +931,143 @@ sys_get_config:                          ; 30: ebx = key, edi = dst -> eax = 0/-
 .bad:
     mov eax, -1
     ret
+
+; =============================================================================
+; Reference-compat syscalls (added to match the michael-x86/code reference set)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; sys_stack_dump — print register dump and 8 dwords from the syscall stack
+;   in:  none
+;   out: eax = 0
+; -----------------------------------------------------------------------------
+sys_stack_dump:                          ; 31
+    call show_regs
+    pushad
+    call newline
+    mov ecx, 8
+    mov edi, esp
+.sd_loop:
+    mov eax, [edi]
+    call print_hex_dword
+    call newline
+    add edi, 4
+    dec ecx
+    jnz .sd_loop
+    popad
+    xor eax, eax
+    ret
+
+; -----------------------------------------------------------------------------
+; sys_alloc — allocate N pages and map them RW
+;   in:  ebx = page count
+;   out: eax = vaddr on success, -1 on failure
+;
+;   Reference-style ABI: takes page count (not byte count).  Functionally
+;   equivalent to sys_alloc_pages with a page-unit argument.
+; -----------------------------------------------------------------------------
+sys_alloc:                               ; 32: ebx = page count -> eax = vaddr / -1
+    mov ecx, ebx
+    test ecx, ecx
+    jz .alloc_bad
+    push ecx
+    call find_free_virt
+    pop ecx
+    jc .alloc_bad
+    mov edi, eax                 ; allocation base
+    mov edx, eax                 ; running vaddr
+.alloc_loop:
+    test ecx, ecx
+    jz .alloc_done
+    push edx
+    push ecx
+    call alloc_page
+    pop ecx
+    pop edx
+    jc .alloc_failed
+    mov ebx, eax                 ; phys
+    mov eax, edx                 ; virt
+    push edx
+    push ecx
+    mov ecx, 3                   ; present | rw
+    call map_page
+    pop ecx
+    pop edx
+    jc .alloc_failed
+    add edx, 4096
+    dec ecx
+    jmp .alloc_loop
+.alloc_done:
+    mov eax, edi
+    mov ebx, edx
+    sub ebx, edi
+    shr ebx, 12                 ; page count
+    call register_allocation
+    xor eax, eax
+    ret
+.alloc_failed:
+    mov eax, edi                ; base
+    mov ebx, edx                ; running vaddr
+    sub ebx, edi
+    shr ebx, 12                 ; pages actually mapped so far
+    test ebx, ebx
+    jz .alloc_bad
+    push ecx
+    call free_pages
+    pop ecx
+.alloc_bad:
+    mov eax, -1
+    ret
+
+; -----------------------------------------------------------------------------
+; sys_dealloc — free a previous allocation by its base vaddr
+;   in:  ebx = vaddr (base of a sys_alloc/sys_alloc_pages allocation)
+;   out: eax = 0 on success, -1 if vaddr not in alloc_table
+; -----------------------------------------------------------------------------
+sys_dealloc:                             ; 33: ebx = vaddr -> 0 / -1
+    push esi
+    push ecx
+    push ebx
+    mov esi, alloc_table
+    mov ecx, alloc_table_count
+.de_search:
+    cmp [esi], ebx
+    je .de_found
+    add esi, 8
+    loop .de_search
+    pop ebx
+    pop ecx
+    pop esi
+    mov eax, -1
+    ret
+.de_found:
+    mov ebx, [esi + 4]
+    push eax
+    call free_pages
+    pop eax
+    mov dword [esi], 0
+    mov dword [esi + 4], 0
+    pop ebx
+    pop ecx
+    pop esi
+    xor eax, eax
+    ret
+
+; -----------------------------------------------------------------------------
+; sys_peek — read one byte from an arbitrary address
+;   in:  ebx = address
+;   out: eax = byte at [ebx] (zero-extended)
+; -----------------------------------------------------------------------------
+sys_peek:                                ; 34: ebx = addr -> eax = byte
+    movzx eax, byte [ebx]
+    ret
+
+; -----------------------------------------------------------------------------
+; sys_poke — write one byte to an arbitrary address
+;   in:  ebx = address, ecx = byte value
+;   out: eax = 0
+; -----------------------------------------------------------------------------
+sys_poke:                                ; 35: ebx = addr, ecx = byte -> 0
+    mov byte [ebx], cl
+    xor eax, eax
+    ret

@@ -30,6 +30,7 @@ msg:
     db "  vi        simple text editor", 13
     db "  write     write text to file", 13
     db "  exit      shutdown system", 13
+    db "  env       show applied /etc/config values", 13
     db "  help      show this help", 13
     db "  dump      hex dump of memory region", 13
     db "  alloc     allocate heap pages", 13

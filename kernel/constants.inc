@@ -157,7 +157,12 @@ IDT_DPL3             equ 11101111b    ; syscall trap gate: DPL=3, preserves IF
 %assign SYSCALL_GET_PROC_INFO 28
 %assign SYSCALL_ITOA          29
 %assign SYSCALL_GET_CONFIG    30
-SYSCALL_COUNT        equ 31
+%assign SYSCALL_STACK_DUMP    31
+%assign SYSCALL_ALLOC         32
+%assign SYSCALL_DEALLOC       33
+%assign SYSCALL_PEEK          34
+%assign SYSCALL_POKE          35
+SYSCALL_COUNT        equ 36
 
 ; --- FS entry structure offsets -----------------------------------------------
 FS_NAME_LEN          equ 56

@@ -56,3 +56,9 @@ scripts/
 build/code-index/
 Elite (video game) - Wikipedia.pdf
 build/*.img
+
+# ── AI session handoffs (local-only, regenerated each session) ───────────
+.github/ai-context/
+build/*.png
+build/*.ppm
+kernel/src/mono_kernel.asm

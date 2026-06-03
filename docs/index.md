@@ -11,6 +11,7 @@ the PIT, and provides a shell with an in-kernel filesystem.
 - [System Calls](syscalls.md) — full int 0x80 reference
 - [Filesystem](filesystem.md) — virtual FS layout, persistence, limits
 - [Userland](userland.md) — writing and adding programs
+- [ABI Contract](abi-contract.md) — position-independent binary rules
 - [Debugging](debugging.md) — GDB, QEMU monitor, troubleshooting
 - [Contributing](contributing.md) — code style, PR process
 

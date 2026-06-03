@@ -55,6 +55,8 @@ Include reproduction steps, test thoroughly, document root cause in PR.
 
 ### New Commands
 - Create commands/<name>.asm following the userland template
+- **Read [docs/abi-contract.md](abi-contract.md) first** — every program
+  must be position-independent
 - Add to COMMANDS=() in the build script
 - 4 KB size limit
 - Only use int 0x80 for kernel interaction

@@ -1,28 +1,35 @@
 ; cat - print file contents.  usage:  cat <path>
+;
+; ABI contract: see pwd.asm header.
 [bits 32]
-[org 0x00000000]            ; Base is relative to whatever exec_bin allocates
+[org 0x00000000]
 
 
 _start:
+    call .get_base
+.get_base:
+    pop ebp
+    sub ebp, .get_base
+
     mov ebx, 1
-    mov edi, arg
+    lea edi, [ebp + arg]
     mov eax, 14              ; sys_get_arg
     int 0x80
     cmp eax, -1
     je .usage
 
-    mov esi, arg
-    mov edi, info
+    lea esi, [ebp + arg]
+    lea edi, [ebp + info]
     mov eax, 15              ; sys_stat -> info: dword type, data, size
     int 0x80
     cmp eax, -1
     je .nf
 
-    cmp dword [info], 0      ; type 0 = directory
+    cmp dword [ebp + info], 0      ; type 0 = directory
     je .isdir
 
-    mov esi, [info+4]
-    mov ecx, [info+8]
+    mov esi, [ebp + info + 4]
+    mov ecx, [ebp + info + 8]
     test ecx, ecx
     jz .empty
     mov eax, 16              ; sys_print_n
@@ -35,17 +42,17 @@ _start:
 .empty:
     ret
 .usage:
-    mov esi, usage_msg
+    lea esi, [ebp + usage_msg]
     mov eax, 2
     int 0x80
     ret
 .nf:
-    mov esi, nf_msg
+    lea esi, [ebp + nf_msg]
     mov eax, 2
     int 0x80
     ret
 .isdir:
-    mov esi, isdir_msg
+    lea esi, [ebp + isdir_msg]
     mov eax, 2
     int 0x80
     ret
@@ -53,5 +60,8 @@ _start:
 usage_msg db "usage: cat <file>", 13, 0
 nf_msg    db "cat: no such file", 13, 0
 isdir_msg db "cat: is a directory", 13, 0
-arg       times 64 db 0
-info      times 3 dd 0
+
+; --- BSS-equivalent (in-file zeros; the loader does not zero extra pages) ---
+align 4
+arg:    times 64 db 0
+info:   times 3  dd 0
