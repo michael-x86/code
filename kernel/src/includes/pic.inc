@@ -24,8 +24,8 @@ section .text
 ; ICW2: master offset 0x20, slave offset 0x28
 ; ICW3: master has slave on IRQ2, slave is cascade identity 2
 ; ICW4: 8086 mode
-;-- OCW1: unmask IRQ0 (timer) and IRQ1 (keyboard) on the master; mask
-;-- everything on the slave (we don't use the slave's IRQs).
+;-- OCW1: unmask IRQ0 (timer), IRQ1 (keyboard), and IRQ2 (slave cascade) on
+;-- the master; unmask IRQ12 (PS/2 mouse) on the slave, mask the rest.
 ; -----------------------------------------------------------------------------
 pic_remap:
     mov al, PIC_INIT
@@ -41,9 +41,9 @@ pic_remap:
     mov al, 0x01                         ; 8086 mode
     out PIC_MASTER_DATA, al
     out PIC_SLAVE_DATA, al
-    mov al, 0b11111100                   ; unmask IRQ0 + IRQ1, mask the rest
+    mov al, 0b11111000                   ; unmask IRQ0/1/2 (2 = slave cascade)
     out PIC_MASTER_DATA, al
-    mov al, 0b11111111                   ; mask all slave IRQs
+    mov al, 0b11101111                   ; unmask IRQ12 (mouse) on the slave
     out PIC_SLAVE_DATA, al
     ret
 

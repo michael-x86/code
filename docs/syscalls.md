@@ -45,6 +45,18 @@ Syscalls execute with interrupts disabled (interrupt gate, DPL=3).
 | 33 | dealloc          | `ebx` = vaddr                              | 0 / -1                               |
 | 34 | peek             | `ebx` = addr                               | byte at [addr]                       |
 | 35 | poke             | `ebx` = addr, `ecx` = byte                 | 0                                    |
+| 36 | gfx_enter        | —                                          | 0 (switch to Mode 13h)               |
+| 37 | gfx_exit         | —                                          | 0 (restore text mode 03h)            |
+| 38 | gfx_clear        | `ebx` = color                              | 0                                    |
+| 39 | gfx_pixel        | `ebx` = x, `ecx` = y, `edx` = color        | 0                                    |
+| 40 | gfx_fillrect     | `ebx` = x, `ecx` = y, `edx` = color, `esi` = w, `edi` = h | 0                      |
+| 41 | gfx_rect         | `ebx` = x, `ecx` = y, `edx` = color, `esi` = w, `edi` = h | 0                      |
+| 42 | gfx_line         | `ebx` = x0, `ecx` = y0, `edx` = x1, `esi` = y1, `edi` = color | 0                  |
+| 43 | gfx_char         | `ebx` = char, `ecx` = x, `edx` = y, `esi` = color | 0                             |
+| 44 | gfx_string       | `esi` = ptr, `ebx` = x, `ecx` = y, `edx` = color | 0                              |
+| 45 | gfx_blit         | —                                          | 0 (present the backbuffer)           |
+| 46 | gfx_info         | `edi` = 12-byte dst                        | 0 (writes w, h, bpp)                 |
+| 47 | mouse            | `edi` = 12-byte dst                        | 0 (writes x, y, buttons)             |
 
 ## Notes
 
@@ -64,6 +76,15 @@ Syscalls execute with interrupts disabled (interrupt gate, DPL=3).
 - **#31 `stack_dump`** is a debug aid — it prints the current register set
   and 8 dwords of the kernel stack via VGA. Useful from inside the kernel
   or from a debug shell command.
+- **#36–#47 graphics/mouse**: the VGA Mode 13h graphics engine. See
+  [Graphics](graphics.md) for the full programming guide (modes, the 3-3-2
+  palette, double buffering, drawing primitives, text, and the mouse). All
+  coordinates are clipped to 320×200; `color` is a 0–255 palette index.
+  Drawing primitives render into an off-screen backbuffer — call
+  **#45 `gfx_blit`** to make a frame visible. **#46 `gfx_info`** writes
+  `[0..3]` = width (320), `[4..7]` = height (200), `[8..11]` = bpp (8).
+  **#47 `mouse`** writes `[0..3]` = x, `[4..7]` = y, `[8..11]` = button mask
+  (bit 0 = left, bit 1 = right, bit 2 = middle).
 
 ## Usage Example (NASM)
 

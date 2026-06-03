@@ -144,9 +144,15 @@ kernel_main:
     call set_irq0
     call set_irq1
     call set_syscall
+    call set_irq12
     lidt [idt_descriptor]
     call pic_remap
     call set_freq                        ; 100 Hz PIT
+
+    ; Snapshot the BIOS text font (for graphics-mode glyphs and for restoring
+    ; text after Mode 13h) and bring up the PS/2 mouse (IRQ12).
+    call gfx_save_font
+    call mouse_init
 
     ; Initialize cwd_buf to "/".
     mov edi, cwd_buf
@@ -212,6 +218,8 @@ kernel_main:
 %include "commands.inc"
 %include "shell.inc"
 %include "syscall.inc"
+
+%include "graphics.inc"
 
 %include "task.inc"
 %include "exec.inc"

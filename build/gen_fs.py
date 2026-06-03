@@ -25,6 +25,7 @@ OUT  = sys.argv[2] if len(sys.argv) > 2 else "fs.bin"
 BLOCK_SIZE    = 4096
 BLOCK_SECTORS = 8        # 4096 / 512
 INODE_SIZE    = 128
+DISK_SIZE_BYTES = 20 * 1024 * 1024   # fixed 20 MB disk image
 INODE_COUNT   = 256
 INODE_TABLE_LBA = 2
 FS_MAGIC      = 0xEF53
@@ -95,7 +96,18 @@ for vpath, kind, host in entries:
         dir_count += 1
 
 dir_blocks_needed = dir_count  # each dir needs at least 1 block
-total_data_blocks = file_blocks_needed + dir_blocks_needed + 64  # spare
+min_data_blocks = file_blocks_needed + dir_blocks_needed + 64  # spare
+
+# Size the disk to a fixed capacity (DISK_SIZE_BYTES). Solve for the number of
+# data blocks that fills the disk, accounting for the block bitmap growing with
+# the block count. The fixed point converges in a couple of iterations.
+total_data_blocks = min_data_blocks
+for _ in range(8):
+    bitmap_bytes = (total_data_blocks + 7) // 8
+    bitmap_sectors = (bitmap_bytes + 511) // 512
+    data_start_lba = INODE_TABLE_LBA + inode_table_sectors + bitmap_sectors
+    avail_blocks = (DISK_SIZE_BYTES - data_start_lba * 512) // BLOCK_SIZE
+    total_data_blocks = max(min_data_blocks, avail_blocks)
 
 # Block bitmap
 bitmap_bytes = (total_data_blocks + 7) // 8
@@ -360,6 +372,11 @@ for bnum in range(1, next_block):
 # Pad to sector boundary
 while len(output) % 512 != 0:
     output += b'\x00'
+
+# Expand the image to the full disk size so the entire data region declared in
+# the superblock is backed by real sectors on disk.
+if len(output) < DISK_SIZE_BYTES:
+    output += b'\x00' * (DISK_SIZE_BYTES - len(output))
 
 with open(OUT, 'wb') as f:
     f.write(output)

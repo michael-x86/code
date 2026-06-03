@@ -84,6 +84,22 @@ VGA_COLS           equ 80
 VGA_COLOR_GREEN    equ 0x02     ; green-on-black, our default shell color
 
 
+; --- VGA Mode 13h graphics ---------------------------------------------------
+; 320x200x256 linear (chain-4) framebuffer at physical 0xA0000, reachable at
+; the higher-half alias 0xC00A0000 (already covered by identity_page_table).
+; Drawing goes to gfx_backbuf (off-screen); gfx_blit copies it to the screen.
+; The text-mode 8x16 font snapshot (font_save) is also the glyph source for
+; gfx_char/gfx_string.
+GFX_FB_PHYS        equ 0x000A0000
+GFX_FB_VIRT        equ 0xC00A0000
+GFX_WIDTH          equ 320
+GFX_HEIGHT         equ 200
+GFX_FB_SIZE        equ GFX_WIDTH * GFX_HEIGHT    ; 64000 bytes
+FONT_WIDTH         equ 8
+FONT_HEIGHT        equ 16
+FONT_BYTES         equ 256 * FONT_HEIGHT          ; 4096-byte font snapshot
+
+
 ; --- PIT (Programmable Interval Timer) ---------------------------------------
 ; Channel 0 of the PIT drives IRQ0, which we use for preemptive scheduling.
 ; The base clock is ~1.193182 MHz; with divisor 11932 we get exactly 100 Hz.
@@ -270,9 +286,19 @@ IDT_DPL3           equ 11101111b
 %assign SYSCALL_DEALLOC       33
 %assign SYSCALL_PEEK          34
 %assign SYSCALL_POKE          35
-SYSCALL_COUNT      equ 36
-
-
+%assign SYSCALL_GFX_ENTER     36
+%assign SYSCALL_GFX_EXIT      37
+%assign SYSCALL_GFX_CLEAR     38
+%assign SYSCALL_GFX_PIXEL     39
+%assign SYSCALL_GFX_FILLRECT  40
+%assign SYSCALL_GFX_RECT      41
+%assign SYSCALL_GFX_LINE      42
+%assign SYSCALL_GFX_CHAR      43
+%assign SYSCALL_GFX_STRING    44
+%assign SYSCALL_GFX_BLIT      45
+%assign SYSCALL_GFX_INFO      46
+%assign SYSCALL_MOUSE         47
+SYSCALL_COUNT      equ 48
 ; --- Legacy FS entry structure (still referenced by build pipeline) ---------
 ; Old 68-byte fixed-size file record. The current build does not embed
 ; this in the kernel image, but constants are kept here so any leftover

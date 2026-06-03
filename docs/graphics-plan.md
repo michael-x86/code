@@ -1,5 +1,48 @@
 # Graphics Subsystem Research & Implementation Plan
 
+## Decision & Status (implemented)
+
+**Chosen path: VGA Mode 13h (320×200×256), switched at RUNTIME from
+protected mode via direct VGA register programming — NOT via the BIOS and
+NOT in the bootloader.**
+
+Rationale and corrections to the original research below:
+
+- **No bootloader change is required.** The plan originally claimed the mode
+  switch "MUST happen in the bootloader" because `int 10h` is real-mode only.
+  That is true *only for VBE*. Mode 13h can be programmed entirely from
+  protected mode by writing the VGA Misc/Sequencer/CRTC/Graphics/Attribute
+  register set directly (see `vga_write_regs` in `graphics.inc`). This lets
+  the text-mode shell stay live and switch to graphics *on demand*.
+- **The text shell must be preserved.** The whole OS renders through the
+  text buffer at `0xC00B8000`. Switching to Mode 13h at boot would blank it.
+  Instead, a program calls `sys_gfx_enter` (mode 13h), draws, then
+  `sys_gfx_exit` returns to text mode 03h. Because Mode 13h's chain-4 writes
+  corrupt the font stored in plane 2, the kernel snapshots the BIOS 8×16
+  font into `font_save` at boot (`gfx_save_font`) and restores it on
+  `sys_gfx_exit` (`gfx_load_font`). That snapshot doubles as the glyph
+  source for `gfx_char`/`gfx_string` in graphics mode.
+- **No new page table is needed.** Mode 13h's framebuffer at physical
+  `0xA0000` is already covered by `identity_page_table` (PDE 0 / 768), so it
+  is reachable at higher-half `0xC00A0000`. `map_page` only recognizes PDE
+  indices 768–772 and would reject any VBE linear-framebuffer address — that
+  limitation does not matter for Mode 13h.
+- **Syscall numbers start at 36, not 31.** Slots 31–35 are already taken
+  (`sys_stack_dump`=31, `sys_alloc`=32, `sys_dealloc`=33, `sys_peek`=34,
+  `sys_poke`=35). Graphics + mouse syscalls occupy 36–47 and `SYSCALL_COUNT`
+  was bumped to 48. See the table in Phase 7.
+- **Double buffering** uses a 64 000-byte off-screen `gfx_backbuf` in BSS
+  (zeroed by QEMU at power-on). All primitives draw there; `sys_gfx_blit`
+  copies it to the visible framebuffer in one `rep movsd` pass.
+- **PS/2 mouse (IRQ12)** is included: `mouse_init` enables the aux device,
+  `irq12` decodes 3-byte packets into `mouse_x`/`mouse_y`/`mouse_buttons`,
+  exposed via `sys_mouse` (47). The PIC mask now unmasks IRQ2 (cascade) and
+  IRQ12.
+
+VBE (Path B) remains a future upgrade for higher resolution / 32-bit color;
+it would require the 2-sector bootloader expansion described in
+`bootsector-expansion.md` plus a framebuffer page table.
+
 ## Current State
 
 ```
@@ -367,13 +410,21 @@ Expose graphics to userland programs via `int 0x80`:
 
 | Syscall | Number | Description |
 |---|---|---|
-| sys_fb_info | 31 | Get framebuffer address, w, h, pitch, bpp |
-| sys_fb_swap | 32 | Swap/display the backbuffer |
-| sys_fb_plotpixel | 33 | Plot a single pixel |
-| sys_fb_fillrect | 34 | Fill a rectangle with color |
-| sys_fb_drawline | 35 | Draw a line (Bresenham) |
+| sys_gfx_enter | 36 | Switch to Mode 13h (320×200×256) |
+| sys_gfx_exit | 37 | Restore text mode 03h + reload font |
+| sys_gfx_clear | 38 | Clear backbuffer (ebx = color) |
+| sys_gfx_pixel | 39 | Plot pixel (ebx=x, ecx=y, edx=color) |
+| sys_gfx_fillrect | 40 | Filled rect (ebx=x, ecx=y, edx=color, esi=w, edi=h) |
+| sys_gfx_rect | 41 | Outline rect (same args as fillrect) |
+| sys_gfx_line | 42 | Bresenham line (ebx=x0, ecx=y0, edx=x1, esi=y1, edi=color) |
+| sys_gfx_char | 43 | Draw glyph (ebx=char, ecx=x, edx=y, esi=color) |
+| sys_gfx_string | 44 | Draw string (esi=str, ebx=x, ecx=y, edx=color) |
+| sys_gfx_blit | 45 | Copy backbuffer → visible framebuffer |
+| sys_gfx_info | 46 | Get geometry (edi=dst: w, h, bpp) |
+| sys_mouse | 47 | Get mouse state (edi=dst: x, y, buttons) |
 
-This lets userspace programs draw directly.
+`SYSCALL_COUNT` is 48 after these additions. This lets userspace programs
+draw directly while the text shell remains the default display.
 
 ### Phase 8 — Window Manager (Conceptual, Later)
 

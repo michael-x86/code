@@ -118,6 +118,61 @@ bmap_data        resd 1                   ; bmap_alloc: allocated data block
 file_type        resd 1
 
 
+; --- Graphics engine state (used by graphics.inc) ---------------------------
+; gfx_mode is 0 in text mode 03h, 1 in graphics Mode 13h. font_save holds a
+; snapshot of the BIOS 8x16 text font captured at boot (gfx_save_font); it is
+; restored on gfx_exit and used as the glyph source for gfx_char/gfx_string.
+; gfx_backbuf is the 64000-byte off-screen buffer all primitives draw into;
+; gfx_blit copies it to the visible framebuffer at 0xC00A0000.
+alignb 4
+gfx_mode         resb 1                   ; 0 = text, 1 = graphics
+font_saved       resb 1                   ; 1 once font_save is populated
+
+; fillrect scratch
+alignb 4
+fr_x             resd 1
+fr_y             resd 1
+fr_w             resd 1
+fr_h             resd 1
+fr_color         resd 1
+fr_yend          resd 1
+
+; char / string scratch
+gfx_cx           resd 1
+gfx_cy           resd 1
+gfx_ccolor       resd 1
+gfx_glyph        resd 1
+gfx_sx           resd 1
+gfx_sy           resd 1
+gfx_scolor       resd 1
+
+; line (Bresenham) scratch
+gfx_lx0          resd 1
+gfx_ly0          resd 1
+gfx_lx1          resd 1
+gfx_ly1          resd 1
+gfx_lcolor       resd 1
+gfx_ldx          resd 1
+gfx_ldy          resd 1
+gfx_lsx          resd 1
+gfx_lsy          resd 1
+gfx_lerr         resd 1
+
+; PS/2 mouse state (used by graphics.inc irq12 / mouse_init)
+alignb 4
+mouse_x          resd 1
+mouse_y          resd 1
+mouse_buttons    resd 1                   ; bit0 left, bit1 right, bit2 middle
+mouse_cycle      resd 1                   ; packet byte index 0..2
+mouse_pkt0       resb 1                   ; flags byte
+mouse_pkt1       resb 1                   ; X delta
+mouse_pkt2       resb 1                   ; Y delta
+
+alignb 16
+font_save        resb FONT_BYTES          ; 4096-byte 8x16 font snapshot
+gfx_backbuf      resb GFX_FB_SIZE         ; 64000-byte off-screen buffer
+
+
 ; --- IDT (used by idt.inc) --------------------------------------------------
 ; 256 entries x 8 bytes each. Must be 8-byte aligned for the lidt operand.
 alignb 8

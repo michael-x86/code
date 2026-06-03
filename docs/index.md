@@ -9,6 +9,7 @@ the PIT, and provides a shell with an in-kernel filesystem.
 - [Getting Started](getting-started.md) — dependencies, build, run
 - [Architecture](architecture.md) — boot process, memory layout, subsystems
 - [System Calls](syscalls.md) — full int 0x80 reference
+- [Graphics](graphics.md) — VGA Mode 13h engine, palette, primitives, mouse
 - [Filesystem](filesystem.md) — virtual FS layout, persistence, limits
 - [Userland](userland.md) — writing and adding programs
 - [ABI Contract](abi-contract.md) — position-independent binary rules
@@ -39,6 +40,7 @@ kernel/
   memory.inc            # physical frame allocator
   interrupt.inc         # IDT, IRQ handlers
   syscall.inc           # int 0x80 dispatch
+  graphics.inc          # VGA Mode 13h engine + PS/2 mouse
   vfs.inc               # virtual filesystem core
   shell.inc             # VGA shell, line editor, command dispatch
   task.inc              # round-robin task switching

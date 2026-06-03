@@ -13,8 +13,7 @@ IMG="${BUILD_DIR}/os.img"
 # Programs to compile
 COMMANDS=(exit help env dump alloc dealloc poke peek
           ps vi pwd ls cd ping cat touch write
-          rm rmdir mkdir cp mv calc invaders zork)
-
+          rm rmdir mkdir cp mv calc invaders zork gdemo)
 RUN_QEMU=false
 FULLSCREEN=false
 DEBUG=false
