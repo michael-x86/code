@@ -123,9 +123,17 @@ rm -f "${BUILD_DIR}/kernel.bin" "${BUILD_DIR}/bootloader.bin"
 rm -f "${BUILD_DIR}/fs.bin"
 
 if [[ "$RUN_QEMU" == true ]]; then
+    #QEMU_ARGS=(
+    #    -drive format=raw,file="$BOOT_IMG",index=0,if=ide
+    #    -drive format=raw,file="$FS_IMG",index=1,if=ide
+    #    -device isa-debug-exit,iobase=0xf4,iosize=0x04
+    #    -m 128
+    #)
     QEMU_ARGS=(
-        -drive format=raw,file="$BOOT_IMG",index=0,if=ide
-        -drive format=raw,file="$FS_IMG",index=1,if=ide
+        -drive id=boot,format=raw,file="$BOOT_IMG",if=none
+        -drive id=fs,format=raw,file="$FS_IMG",if=none
+        -device ide-hd,bus=ide.0,drive=boot,unit=0
+        -device ide-hd,bus=ide.1,drive=fs,unit=0
         -device isa-debug-exit,iobase=0xf4,iosize=0x04
         -m 128
     )
