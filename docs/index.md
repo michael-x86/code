@@ -14,6 +14,7 @@ the PIT, and provides a shell with an in-kernel filesystem.
 - [Userland](userland.md) — writing and adding programs
 - [ABI Contract](abi-contract.md) — position-independent binary rules
 - [Debugging](debugging.md) — GDB, QEMU monitor, troubleshooting
+- [Hardware Porting](hardware-porting.md) — what real hardware would require
 - [Contributing](contributing.md) — code style, PR process
 
 ## Quick Start
