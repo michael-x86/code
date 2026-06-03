@@ -133,7 +133,9 @@ enigma_init:
     ; Compute offset into packed notch table.
     ; Packed layout: I(1B), II(1B), III(1B), IV(1B), V(1B), VI(2B), VII(2B), VIII(2B)
     ; Offsets by type: 0, 1, 2, 3, 4, 5, 7, 9
-    ; Formula: offset = type + max(0, type - 4)
+    ; Formula: offset = type + max(0, type - 5)
+    ;   (types 0-5 map 1:1; VI at type 5 is the first 2-notch rotor,
+    ;    so types 6 and 7 each shift right by their extra notch byte)
     push    ebx
     mov     edi, eax            ; edi = type (will become table offset)
     cmp     eax, 5
