@@ -61,6 +61,13 @@ colon:  db ": ", 0
 colon_space: db ": ", 0
 separator: db " | ", 0
 
+; --- Row 23 status line (ANSI cursor positioning) ---
+esc_save:    db 0x1B, "7", 0                 ; save cursor position
+esc_row23:   db 0x1B, "[23;1H", 0x1B, "[2K", 0  ; move to row 23, col 1; clear line
+esc_restore: db 0x1B, "8", 0                 ; restore cursor position
+row23_rotors: db "Rotor order: ", 0
+row23_key:    db "   Daily key: ", 0
+
 ; Rotor name table (just the labels; abbreviations)
 ; I, II, III, IV, V, VI, VII, VIII, Beta, Gamma
 rotor_short:
@@ -174,6 +181,9 @@ _start:
     ; Display daily key
     call    display_daily_key
 
+    ; Print rotor order and daily key at terminal row 23
+    call    display_row23
+
     ; --- Encrypt the message key as an 8-character indicator ---
     ; The Kriegsmarine procedure: operator picks 4-letter key, encrypts it
     ; twice using the daily Grundstellung. We display the encrypted indicator.
@@ -244,19 +254,8 @@ display_daily_key:
     lea     esi, [msg_reflector]
     call    io_print
     movzx   eax, byte [daily_reflector]
-    cmp     eax, 0
-    je      .refl_b
-    ; C
-    mov     al, 'C'
-    jmp     .refl_out
-.refl_b:
-    mov     al, 'B'
-.refl_out:
-    mov     [char_out], al
-    lea     esi, [char_out]
-    call    io_print_n
-    mov     al, 0
-    mov     [char_out], al
+    inc     eax                 ; 0=B,1=C -> letter index 1(B)/2(C)
+    call    io_print_letter
     call    io_newline
 
     ; --- Ring settings ---
@@ -304,6 +303,97 @@ display_daily_key:
     call    io_newline
 
     pop     esi
+    pop     ebx
+    pop     eax
+    pop     ebp
+    ret
+
+; ============================================================================
+; display_row23 — print the rotor order and daily key on terminal row 23
+; Uses ANSI escapes to move to row 23, then restores the cursor so the
+; normal sequential output is undisturbed.
+; ============================================================================
+display_row23:
+    push    ebp
+    mov     ebp, esp
+    push    eax
+    push    ebx
+    push    ecx
+    push    esi
+
+    ; Save cursor, jump to row 23 col 1, clear the line
+    lea     esi, [esc_save]
+    call    io_print
+    lea     esi, [esc_row23]
+    call    io_print
+
+    ; --- Rotor order ---
+    lea     esi, [row23_rotors]
+    call    io_print
+    xor     ecx, ecx
+.r23_rotor_loop:
+    cmp     ecx, 4
+    jge     .r23_rotors_done
+    movzx   eax, byte [daily_rotor_idx + ecx]
+    push    ecx
+    mov     ebx, eax
+    shl     ebx, 2
+    mov     esi, [rotor_offsets + ebx]
+    add     esi, rotor_short
+    call    io_print
+    pop     ecx
+    cmp     ecx, 3
+    je      .r23_skip_sep
+    lea     esi, [separator]
+    call    io_print
+.r23_skip_sep:
+    inc     ecx
+    jmp     .r23_rotor_loop
+.r23_rotors_done:
+
+    ; --- Daily key: reflector, ring settings, Grundstellung ---
+    lea     esi, [row23_key]
+    call    io_print
+
+    ; Reflector (0=B, 1=C) -> print as letter (index+1: B or C)
+    movzx   eax, byte [daily_reflector]
+    inc     eax
+    call    io_print_letter
+
+    lea     esi, [space]
+    call    io_print
+
+    ; Ring settings (4 letters)
+    xor     ecx, ecx
+.r23_ring:
+    cmp     ecx, 4
+    jge     .r23_ring_done
+    movzx   eax, byte [daily_ring + ecx]
+    call    io_print_letter
+    inc     ecx
+    jmp     .r23_ring
+.r23_ring_done:
+
+    lea     esi, [space]
+    call    io_print
+
+    ; Grundstellung (4 letters)
+    xor     ecx, ecx
+.r23_pos:
+    cmp     ecx, 4
+    jge     .r23_pos_done
+    movzx   eax, byte [daily_position + ecx]
+    call    io_print_letter
+    inc     ecx
+    jmp     .r23_pos
+.r23_pos_done:
+
+    ; Restore cursor to its previous position
+    lea     esi, [esc_restore]
+    call    io_print
+
+    pop     esi
+    pop     ecx
     pop     ebx
     pop     eax
     pop     ebp
@@ -518,9 +608,7 @@ interactive_loop:
     push    eax
     call    enigma_step
     pop     eax
-    push    eax
     call    enigma_crypt
-    pop     eax
     add     al, 'A'
     mov     [char_out], al
 
