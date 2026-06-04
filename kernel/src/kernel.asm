@@ -200,7 +200,7 @@ kernel_main:
 %include "memory.inc"
 
 ; --- Block device and filesystem --------------------------------------------
-%include "ata.inc"
+%include "drivers/ata.inc"
 %include "fs_core.inc"
 %include "vfs.inc"
 %include "ecc.inc"

@@ -45,7 +45,7 @@ ordered by how badly it breaks on bare metal, as a reference for future work.
 
 ### 4. Disk assumes legacy IDE on a fixed port
 
-- **Where:** `kernel/src/includes/ata.inc` uses ATA PIO at hardcoded port
+- **Where:** `kernel/src/drivers/ata.inc` uses ATA PIO at hardcoded port
   `0x1F0`. The bootloader (`kernel/bootloader.asm`) assumes the filesystem is on
   the **primary slave** drive and stores the port/drive selector at physical
   `0x500` for the kernel.

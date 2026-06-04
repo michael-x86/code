@@ -74,7 +74,7 @@ tmp_left         resd 1
 persist_buf      resb FS_PERSIST_BUF_SIZE
 
 
-; --- ATA PIO state (used by ata.inc) ----------------------------------------
+; --- ATA PIO state (used by drivers/ata.inc) ----------------------------------------
 ; The bootloader writes fs_ata_base, fs_ata_drive, and fs_base_lba to
 ; physical 0x500, 0x504, 0x508. We read them at boot and cache them here.
 ; ata_port_base is the same value as fs_ata_base; it lives in a separate
