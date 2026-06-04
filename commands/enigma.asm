@@ -856,13 +856,13 @@ enigma_step:
 ;   out: al = encrypted letter index (0–25)
 ;
 ; Stack frame via ebp:
-;   [ebp - 4]  = loop counter (dword)
-;   [ebp - 5]  = current character (byte)
-;   [ebp - 9]  = saved ebx
-;   [ebp - 13] = saved ecx
-;   [ebp - 17] = saved edx
-;   [ebp - 21] = saved esi
-;   [ebp - 25] = saved edi
+;   [ebp - 24] = loop counter (dword)
+;   [ebp - 28] = current character (byte)
+;   [ebp - 4]  = saved ebx
+;   [ebp - 8]  = saved ecx
+;   [ebp - 12] = saved edx
+;   [ebp - 16] = saved esi
+;   [ebp - 20] = saved edi
 ;   [ebp + 0]  = saved outer ebp  (= program base for data refs)
 ;   [ebp + 4]  = return address
 ; =============================================================================
@@ -874,26 +874,26 @@ enigma_crypt:
     push edx
     push esi
     push edi
-    sub esp, 8                  ; [ebp-4] = counter, [ebp-5] = char
+    sub esp, 8                  ; [ebp-24] = counter, [ebp-28] = char
 
     mov edi, [ebp]              ; edi = outer ebp = program base
-    mov [ebp - 5], al           ; save input character
+    mov [ebp - 28], al          ; save input character
 
     movzx eax, byte [edi + eax + plug_map]
-    mov [ebp - 5], al
+    mov [ebp - 28], al          ; Update char after plugboard
 
-    mov dword [ebp - 4], 2      ; loop counter = 2 (fast rotor index)
+    mov dword [ebp - 24], 2     ; loop counter = 2 (fast rotor index)
 .fwd_main:
-    cmp dword [ebp - 4], 0
+    cmp dword [ebp - 24], 0
     jl .fwd_thin
-    mov ebx, [ebp - 4]          ; ebx = rotor index
+    mov ebx, [ebp - 24]         ; ebx = rotor index
 
-    movzx eax, byte [ebp - 5]   ; eax = current char
+    movzx eax, byte [ebp - 28]  ; eax = current char
     movzx ecx, byte [edi + ebx + rotor_pos]
     add eax, ecx
     movzx ecx, byte [edi + ebx + rotor_ring]
     sub eax, ecx
-    add eax, ALPHA2
+    add eax, ALPHA2             ; 52
     xor edx, edx
     mov esi, 26
     div esi                     ; edx = offset into rotor wiring
@@ -902,7 +902,7 @@ enigma_crypt:
     add ebx, ecx
     movzx eax, byte [edi + ebx + rotor_fwd]
 
-    mov ebx, [ebp - 4]
+    mov ebx, [ebp - 24]
     movzx ecx, byte [edi + ebx + rotor_pos]
     sub eax, ecx
     movzx ecx, byte [edi + ebx + rotor_ring]
@@ -911,14 +911,14 @@ enigma_crypt:
     xor edx, edx
     mov ecx, ALPHA
     div ecx
-    mov [ebp - 5], dl
+    mov [ebp - 28], dl
 
-    dec dword [ebp - 4]
+    dec dword [ebp - 24]
     jmp .fwd_main
 
 .fwd_thin:
     mov ebx, 3
-    movzx eax, byte [ebp - 5]
+    movzx eax, byte [ebp - 28]
     movzx ecx, byte [edi + ebx + rotor_pos]
     add eax, ecx
     movzx ecx, byte [edi + ebx + rotor_ring]
@@ -939,14 +939,14 @@ enigma_crypt:
     xor edx, edx
     mov ecx, ALPHA
     div ecx
-    mov [ebp - 5], dl
+    mov [ebp - 28], dl
 
-    movzx eax, byte [ebp - 5]
+    movzx eax, byte [ebp - 28]
     movzx eax, byte [edi + eax + refl_wiring]
-    mov [ebp - 5], al
+    mov [ebp - 28], al
 
     mov ebx, 3
-    movzx eax, byte [ebp - 5]
+    movzx eax, byte [ebp - 28]
     movzx ecx, byte [edi + ebx + rotor_pos]
     add eax, ecx
     movzx ecx, byte [edi + ebx + rotor_ring]
@@ -967,15 +967,15 @@ enigma_crypt:
     xor edx, edx
     mov ecx, ALPHA
     div ecx
-    mov [ebp - 5], dl
+    mov [ebp - 28], dl
 
-    mov dword [ebp - 4], 0
+    mov dword [ebp - 24], 0
 .bwd_main:
-    cmp dword [ebp - 4], 2
+    cmp dword [ebp - 24], 2
     jg .bwd_done
-    mov ebx, [ebp - 4]
+    mov ebx, [ebp - 24]
 
-    movzx eax, byte [ebp - 5]
+    movzx eax, byte [ebp - 28]
     movzx ecx, byte [edi + ebx + rotor_pos]
     add eax, ecx
     movzx ecx, byte [edi + ebx + rotor_ring]
@@ -988,7 +988,7 @@ enigma_crypt:
     imul ebx, 26
     add ebx, ecx
     movzx eax, byte [edi + ebx + rotor_rev]
-    mov ebx, [ebp - 4]
+    mov ebx, [ebp - 24]
     movzx ecx, byte [edi + ebx + rotor_pos]
     sub eax, ecx
     movzx ecx, byte [edi + ebx + rotor_ring]
@@ -997,13 +997,13 @@ enigma_crypt:
     xor edx, edx
     mov ecx, ALPHA
     div ecx
-    mov [ebp - 5], dl
+    mov [ebp - 28], dl
 
-    inc dword [ebp - 4]
+    inc dword [ebp - 24]
     jmp .bwd_main
 
 .bwd_done:
-    movzx eax, byte [ebp - 5]
+    movzx eax, byte [ebp - 28]
     movzx eax, byte [edi + eax + plug_map]
 
     add esp, 8

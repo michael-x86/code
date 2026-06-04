@@ -41,6 +41,7 @@ build/code-index/
 Elite (video game) - Wikipedia.pdf
 # ── AI session handoffs (local-only, regenerated each session) ───────────
 .github/ai-context/
+.clinerules/ai-context/
 build/*.png
 build/*.ppm
 
