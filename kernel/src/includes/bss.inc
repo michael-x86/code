@@ -38,6 +38,23 @@ kbd_head         resd 1       ; producer index (IRQ1 writes here)
 kbd_tail         resd 1       ; consumer index (get_key reads here)
 kbd_buf          resb KBD_BUF_SIZE
 
+; --- Scrollback buffer (used by vga.inc) ------------------------------------
+; scrollback_buf stores screen snapshots for Page Up/Down scrolling.
+; Each snapshot is the full VGA text buffer (80*25*2 = 4000 bytes).
+; We store up to 50 snapshots (200 KB total).
+; scrollback_head: where to write the next snapshot
+; scrollback_count: how many snapshots are valid (0..SCROLLBACK_MAX)
+; scroll_offset: current scroll position (0 = live screen, 1 = one snapshot back, etc.)
+; live_screen: copy of the current live screen to restore when offset = 0
+SCROLLBACK_MAX   equ 50
+SCREEN_SIZE      equ VGA_COLS * VGA_ROWS * 2   ; 4000 bytes
+alignb 4
+scrollback_buf   resb SCREEN_SIZE * SCROLLBACK_MAX   ; 200 KB
+scrollback_head  resd 1
+scrollback_count resd 1
+scroll_offset    resd 1
+live_screen      resb SCREEN_SIZE                      ; 4000 bytes
+
 
 ; --- Command-line + history buffers (used by parser.inc / shell.inc) -------
 cmd_buf          resb CMD_BUF_SIZE

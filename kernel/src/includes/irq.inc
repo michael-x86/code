@@ -144,12 +144,51 @@ irq0:
 ; PS/2 scancode set 1: bit 7 set = key release. We test for the
 ; known shift make codes (0x2A left, 0x36 right) and their
 ; counterparts (0xAA, 0xB6) to track the shift state.
+;
+; Extended keys (prefixed with 0xE0) are handled by setting kbd_extended
+; on the prefix and checking the next byte. Page Up (0x49) and Page Down
+; (0x51) are buffered as special values 0xF0 and 0xF1 respectively.
 ; -----------------------------------------------------------------------------
 irq1:
     pushad
     in al, 0x60                          ; raw scancode
     mov bl, al
 
+    ; Check for extended key prefix (0xE0).
+    cmp bl, 0xE0
+    jne .not_extended
+    mov byte [kbd_extended], 1
+    jmp .done
+.not_extended:
+
+    ; If we're expecting an extended key, handle it.
+    cmp byte [kbd_extended], 0
+    je .normal_key
+    mov byte [kbd_extended], 0            ; clear the flag
+
+    ; Ignore extended key releases (bit 7 set).
+    test bl, 0x80
+    jnz .done
+
+    ; Check for Page Up (0x49) and Page Down (0x51).
+    cmp bl, 0x49
+    jne .check_pgdn
+    mov al, 0xF0                          ; special value for Page Up
+    jmp .buffer_extended
+.check_pgdn:
+    cmp bl, 0x51
+    jne .done                             ; ignore other extended keys
+    mov al, 0xF1                          ; special value for Page Down
+.buffer_extended:
+    ; Buffer al (0xF0 or 0xF1) directly.
+    mov edi, [kbd_head]
+    mov [kbd_buf + edi], al
+    inc edi
+    and edi, KBD_BUF_SIZE - 1
+    mov [kbd_head], edi
+    jmp .done
+
+.normal_key:
     cmp bl, 0x2A
     je .shift_on
     cmp bl, 0x36
@@ -162,11 +201,11 @@ irq1:
     jnz .done                            ; ignore all other key releases
 
     ; Buffer the key-press scancode in the circular kbd_buf.
-    mov eax, [kbd_head]
-    mov [kbd_buf + eax], bl
-    inc eax
-    and eax, KBD_BUF_SIZE - 1
-    mov [kbd_head], eax
+    mov edi, [kbd_head]
+    mov [kbd_buf + edi], bl
+    inc edi
+    and edi, KBD_BUF_SIZE - 1
+    mov [kbd_head], edi
     jmp .done
 .shift_on:
     mov byte [kbd_shift], 1

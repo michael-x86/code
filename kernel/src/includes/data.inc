@@ -38,6 +38,10 @@ prompt_limit     dd  0
 ; tracks both. The actual ASCII translation uses one of the keymap_active
 ; pointers below.
 kbd_shift        db  0
+; kbd_extended tracks whether the next scancode is an extended key (prefixed
+; by 0xE0). Set to 1 when we receive 0xE0, cleared after consuming the
+; extended key.
+kbd_extended      db  0
 
 
 ; --- Active keymap (set from /etc/config at boot) ---------------------------

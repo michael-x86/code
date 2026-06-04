@@ -22,11 +22,11 @@ section .text
 
 ; -----------------------------------------------------------------------------
 ; get_key — pop one key from kbd_buf and translate to ASCII
-;--   out: al = ASCII character (0 if the buffer is empty)
-;--
-;-- Returns 0 both for "no key waiting" and for "we already handled this
-;-- key internally" (history navigation). The shell's task 2 calls this
-;-- in a loop and treats 0 as "nothing to do".
+;   out: al = ASCII character (0 if the buffer is empty)
+;
+; Returns 0 both for "no key waiting" and for "we already handled this
+; key internally" (history navigation, scrolling). The shell's task 2
+; calls this in a loop and treats 0 as "nothing to do".
 ; -----------------------------------------------------------------------------
 get_key:
     mov eax, [kbd_tail]
@@ -48,10 +48,25 @@ get_key:
     ret
 .check_down:
     cmp al, 0x50                        ; down arrow
-    jne .translate
+    jne .check_pgup
     call hist_frwd
     xor al, al
     ret
+
+    ; Page Up/Down: console scrolling (consume the key, return 0).
+.check_pgup:
+    cmp al, 0xF0                        ; Page Up
+    jne .check_pgdn
+    call scroll_up
+    xor al, al
+    ret
+.check_pgdn:
+    cmp al, 0xF1                        ; Page Down
+    jne .translate
+    call scroll_down
+    xor al, al
+    ret
+
 .translate:
     cmp al, 128
     jae .invalid

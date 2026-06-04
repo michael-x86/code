@@ -84,6 +84,12 @@ VGA_COLS           equ 80
 VGA_COLOR_GREEN    equ 0x02     ; green-on-black, our default shell color
 VGA_COLOR_BANNER   equ 0x20     ; black-on-green, used for the top banner row
 
+; --- Scrollback buffer --------------------------------------------------------
+; Screen snapshots for Page Up/Down scrolling. Each snapshot is the full
+; VGA text buffer (VGA_COLS * VGA_ROWS * 2 bytes). Up to 50 snapshots.
+SCROLLBACK_MAX     equ 50
+SCREEN_SIZE        equ VGA_COLS * VGA_ROWS * 2   ; 4000 bytes
+
 
 ; --- VGA Mode 13h graphics ---------------------------------------------------
 ; 320x200x256 linear (chain-4) framebuffer at physical 0xA0000, reachable at

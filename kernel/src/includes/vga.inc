@@ -142,8 +142,14 @@ cls:
 ;
 ; Row 0 is the pinned banner bar and is left untouched: we shift rows
 ; 2..24 up into rows 1..23 and clear row 24.
+;
+; Before scrolling, we save the current screen to the scrollback buffer
+; so Page Up/Down can restore it later.
 ; -----------------------------------------------------------------------------
 scroll:
+    ; Save current screen to scrollback buffer before scrolling.
+    call save_screen_snapshot
+
     push esi
     push edi
     push ecx
@@ -209,6 +215,171 @@ cursor:
     mov al, byte [cursor_pos + 1]
     out dx, al
     pop edx
+    pop eax
+    ret
+
+
+; -----------------------------------------------------------------------------
+; save_screen_snapshot — save current screen to scrollback buffer
+;
+; Saves the entire VGA text buffer to the scrollback circular buffer.
+; Also saves a copy to live_screen (used to restore when scroll_offset=0).
+; scrollback_head points to the next slot to write.
+; scrollback_count is capped at SCROLLBACK_MAX.
+; -----------------------------------------------------------------------------
+save_screen_snapshot:
+    push esi
+    push edi
+    push ecx
+
+    ; Save to live_screen (always the most recent live screen).
+    mov esi, VGA_TEXT_BUFFER
+    mov edi, live_screen
+    mov ecx, SCREEN_SIZE / 4             ; copy 4 bytes at a time
+    rep movsd
+
+    ; Save to scrollback buffer at scrollback_head.
+    mov eax, [scrollback_head]
+    mov edi, scrollback_buf
+    mov ecx, SCREEN_SIZE / 4
+    mul ecx                                ; eax = scrollback_head * (SCREEN_SIZE/4)
+    lea edi, [edi + eax * 4]             ; edi = &scrollback_buf[head]
+    mov esi, VGA_TEXT_BUFFER
+    rep movsd
+
+    ; Update scrollback_head (circular).
+    inc dword [scrollback_head]
+    cmp dword [scrollback_head], SCROLLBACK_MAX
+    jb .count
+    mov dword [scrollback_head], 0
+.count:
+    ; Update scrollback_count (capped at SCROLLBACK_MAX).
+    cmp dword [scrollback_count], SCROLLBACK_MAX
+    jae .done
+    inc dword [scrollback_count]
+
+.done:
+    pop ecx
+    pop edi
+    pop esi
+    ret
+
+
+; -----------------------------------------------------------------------------
+; scroll_up — Page Up: show older screen content
+;
+; Increments scroll_offset (capped at scrollback_count).
+; Restores the screen from the corresponding scrollback snapshot.
+; If scroll_offset becomes 0, restores the live screen.
+; -----------------------------------------------------------------------------
+scroll_up:
+    push eax
+    push ebx
+    push ecx
+    push esi
+    push edi
+
+    ; Check if we're already at the maximum scrollback.
+    mov eax, [scroll_offset]
+    cmp eax, [scrollback_count]
+    jae .done
+
+    inc dword [scroll_offset]
+    mov eax, [scroll_offset]
+    test eax, eax
+    jz .restore_live
+
+    ; Compute index: (scrollback_head - scroll_offset + SCROLLBACK_MAX) % SCROLLBACK_MAX
+    mov ebx, eax                         ; ebx = scroll_offset
+    mov eax, [scrollback_head]
+    sub eax, ebx                         ; eax = scrollback_head - scroll_offset
+    add eax, SCROLLBACK_MAX
+    xor edx, edx
+    mov ebx, SCROLLBACK_MAX
+    div ebx                                ; edx = (head - offset + MAX) % MAX = index
+
+    ; Restore screen from scrollback_buf[index].
+    mov ecx, edx                          ; ecx = index
+    mov edi, scrollback_buf
+    mov eax, ecx
+    mov ecx, SCREEN_SIZE / 4
+    mul ecx                                ; eax = index * (SCREEN_SIZE/4)
+    lea esi, [edi + eax * 4]
+    mov edi, VGA_TEXT_BUFFER
+    rep movsd
+    jmp .done
+
+.restore_live:
+    ; Restore from live_screen.
+    mov esi, live_screen
+    mov edi, VGA_TEXT_BUFFER
+    mov ecx, SCREEN_SIZE / 4
+    rep movsd
+
+.done:
+    pop edi
+    pop esi
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+
+; -----------------------------------------------------------------------------
+; scroll_down — Page Down: show newer screen content
+;
+; Decrements scroll_offset (capped at 0).
+; If scroll_offset becomes 0, restores the live screen.
+; Otherwise, restores from the corresponding scrollback snapshot.
+; -----------------------------------------------------------------------------
+scroll_down:
+    push eax
+    push ebx
+    push ecx
+    push esi
+    push edi
+
+    ; Check if we're already at the live screen.
+    cmp dword [scroll_offset], 0
+    je .done
+
+    dec dword [scroll_offset]
+    mov eax, [scroll_offset]
+    test eax, eax
+    jz .restore_live
+
+    ; Compute index: (scrollback_head - scroll_offset + SCROLLBACK_MAX) % SCROLLBACK_MAX
+    mov ebx, eax                         ; ebx = scroll_offset
+    mov eax, [scrollback_head]
+    sub eax, ebx                         ; eax = scrollback_head - scroll_offset
+    add eax, SCROLLBACK_MAX
+    xor edx, edx
+    mov ebx, SCROLLBACK_MAX
+    div ebx                                ; edx = (head - offset + MAX) % MAX = index
+
+    ; Restore screen from scrollback_buf[index].
+    mov ecx, edx                          ; ecx = index
+    mov edi, scrollback_buf
+    mov eax, ecx
+    mov ecx, SCREEN_SIZE / 4
+    mul ecx                                ; eax = index * (SCREEN_SIZE/4)
+    lea esi, [edi + eax * 4]
+    mov edi, VGA_TEXT_BUFFER
+    rep movsd
+    jmp .done
+
+.restore_live:
+    ; Restore from live_screen.
+    mov esi, live_screen
+    mov edi, VGA_TEXT_BUFFER
+    mov ecx, SCREEN_SIZE / 4
+    rep movsd
+
+.done:
+    pop edi
+    pop esi
+    pop ecx
+    pop ebx
     pop eax
     ret
 
