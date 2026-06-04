@@ -13,6 +13,8 @@
 [bits 32]
 [org 0x00000000]
 
+%include "userland.inc"
+
 ; ── Syscalls ────────────────────────────────────────────────────────────────
 %define SYS_GETKEY        7
 %define SYS_TICK          8

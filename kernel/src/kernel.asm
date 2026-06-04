@@ -206,6 +206,8 @@ kernel_main:
 %include "ecc.inc"
 
 ; --- Interrupt subsystem -----------------------------------------------------
+%include "exc.inc"
+%include "panic.inc"
 %include "idt.inc"
 %include "pic.inc"
 %include "irq.inc"

@@ -1,6 +1,8 @@
 [bits 32]
 [org 0x00000000]
 
+%include "userland.inc"
+
 _start:
     ; --- Calculate our Dynamic Base Offset ---
     call .get_base

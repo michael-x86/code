@@ -18,6 +18,8 @@
 [bits 32]
 [org 0x00000000]
 
+%include "userland.inc"
+
 _start:
     call .anchor
 .anchor:

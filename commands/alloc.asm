@@ -2,25 +2,19 @@
 [bits 32]
 [org 0x00000000]
 
+%include "userland.inc"
+
 _start:
-    call .get_base
-.get_base:
-    pop ebp
-    sub ebp, .get_base
+    USERLAND_START
 
     ; --- Fetch page count argument ---
-    mov ebx, 1
-    lea edi, [ebp + arg_buf]
-    mov eax, 14             ; sys_get_arg
-    int 0x80
+    GET_ARG 1, arg_buf
     cmp eax, -1
     je .usage
 
-    ; Parse decimal page count via sys_asc2int
+    ; Parse decimal page count
     lea esi, [ebp + arg_buf]
-    mov eax, 27             ; sys_asc2int
-    int 0x80
-    mov ecx, eax            ; ecx = page count
+    PARSE_INT
     test ecx, ecx
     jz .usage
 
@@ -32,33 +26,19 @@ _start:
 
     ; Print result address
     lea esi, [ebp + ok_msg]
-    mov eax, 2              ; sys_print_cr — but we need raw print
-    ; use sys_print for the message part
-    push eax
-    lea esi, [ebp + ok_msg]
-    mov eax, 1              ; sys_print
-    int 0x80
-    pop eax
+    SYS_PRINT
 
     mov ebx, eax
-    mov eax, 5              ; sys_print_hex
-    int 0x80
+    SYS_PRINT_HEX
 
-    mov eax, 3              ; sys_newline
-    int 0x80
+    SYS_NEWLINE
     ret
 
 .failed:
-    lea esi, [ebp + err_msg]
-    mov eax, 2
-    int 0x80
-    ret
+    PRINT_ERROR err_msg
 
 .usage:
-    lea esi, [ebp + usage_msg]
-    mov eax, 2
-    int 0x80
-    ret
+    PRINT_USAGE usage_msg
 
 usage_msg: db "usage: alloc <pagecount>", 13, 0
 ok_msg:    db "allocated at 0x", 0

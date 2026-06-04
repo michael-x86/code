@@ -37,18 +37,24 @@ build_idt:
     mov eax, isr_default
     mov [edi], ax                        ; offset low (bits 0..15)
     mov word [edi + 2], CODE_SEG         ; segment selector
-    mov byte [edi + 4], 0                ; IST index (unused on i386)
-    mov byte [edi + 5], IDT_PRESENT      ; gate type/attributes
+    mov byte [edi + 4], 0               ; IST index (unused on i386)
+    mov byte [edi + 5], IDT_PRESENT     ; gate type/attributes
     shr eax, 16
-    mov [edi + 6], ax                    ; offset high (bits 16..31)
+    mov [edi + 6], ax                   ; offset high (bits 16..31)
     add edi, 8
     loop .fill
 
-    ; Vector 14: page fault
-    mov eax, page_fault_isr
-    mov ebx, 14
+    ; Install exception handlers (vectors 0-31)
+    ; Use NASM %rep to generate the 32 calls
+    %assign i 0
+    %rep 32
+    mov eax, isr %+ i
+    mov ebx, i
     mov edi, idt_start
     call set_idt_entry
+    %assign i i+1
+    %endrep
+
     ret
 
 

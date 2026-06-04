@@ -17,6 +17,8 @@
 [bits 32]
 [org 0x00000000]
 
+%include "userland.inc"
+
 %define SYS_PUTCHAR   0
 %define SYS_PRINT     1
 %define SYS_PRINT_CR  2
@@ -211,15 +213,36 @@ _start:
     int 0x80
     jmp .read_date
 .date_done:
+    ; DEBUG: Print 'D' to show we reached .date_done
+    push ebx
+    mov ebx, 'D'
+    mov eax, SYS_PUTCHAR
+    int 0x80
+    pop ebx
+    
     mov byte [edi + ecx], 0
     mov eax, SYS_NEWLINE
     int 0x80
     test ecx, ecx
     jz .exit
 
+    ; DEBUG: Print 'C' before calling asc_to_int
+    push ebx
+    mov ebx, 'C'
+    mov eax, SYS_PUTCHAR
+    int 0x80
+    pop ebx
+    
     lea esi, [ebp + input_buf]
     call asc_to_int
     mov [ebp + date_val], eax
+    
+    ; DEBUG: Print 'H' before calling hash_init
+    push ebx
+    mov ebx, 'H'
+    mov eax, SYS_PUTCHAR
+    int 0x80
+    pop ebx
 
     mov eax, [ebp + date_val]
     call hash_init
@@ -1387,7 +1410,7 @@ letters: db 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 ; =============================================================================
 align 4
 
-input_buf:    times 16 db 0
+input_buf:    times 32 db 0
 letter_buf:   db 0
 char_in:      db 0
 char_out:     db 0

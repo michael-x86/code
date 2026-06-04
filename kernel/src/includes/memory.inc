@@ -246,10 +246,9 @@ register_allocation:
 ;   in:  eax = base vaddr, ebx = page count
 ;
 ; For each page: look up the PTE, release the physical frame back to the
-; bitmap, clear the PTE, and flush the TLB entry. The map_page call is
-; what gives us the PTE pointer (it returns the address in edi on
-; success, but this code re-derives it from the page-table layout to
-; avoid depending on map_page's internal register usage).
+; bitmap, clear the PTE, and flush the TLB entry. We re-derive the PTE
+; address from the page-table layout (PD index → page table base, then
+; PT index → PTE offset within that table).
 ; -----------------------------------------------------------------------------
 free_pages:
     push ecx
@@ -260,8 +259,9 @@ free_pages:
     test ecx, ecx
     jz .done
     push eax
-    call map_page                        ; find the PTE for this vaddr
-    jc .next
+    call .get_pte                        ; edi = PTE address (or 0 if unmapped)
+    test edi, edi
+    jz .next
     mov edx, [edi]
     test edx, 1                          ; present bit
     jz .clear
@@ -282,4 +282,50 @@ free_pages:
     pop edi
     pop edx
     pop ecx
+    ret
+
+; -----------------------------------------------------------------------------
+; get_pte — given a virtual address in eax, return edi = PTE address
+;   out: edi = PTE address, or 0 if vaddr not mapped / outside windows
+; -----------------------------------------------------------------------------
+.get_pte:
+    push eax
+    push edx
+    mov edx, eax
+    shr edx, 22                          ; PD index (top 10 bits)
+
+    cmp edx, 768
+    je .pte_pt0
+    cmp edx, 769
+    je .pte_pt1
+    cmp edx, 770
+    je .pte_pt2
+    cmp edx, 771
+    je .pte_pt3
+    cmp edx, 772
+    je .pte_pt4
+    xor edi, edi                         ; not in any window
+    jmp .pte_fail
+.pte_pt0:
+    mov edi, identity_page_table
+    jmp .pte_calc
+.pte_pt1:
+    mov edi, kernel_low_page_table
+    jmp .pte_calc
+.pte_pt2:
+    mov edi, heap_page_table_0
+    jmp .pte_calc
+.pte_pt3:
+    mov edi, heap_page_table_1
+    jmp .pte_calc
+.pte_pt4:
+    mov edi, heap_page_table_2
+.pte_calc:
+    mov edx, eax
+    shr edx, 12
+    and edx, 0x03FF                      ; PTE index
+    lea edi, [edi + edx * 4]             ; edi = PTE address
+.pte_fail:
+    pop edx
+    pop eax
     ret

@@ -2,11 +2,10 @@
 [bits 32]
 [org 0x00000000]
 
+%include "userland.inc"
+
 _start:
-    call .get_base
-.get_base:
-    pop ebp
-    sub ebp, .get_base
+    USERLAND_START
     mov eax, 26             ; hexbyte
     int 0x80
     ret

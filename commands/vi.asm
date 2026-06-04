@@ -1,6 +1,8 @@
 [bits 32]
 [org 0x00000000]
 
+%include "userland.inc"
+
 %define MODE_CMD        0
 %define MODE_INSERT     1
 %define BUF_MAX         1024

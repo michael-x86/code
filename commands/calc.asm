@@ -5,11 +5,10 @@
 [bits 32]
 [org 0x00000000]
 
+%include "userland.inc"
+
 _start:
-    call .get_base
-.get_base:
-    pop ebp
-    sub ebp, .get_base
+    USERLAND_START
 
     ; --- Fetch argv[1] (first argument after "calc") ---
     mov ebx, 1

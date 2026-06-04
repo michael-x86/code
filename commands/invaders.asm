@@ -8,6 +8,8 @@
 [bits 32]
 [org 0x00000000]
 
+%include "userland.inc"
+
 %define W     80
 %define H     25
 %define VGA   0xC00B8000

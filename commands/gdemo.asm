@@ -8,6 +8,8 @@
 [bits 32]
 [org 0x00000000]
 
+%include "userland.inc"
+
 %define SYS_GETKEY        7
 %define SYS_TICK          8
 %define SYS_GFX_ENTER     36

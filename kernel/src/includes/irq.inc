@@ -24,11 +24,9 @@ section .text
 
 
 ; -----------------------------------------------------------------------------
-; isr_default — handler for unexpected interrupts and CPU exceptions
-; Just acknowledge the master PIC and iret. We never expect to land
-; here; if we do, the system is in an unrecoverable state and the
-; "ignore" behavior just lets the shell keep running. A production
-; kernel would panic-and-reboot here.
+; isr_default — handler for unexpected interrupts and non-exception vectors
+; This is used for vectors 32-255 (IRQs and user-defined interrupts).
+; Just acknowledge the PIC(s) and return.
 ; -----------------------------------------------------------------------------
 isr_default:
     pushad
@@ -36,47 +34,6 @@ isr_default:
     out PIC_MASTER_CMD, al
     popad
     iretd
-
-
-; -----------------------------------------------------------------------------
-; page_fault_isr / page_fault_handler — print a message and hang
-;
-; A real page fault means either a NULL deref or a missing mapping.
-; We don't have a swap subsystem, so the latter is fatal. Print the
-; faulting address (read from CR2) and a hint, then spin so the user
-; can read it before the screen scrolls.
-; -----------------------------------------------------------------------------
-page_fault_isr:
-    cli
-    pushad
-    mov eax, [esp + 36]                  ; saved EIP
-    push eax
-    call page_fault_handler
-    add esp, 4
-.hang:
-    hlt
-    jmp .hang
-
-page_fault_handler:
-    push ebp
-    mov ebp, esp
-    PRINT_STRING_CR pf_msg
-    PRINT_STRING pf_addr
-    mov eax, cr2                        ; CR2 = faulting linear address
-    call print_hex_dword
-    call newline
-
-    ; Spin for ~half a second of busy-wait so the message is readable.
-    mov edx, 0x7777
-.outer:
-    mov ecx, 0xFFFF
-.inner:
-    dec ecx
-    jnz .inner
-    dec edx
-    jnz .outer
-    pop ebp
-    iret
 
 
 ; -----------------------------------------------------------------------------
