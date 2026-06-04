@@ -151,7 +151,8 @@ derive_daily_key:
     cmp     edi, NUM_MAIN_ROTORS
     jl      .find_rotor2
 .fr2_found:
-    mov     [daily_rotor_idx + 1], edi
+    mov     eax, edi
+    mov     [daily_rotor_idx + 1], al
     mov     byte [used_main_rotors + edi], 1
 
     ; Rotor 3 (fast) — pick from remaining 6
@@ -172,7 +173,8 @@ derive_daily_key:
     cmp     edi, NUM_MAIN_ROTORS
     jl      .find_rotor3
 .fr3_found:
-    mov     [daily_rotor_idx + 2], edi
+    mov     eax, edi
+    mov     [daily_rotor_idx + 2], al
     mov     byte [used_main_rotors + edi], 1
 
     ; --- Ring settings (bytes 4-7) ---
@@ -298,8 +300,8 @@ derive_plugboard:
     ; Remove second letter from available list
     movzx   ecx, byte [plug_alphabet_cnt]
     dec     ecx
-    mov     dl, [plug_alphabet + ecx]
-    mov     [plug_alphabet + edx], dl
+    mov     al, [plug_alphabet + ecx]
+    mov     [plug_alphabet + edx], al
     mov     byte [plug_alphabet_cnt], cl
 
     add     esi, 2              ; next pair of hash bytes

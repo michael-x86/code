@@ -83,15 +83,21 @@ enigma_init:
     ; Get rotor type (0-9)
     movzx   eax, byte [daily_rotor_idx + ebx]
 
-    ; Copy forward wiring: rotor_wiring[type*26] → rotor_fwd[rbx*26]
+    ; Copy forward wiring (normalized to 0-25): rotor_wiring[type*26] → rotor_fwd[ebx*26]
     imul    eax, 26
     lea     esi, [rotor_wiring + eax]
     mov     edi, ebx
     imul    edi, 26
     lea     edi, [rotor_fwd + edi]
     push    ecx
-    mov     ecx, 26
-    rep movsb
+    xor     ecx, ecx
+.fwd_copy:
+    movzx   eax, byte [esi + ecx]   ; wiring letter ('A'-'Z')
+    sub     eax, 'A'                 ; normalize to 0-25
+    mov     [edi + ecx], al
+    inc     ecx
+    cmp     ecx, 26
+    jl      .fwd_copy
     pop     ecx
 
     ; Precompute reverse wiring
@@ -127,18 +133,27 @@ enigma_init:
     ; Compute offset into packed notch table.
     ; Packed layout: I(1B), II(1B), III(1B), IV(1B), V(1B), VI(2B), VII(2B), VIII(2B)
     ; Offsets by type: 0, 1, 2, 3, 4, 5, 7, 9
-    ; Formula: offset = type + max(0, type - 4)
+    ; Formula: offset = type + max(0, type - 5)
+    ;   (types 0-5 map 1:1; VI at type 5 is the first 2-notch rotor,
+    ;    so types 6 and 7 each shift right by their extra notch byte)
     push    ebx
     mov     edi, eax            ; edi = type (will become table offset)
-    cmp     eax, 4
+    cmp     eax, 5
     jle     .offset_ok
     add     edi, eax
-    sub     edi, 4              ; edi = type + (type - 4) for types 5-7
+    sub     edi, 5              ; offset = type + (type - 5) for types 6,7
 .offset_ok:
-    movzx   ecx, byte [rotor_notch_count + eax]  ; eax still = type
+    movzx   ecx, byte [rotor_notch_count + eax]  ; ecx = notch count
     mov     [rotor_ncnt + ebx], cl               ; write to working index
-    movzx   eax, byte [rotor_notch + edi]         ; read from packed source table
-    mov     [rotor_wnotch + ebx * 2], al           ; write to local working copy
+    mov     eax, ebx
+    add     eax, eax                              ; eax = ebx * 2 (dest offset)
+    movzx   edx, byte [rotor_notch + edi]         ; first notch
+    mov     [rotor_wnotch + eax], dl
+    cmp     ecx, 2
+    jl      .notch_copied
+    movzx   edx, byte [rotor_notch + edi + 1]     ; second notch (double-notch rotors)
+    mov     [rotor_wnotch + eax + 1], dl
+.notch_copied:
     pop     ebx
     jmp     .next_rotor
 
@@ -150,14 +165,20 @@ enigma_init:
     jmp     .init_rotor
 
 .init_refl:
-    ; Copy reflector wiring
+    ; Copy reflector wiring (normalized to 0-25)
     movzx   eax, byte [daily_reflector]
     imul    eax, 26
     lea     esi, [reflector_wiring + eax]
     lea     edi, [refl_wiring]
     push    ecx
-    mov     ecx, 26
-    rep movsb
+    xor     ecx, ecx
+.refl_copy:
+    movzx   eax, byte [esi + ecx]   ; reflector letter ('A'-'Z')
+    sub     eax, 'A'                 ; normalize to 0-25
+    mov     [edi + ecx], al
+    inc     ecx
+    cmp     ecx, 26
+    jl      .refl_copy
     pop     ecx
 
     ; Copy plugboard
