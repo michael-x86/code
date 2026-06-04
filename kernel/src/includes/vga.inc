@@ -287,4 +287,4 @@ shutdown:
 
 section .rodata
 
-sys_msg  db  "ONO-SENDAI HosakaONE: ready.", 0
+sys_msg  db  "ONO-SENDAI HosakaONE", 0
