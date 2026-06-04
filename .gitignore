@@ -1,8 +1,8 @@
 # ── Build artifacts ───────────────────────────────────────────────
 
-# Final disk image
-os.img
-boot.img
+# Disk images and binary files (anywhere in repo)
+*.img
+*.bin
 
 # Generated filesystem include
 fs.inc
@@ -12,8 +12,6 @@ build/fs.inc
 bin/
 
 # Intermediate build files
-kernel.bin
-bootloader.bin
 kernel.lst
 
 # ── Copied build scripts / sources (source of truth is build/, kernel/, boot/) ──
@@ -41,8 +39,6 @@ Thumbs.db
 scripts/
 build/code-index/
 Elite (video game) - Wikipedia.pdf
-build/*.img
-
 # ── AI session handoffs (local-only, regenerated each session) ───────────
 .github/ai-context/
 build/*.png

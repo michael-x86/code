@@ -40,7 +40,7 @@ _start:
     int 0x80
 
     lea esi, [ebp + prompt_date]
-    mov eax, SYS_PRINT
+    mov eax, SYS_PRINT_CR
     int 0x80
 
     ; Read date string one byte at a time
@@ -48,14 +48,33 @@ _start:
     xor ecx, ecx
 .read_date:
     call blocking_get_key
+    test ecx, ecx
+    jnz .have_chars
+    ; No chars yet — ignore everything except digit and backspace. The
+    ; shell may have left a stray CR / LF in the buffer from launching us.
+    test al, al
+    jz .read_date
+    cmp al, '0'
+    jb .read_date
+    cmp al, '9'
+    ja .try_bs
+    jmp .got_digit
+.try_bs:
+    cmp al, 0x08
+    jne .read_date
+    jmp .date_bs
+.have_chars:
     cmp al, 0x0D
     je .date_done
     cmp al, 0x0A
     je .date_done
     test al, al
     jz .read_date
-    cmp al, 0x08
-    je .date_bs
+    cmp al, '0'
+    jb .read_date
+    cmp al, '9'
+    ja .not_digit
+.got_digit:
     cmp ecx, 8
     jge .read_date
     mov [edi + ecx], al
@@ -64,6 +83,10 @@ _start:
     mov eax, SYS_PUTCHAR
     int 0x80
     jmp .read_date
+.not_digit:
+    cmp al, 0x08
+    jne .read_date
+    jmp .date_bs
 .date_bs:
     test ecx, ecx
     jz .read_date
@@ -108,8 +131,8 @@ _start:
     call apply_message_key
     call enigma_reset
 
-    lea esi, [msg_interactive]
-    mov eax, SYS_PRINT
+    lea esi, [ebp + msg_interactive]
+    mov eax, SYS_PRINT_CR
     int 0x80
 
     call interactive_loop
@@ -720,161 +743,167 @@ enigma_step:
 
 ; =============================================================================
 ; enigma_crypt — encrypt/decrypt a single character
+;   in:  al = letter index (0–25)
+;   out: al = encrypted letter index (0–25)
+;
+; Stack frame via ebp:
+;   [ebp - 4]  = loop counter (dword)
+;   [ebp - 5]  = current character (byte)
+;   [ebp - 9]  = saved ebx
+;   [ebp - 13] = saved ecx
+;   [ebp - 17] = saved edx
+;   [ebp - 21] = saved esi
+;   [ebp - 25] = saved edi
+;   [ebp + 0]  = saved outer ebp  (= program base for data refs)
+;   [ebp + 4]  = return address
 ; =============================================================================
 enigma_crypt:
+    push ebp
+    mov ebp, esp
     push ebx
     push ecx
     push edx
     push esi
     push edi
+    sub esp, 8                  ; [ebp-4] = counter, [ebp-5] = char
 
-    mov [esp + 24], al
+    mov edi, [ebp]              ; edi = outer ebp = program base
+    mov [ebp - 5], al           ; save input character
 
-    movzx eax, byte [ebp + eax + plug_map]
-    mov [esp + 24], al
+    movzx eax, byte [edi + eax + plug_map]
+    mov [ebp - 5], al
 
-    mov dword [esp + 20], 2
+    mov dword [ebp - 4], 2      ; loop counter = 2 (fast rotor index)
 .fwd_main:
-    cmp dword [esp + 20], 0
+    cmp dword [ebp - 4], 0
     jl .fwd_thin
-    mov ebx, [esp + 20]
+    mov ebx, [ebp - 4]          ; ebx = rotor index
 
-    movzx eax, byte [esp + 24]
-    movzx ecx, byte [ebp + ebx + rotor_pos]
+    movzx eax, byte [ebp - 5]   ; eax = current char
+    movzx ecx, byte [edi + ebx + rotor_pos]
     add eax, ecx
-    movzx ecx, byte [ebp + ebx + rotor_ring]
+    movzx ecx, byte [edi + ebx + rotor_ring]
     sub eax, ecx
     add eax, ALPHA2
     xor edx, edx
-    push ebx
-    mov ebx, ALPHA
-    div ebx
-    pop ebx
-    push edx
-
+    mov esi, 26
+    div esi                     ; edx = offset into rotor wiring
+    mov ecx, edx                ; save remainder in ecx
     imul ebx, 26
-    pop edx
-    add ebx, edx
-    movzx eax, byte [ebp + ebx + rotor_fwd]
+    add ebx, ecx
+    movzx eax, byte [edi + ebx + rotor_fwd]
 
-    mov ebx, [esp + 20]
-    movzx ecx, byte [ebp + ebx + rotor_pos]
+    mov ebx, [ebp - 4]
+    movzx ecx, byte [edi + ebx + rotor_pos]
     sub eax, ecx
-    movzx ecx, byte [ebp + ebx + rotor_ring]
+    movzx ecx, byte [edi + ebx + rotor_ring]
     add eax, ecx
     add eax, ALPHA2
     xor edx, edx
     mov ecx, ALPHA
     div ecx
-    mov [esp + 24], dl
+    mov [ebp - 5], dl
 
-    dec dword [esp + 20]
+    dec dword [ebp - 4]
     jmp .fwd_main
 
 .fwd_thin:
     mov ebx, 3
-    movzx eax, byte [esp + 24]
-    movzx ecx, byte [ebp + ebx + rotor_pos]
+    movzx eax, byte [ebp - 5]
+    movzx ecx, byte [edi + ebx + rotor_pos]
     add eax, ecx
-    movzx ecx, byte [ebp + ebx + rotor_ring]
+    movzx ecx, byte [edi + ebx + rotor_ring]
     sub eax, ecx
     add eax, ALPHA2
     xor edx, edx
-    push ebx
-    mov ebx, ALPHA
-    div ebx
-    pop ebx
-    push edx
+    mov esi, 26
+    div esi
+    mov ecx, edx
     imul ebx, 26
-    pop edx
-    add ebx, edx
-    movzx eax, byte [ebp + ebx + rotor_fwd]
-    movzx ecx, byte [ebp + rotor_pos + 3]
+    add ebx, ecx
+    movzx eax, byte [edi + ebx + rotor_fwd]
+    movzx ecx, byte [edi + rotor_pos + 3]
     sub eax, ecx
-    movzx ecx, byte [ebp + rotor_ring + 3]
+    movzx ecx, byte [edi + rotor_ring + 3]
     add eax, ecx
     add eax, ALPHA2
     xor edx, edx
     mov ecx, ALPHA
     div ecx
-    mov [esp + 24], dl
+    mov [ebp - 5], dl
 
-    movzx eax, byte [esp + 24]
-    movzx eax, byte [ebp + eax + refl_wiring]
-    mov [esp + 24], al
+    movzx eax, byte [ebp - 5]
+    movzx eax, byte [edi + eax + refl_wiring]
+    mov [ebp - 5], al
 
     mov ebx, 3
-    movzx eax, byte [esp + 24]
-    movzx ecx, byte [ebp + ebx + rotor_pos]
+    movzx eax, byte [ebp - 5]
+    movzx ecx, byte [edi + ebx + rotor_pos]
     add eax, ecx
-    movzx ecx, byte [ebp + ebx + rotor_ring]
+    movzx ecx, byte [edi + ebx + rotor_ring]
     sub eax, ecx
     add eax, ALPHA2
     xor edx, edx
-    push ebx
-    mov ebx, ALPHA
-    div ebx
-    pop ebx
-    push edx
+    mov esi, 26
+    div esi
+    mov ecx, edx
     imul ebx, 26
-    pop edx
-    add ebx, edx
-    movzx eax, byte [ebp + ebx + rotor_rev]
-    movzx ecx, byte [ebp + rotor_pos + 3]
+    add ebx, ecx
+    movzx eax, byte [edi + ebx + rotor_rev]
+    movzx ecx, byte [edi + rotor_pos + 3]
     sub eax, ecx
-    movzx ecx, byte [ebp + rotor_ring + 3]
+    movzx ecx, byte [edi + rotor_ring + 3]
     add eax, ecx
     add eax, ALPHA2
     xor edx, edx
     mov ecx, ALPHA
     div ecx
-    mov [esp + 24], dl
+    mov [ebp - 5], dl
 
-    mov dword [esp + 20], 0
+    mov dword [ebp - 4], 0
 .bwd_main:
-    cmp dword [esp + 20], 2
+    cmp dword [ebp - 4], 2
     jg .bwd_done
-    mov ebx, [esp + 20]
+    mov ebx, [ebp - 4]
 
-    movzx eax, byte [esp + 24]
-    movzx ecx, byte [ebp + ebx + rotor_pos]
+    movzx eax, byte [ebp - 5]
+    movzx ecx, byte [edi + ebx + rotor_pos]
     add eax, ecx
-    movzx ecx, byte [ebp + ebx + rotor_ring]
+    movzx ecx, byte [edi + ebx + rotor_ring]
     sub eax, ecx
     add eax, ALPHA2
     xor edx, edx
-    push ebx
-    mov ebx, ALPHA
-    div ebx
-    pop ebx
-    push edx
+    mov esi, 26
+    div esi
+    mov ecx, edx
     imul ebx, 26
-    pop edx
-    add ebx, edx
-    movzx eax, byte [ebp + ebx + rotor_rev]
-    mov ebx, [esp + 20]
-    movzx ecx, byte [ebp + ebx + rotor_pos]
+    add ebx, ecx
+    movzx eax, byte [edi + ebx + rotor_rev]
+    mov ebx, [ebp - 4]
+    movzx ecx, byte [edi + ebx + rotor_pos]
     sub eax, ecx
-    movzx ecx, byte [ebp + ebx + rotor_ring]
+    movzx ecx, byte [edi + ebx + rotor_ring]
     add eax, ecx
     add eax, ALPHA2
     xor edx, edx
     mov ecx, ALPHA
     div ecx
-    mov [esp + 24], dl
+    mov [ebp - 5], dl
 
-    inc dword [esp + 20]
+    inc dword [ebp - 4]
     jmp .bwd_main
 
 .bwd_done:
-    movzx eax, byte [esp + 24]
-    movzx eax, byte [ebp + eax + plug_map]
+    movzx eax, byte [ebp - 5]
+    movzx eax, byte [edi + eax + plug_map]
 
+    add esp, 8
     pop edi
     pop esi
     pop edx
     pop ecx
     pop ebx
+    pop ebp
     ret
 
 ; =============================================================================
@@ -1180,7 +1209,7 @@ space_str:   db " ", 0
 separator:   db " | ", 0
 
 msg_daily_key:
-    db "Daily key (derived from date):", 13, 0
+    db "Daily key (derived from date):", 0
 msg_rotors:     db "  Rotors (slow-mid-fast-thin): ", 0
 msg_reflector:  db "  Reflector:                    ", 0
 msg_rings:      db "  Ring settings:                ", 0
