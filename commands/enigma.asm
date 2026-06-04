@@ -5,6 +5,11 @@
 ; a xorshift PRNG to derive daily settings from a YYYYMMDD date. Bundled
 ; here as a single flat binary that uses the OS's int 0x80 syscall ABI.
 ;
+; Usage:
+;   enigma                      — interactive mode (prompts for date + input)
+;   enigma e YYYYMMDD MESSAGE   — encrypt MESSAGE using date-derived key
+;   enigma d YYYYMMDD MESSAGE   — decrypt MESSAGE (Enigma is symmetric)
+;
 ; All memory accesses use [default rel] addressing, so every `[label]` is
 ; resolved as the load-address + label-offset, which equals [ebp + label]
 ; because ebp is set to the address of _start in the loader.
@@ -18,6 +23,7 @@
 %define SYS_NEWLINE   3
 %define SYS_CLS       4
 %define SYS_GETKEY    7
+%define SYS_GET_ARG   14
 
 %define ALPHA   26
 %define ALPHA2  52
@@ -32,6 +38,109 @@ _start:
     pop ebp
     sub ebp, .anchor
 
+    ; --- Try to read CLI arguments ---
+    ; arg 1: mode ('e' or 'd')
+    lea edi, [ebp + arg_buf_1]
+    mov ebx, 1
+    mov eax, SYS_GET_ARG
+    int 0x80
+    cmp eax, -1
+    je .interactive
+
+    ; arg 2: date (YYYYMMDD)
+    lea edi, [ebp + arg_buf_2]
+    mov ebx, 2
+    mov eax, SYS_GET_ARG
+    int 0x80
+    cmp eax, -1
+    je .interactive
+
+    ; arg 3: message
+    lea edi, [ebp + arg_buf_3]
+    mov ebx, 3
+    mov eax, SYS_GET_ARG
+    int 0x80
+    cmp eax, -1
+    je .interactive
+
+    ; We have all 3 CLI args — non-interactive mode
+    ; Parse date
+    lea esi, [ebp + arg_buf_2]
+    call asc_to_int
+    mov [ebp + date_val], eax
+
+    ; Derive daily key from date
+    mov eax, [ebp + date_val]
+    call hash_init
+    call hash_expand
+    call derive_daily_key
+    call derive_message_key
+    call enigma_init
+
+    ; Apply message key as daily position
+    call apply_message_key
+    call enigma_reset
+
+    ; Process each character of the message
+    lea esi, [ebp + arg_buf_3]
+    xor ecx, ecx
+.process_msg:
+    movzx eax, byte [esi + ecx]
+    test al, al
+    jz .process_done
+
+    ; Convert to uppercase
+    cmp al, 'a'
+    jl .check_upper
+    cmp al, 'z'
+    jg .check_upper
+    sub al, 32              ; lowercase -> uppercase
+
+.check_upper:
+    cmp al, 'A'
+    jl .skip_char
+    cmp al, 'Z'
+    jg .skip_char
+
+    ; Valid letter
+    sub al, 'A'
+    push eax
+    push ecx
+    push esi
+    call enigma_step
+    pop esi
+    pop ecx
+    pop eax
+    call enigma_crypt
+    add al, 'A'
+    mov ebx, eax
+    mov eax, SYS_PUTCHAR
+    int 0x80
+    jmp .next_char
+
+.skip_char:
+    ; Output non-letter chars verbatim
+    push ecx
+    push esi
+    mov ebx, eax
+    mov eax, SYS_PUTCHAR
+    int 0x80
+    pop esi
+    pop ecx
+
+.next_char:
+    inc ecx
+    jmp .process_msg
+
+.process_done:
+    mov eax, SYS_NEWLINE
+    int 0x80
+    ret
+
+; =============================================================================
+; Interactive mode (original behaviour)
+; =============================================================================
+.interactive:
     mov eax, SYS_CLS
     int 0x80
 
@@ -1284,6 +1393,11 @@ char_in:      db 0
 char_out:     db 0
 date_val:     dd 0
 indicator:    times 8 db 0
+
+; Argument buffers
+arg_buf_1:    times 32 db 0
+arg_buf_2:    times 32 db 0
+arg_buf_3:    times 256 db 0
 
 prng_state:   dd 0
 hash_buf:     times 32 db 0

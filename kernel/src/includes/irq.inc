@@ -62,8 +62,8 @@ page_fault_handler:
     mov ebp, esp
     PRINT_STRING_CR pf_msg
     PRINT_STRING pf_addr
-    ; mov eax, cr2                       ; CR2 = faulting linear address
-    ; call print_hex_dword
+    mov eax, cr2                        ; CR2 = faulting linear address
+    call print_hex_dword
     call newline
 
     ; Spin for ~half a second of busy-wait so the message is readable.
