@@ -19,16 +19,29 @@
 
 %include "userland.inc"
 
-%define SYS_PUTCHAR   0
-%define SYS_PRINT     1
-%define SYS_PRINT_CR  2
-%define SYS_NEWLINE   3
-%define SYS_CLS       4
-%define SYS_GETKEY    7
-%define SYS_GET_ARG   14
+; =============================================================================
+; SYSTEM CALL NUMBERS (duplicated from userland.inc for clarity)
+; =============================================================================
+%define SYS_PUTCHAR   0       ; ebx = character to print
+%define SYS_PRINT     1       ; esi = NUL-terminated string
+%define SYS_PRINT_CR  2       ; esi = string (auto CR before)
+%define SYS_NEWLINE   3       ; Print newline (CR+LF)
+%define SYS_CLS       4       ; Clear screen
+%define SYS_GETKEY    7       ; Block until key, al = character
+%define SYS_GET_ARG   14      ; ebx = arg num, edi = buffer
 
-%define ALPHA   26
-%define ALPHA2  52
+; =============================================================================
+; ENIGMA CONSTANTS
+; =============================================================================
+%define ALPHA         26      ; Letters in alphabet
+%define ALPHA2        52      ; ALPHA * 2 (for modular arithmetic)
+
+; Derived constants for code clarity
+%define NUM_ROTORS    4       ; Number of rotors in M4 (3 main + 1 thin)
+%define NUM_MAIN      8       ; Main rotor choices (I-VIII)
+%define NUM_THIN      2       ; Thin rotor choices (Beta, Gamma)
+%define NUM_REFLECT   2       ; Reflector choices (B, C)
+%define MAX_PLUGS     10      ; Maximum plugboard pairs
 
 ; =============================================================================
 ; Entry point
@@ -143,12 +156,22 @@ _start:
 ; Interactive mode (original behaviour)
 ; =============================================================================
 .interactive:
+    ; DEBUG: Print 'I' to confirm we entered interactive mode
+    ;mov ebx, 'I'
+    ;mov eax, SYS_PUTCHAR
+    ;int 0x80
+
     mov eax, SYS_CLS
     int 0x80
 
     lea esi, [ebp + banner]
     mov eax, SYS_PRINT
     int 0x80
+
+    ; DEBUG: Print 'P' to confirm we printed banner
+    ;mov ebx, 'P'
+    ;mov eax, SYS_PUTCHAR
+    ;int 0x80
 
     lea esi, [ebp + prompt_date]
     mov eax, SYS_PRINT_CR
@@ -252,7 +275,11 @@ _start:
     ret
 
 ; =============================================================================
-; blocking_get_key — busy-loop until a non-zero key arrives
+; blocking_get_key — Busy-loop until a non-zero key arrives
+; =============================================================================
+; Input:  None
+; Output: AL = ASCII character (non-zero)
+; Clobbers: EAX
 ; =============================================================================
 blocking_get_key:
     mov eax, SYS_GETKEY
@@ -263,6 +290,10 @@ blocking_get_key:
 
 ; =============================================================================
 ; asc_to_int — NUL-terminated ASCII decimal string → 32-bit integer
+; =============================================================================
+; Input:  ESI = pointer to NUL-terminated decimal string
+; Output: EAX = 32-bit integer value
+; Clobbers: EAX, EBX, ECX, EDX, ESI
 ; =============================================================================
 asc_to_int:
     push ebx
@@ -293,7 +324,11 @@ asc_to_int:
     ret
 
 ; =============================================================================
-; io_print — print NUL-terminated string at esi
+; io_print — Print NUL-terminated string at ESI
+; =============================================================================
+; Input:  ESI = pointer to NUL-terminated string
+; Output: None
+; Clobbers: EAX, ECX, EDX (via syscall)
 ; =============================================================================
 io_print:
     push esi
@@ -316,8 +351,11 @@ io_print:
     ret
 
 ; =============================================================================
-; io_print_letter — print one A–Z letter
-; Input: al = index 0..25
+; io_print_letter — Print one A-Z letter from index
+; =============================================================================
+; Input:  AL = letter index (0-25)
+; Output: None (prints character)
+; Clobbers: EAX, EBX
 ; =============================================================================
 io_print_letter:
     add al, 'A'
@@ -330,6 +368,10 @@ io_print_letter:
 ; =============================================================================
 ; io_newline
 ; =============================================================================
+; Input:  None
+; Output: None
+; Clobbers: EAX
+; =============================================================================
 io_newline:
     mov eax, SYS_NEWLINE
     int 0x80
@@ -337,6 +379,11 @@ io_newline:
 
 ; =============================================================================
 ; display_daily_key — print derived settings
+; =============================================================================
+; Input:  daily_rotor_idx, daily_ring, daily_position, daily_reflector,
+;         daily_plugs must be set
+; Output: None (prints to screen)
+; Clobbers: EAX, EBX, ECX, EDX, ESI, EDI
 ; =============================================================================
 display_daily_key:
     push eax
@@ -436,6 +483,10 @@ display_daily_key:
 ; =============================================================================
 ; display_plugboard — print all 10 plugboard pairs
 ; =============================================================================
+; Input:  daily_plugs must be set
+; Output: None (prints to screen)
+; Clobbers: EAX, EBX, ECX, EDX, ESI, EDI
+; =============================================================================
 display_plugboard:
     push eax
     push ebx
@@ -478,6 +529,10 @@ display_plugboard:
 ; =============================================================================
 ; encrypt_message_indicator — encrypt the 4-letter message key twice
 ; =============================================================================
+; Input:  message_key must be set, Enigma initialized
+; Output: indicator contains 8-letter doubled key
+; Clobbers: EAX, ECX
+; =============================================================================
 encrypt_message_indicator:
     push eax
     push ecx
@@ -518,6 +573,10 @@ encrypt_message_indicator:
 ; =============================================================================
 ; display_indicator
 ; =============================================================================
+; Input:  indicator must be set (8 bytes)
+; Output: None (prints to screen)
+; Clobbers: EAX, ECX, ESI
+; =============================================================================
 display_indicator:
     push eax
     push ecx
@@ -540,6 +599,10 @@ display_indicator:
 ; =============================================================================
 ; display_message_key
 ; =============================================================================
+; Input:  message_key must be set (4 bytes)
+; Output: None (prints to screen)
+; Clobbers: EAX, ECX, ESI
+; =============================================================================
 display_message_key:
     push eax
     push ecx
@@ -561,6 +624,10 @@ display_message_key:
 
 ; =============================================================================
 ; interactive_loop — read chars, encrypt, print, until empty line
+; =============================================================================
+; Input:  Enigma must be initialized, message key applied
+; Output: None (prints encrypted characters)
+; Clobbers: EAX, ECX, ESI
 ; =============================================================================
 interactive_loop:
     push eax
@@ -623,7 +690,12 @@ interactive_loop:
     ret
 
 ; =============================================================================
-; mod26 — EAX = EAX mod 26
+; =============================================================================
+; mod26 — Calculate EAX mod 26
+; =============================================================================
+; Input:  EAX = value to reduce
+; Output: EAX = EAX mod 26 (range 0-25)
+; Clobbers: EDX
 ; =============================================================================
 mod26:
     push ebx
@@ -635,7 +707,13 @@ mod26:
     ret
 
 ; =============================================================================
-; is_at_notch — AL = position, ECX = count, EDX = pointer to notch bytes
+; is_at_notch — Check if rotor is at notch position
+; =============================================================================
+; Input:  AL = current rotor position (0-25)
+;         ECX = number of notches (0, 1, or 2)
+;         EDX = pointer to notch position byte(s)
+; Output: AL = 1 if at notch, 0 otherwise
+; Clobbers: EAX, ECX, EDX
 ; =============================================================================
 is_at_notch:
     push ebx
@@ -657,7 +735,13 @@ is_at_notch:
     ret
 
 ; =============================================================================
+; =============================================================================
 ; enigma_init — copy daily key into working state, precompute reverse wiring
+; =============================================================================
+; Input:  daily_rotor_idx, daily_ring, daily_position, daily_reflector
+;         daily_plugs must be set
+; Output: rotor_fwd, rotor_rev, refl_wiring, plug_map populated
+; Clobbers: EAX, EBX, ECX, EDX, ESI, EDI
 ; =============================================================================
 enigma_init:
     push ebx
@@ -772,6 +856,10 @@ enigma_init:
 ; =============================================================================
 ; enigma_reset — reset rotor positions to daily_position values
 ; =============================================================================
+; Input:  daily_position must be set
+; Output: rotor_pos set to daily_position values
+; Clobbers: EAX, ECX, ESI, EDI
+; =============================================================================
 enigma_reset:
     push esi
     push edi
@@ -787,6 +875,10 @@ enigma_reset:
 
 ; =============================================================================
 ; enigma_step — advance rotors before encoding a character
+; =============================================================================
+; Input:  rotor_pos, rotor_ncnt, rotor_wnotch must be set
+; Output: rotor_pos updated (rotors stepped)
+; Clobbers: EAX, ECX, EDX
 ; =============================================================================
 enigma_step:
     push ebx
@@ -849,6 +941,11 @@ enigma_step:
 ;   [ebp - 20] = saved edi
 ;   [ebp + 0]  = saved outer ebp  (= program base for data refs)
 ;   [ebp + 4]  = return address
+; =============================================================================
+; Input:  AL = letter index (0-25)
+;         All Enigma state must be initialized
+; Output: AL = encrypted/decrypted letter index (0-25)
+; Clobbers: EAX, EBX, ECX, EDX, ESI, EDI, ESP
 ; =============================================================================
 enigma_crypt:
     push ebp
@@ -1002,6 +1099,12 @@ enigma_crypt:
 ; =============================================================================
 ; hash_init / hash_expand / xorshift32
 ; =============================================================================
+; hash_init — Initialize PRNG state from date value
+; =============================================================================
+; Input:  EAX = date value (YYYYMMDD as integer)
+; Output: prng_state initialized
+; Clobbers: EAX, EBX
+; =============================================================================
 hash_init:
     mov ebx, eax
     shl ebx, 7
@@ -1015,6 +1118,13 @@ hash_init:
     mov [ebp + prng_state], eax
     ret
 
+; =============================================================================
+; xorshift32 — Generate next PRNG value
+; =============================================================================
+; Input:  prng_state must be set
+; Output: EAX = next pseudo-random value
+; Clobbers: EAX, EBX, EDX
+; =============================================================================
 xorshift32:
     mov eax, [ebp + prng_state]
     mov ebx, eax
@@ -1029,6 +1139,13 @@ xorshift32:
     mov [ebp + prng_state], eax
     ret
 
+; =============================================================================
+; hash_expand — Expand PRNG state to 32-byte buffer
+; =============================================================================
+; Input:  prng_state must be initialized
+; Output: hash_buf filled with 8 × 32-bit values
+; Clobbers: EAX, ECX, EDI
+; =============================================================================
 hash_expand:
     push ebx
     push ecx
@@ -1048,6 +1165,11 @@ hash_expand:
 
 ; =============================================================================
 ; derive_daily_key
+; =============================================================================
+; Input:  hash_buf must be filled (32 bytes)
+; Output: daily_rotor_idx, daily_ring, daily_position, daily_reflector,
+;         daily_plugs populated
+; Clobbers: EAX, EBX, ECX, EDX, ESI, EDI
 ; =============================================================================
 derive_daily_key:
     push ebx
@@ -1171,7 +1293,13 @@ derive_daily_key:
     ret
 
 ; =============================================================================
+; =============================================================================
 ; derive_plugboard
+; =============================================================================
+; Input:  hash_buf[12..31] contains random bytes
+;         plug_alphabet initialized with 0-25
+; Output: daily_plugs contains 10 stecker pairs
+; Clobbers: EAX, EBX, ECX, EDX, ESI, EDI
 ; =============================================================================
 derive_plugboard:
     push ebx
@@ -1247,6 +1375,10 @@ derive_plugboard:
 ; =============================================================================
 ; derive_message_key
 ; =============================================================================
+; Input:  hash_buf[22..25] contains random bytes
+; Output: message_key populated with 4 letters (0-25)
+; Clobbers: EAX, EDX, ECX, ESI
+; =============================================================================
 derive_message_key:
     push esi
     lea esi, [ebp + hash_buf]
@@ -1278,6 +1410,10 @@ derive_message_key:
 
 ; =============================================================================
 ; apply_message_key
+; =============================================================================
+; Input:  message_key must be set
+; Output: daily_position updated
+; Clobbers: EAX, ECX
 ; =============================================================================
 apply_message_key:
     movzx eax, byte [ebp + message_key + 0]
