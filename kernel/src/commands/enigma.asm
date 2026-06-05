@@ -159,6 +159,13 @@ _start:
     test al, al
     jz .process_done
 
+    ; Check for space - encode as 'X' (23) in cleartext
+    cmp al, ' '
+    jne .not_space
+    mov al, 23          ; 'X' - 'A' = 23
+    jmp .valid_letter
+.not_space:
+
     ; Convert to uppercase
     cmp al, 'a'
     jl .check_upper
@@ -172,6 +179,7 @@ _start:
     cmp al, 'Z'
     jg .skip_char
 
+.valid_letter:
     ; Valid letter
     sub al, 'A'
     push eax
@@ -714,6 +722,13 @@ interactive_loop:
     je .newline_or_eof
     cmp al, 0x0D
     je .newline_or_eof
+
+    ; Check for space - encode as 'X' (23) in cleartext
+    cmp al, ' '
+    jne .not_space
+    mov al, 23          ; 'X' - 'A' = 23
+    jmp .got_letter
+.not_space:
 
     cmp al, 'A'
     jl .interactive_loop
@@ -1582,7 +1597,7 @@ msg_help5:      db "  Interactive: enigma", 13, 0
 msg_help6:      db "  CLI encrypt: enigma e YYYYMMDD MESSAGE", 13, 0
 msg_help7:      db "  CLI decrypt: enigma d YYYYMMDD MESSAGE", 13, 0
 msg_help8:      db 13, "INTERACTIVE COMMANDS:", 13, 0
-msg_help9:      db "  A-Z, a-z  Encrypt typed letter", 13, 0
+msg_help9:      db "  A-Z, a-z  Encrypt typed letter (Space=encode 'X')", 13, 0
 msg_help10:     db "  Enter      Newline (submit message)", 13, 0
 msg_help11:     db "  ? or h     Show this help", 13, 0
 msg_help12:     db "  Empty line Quit", 13, 0
