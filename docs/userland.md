@@ -87,6 +87,7 @@ of the program and is freed automatically when you `ret`.
 | `help`    | Print usage info                                 |
 | `calc`    | Simple calculator                                |
 | `argtest` | Print received arguments                         |
+| `debug`   | Interactive kernel debugger (ESC/d=debug, q=quit, +/-=scroll) |
 
 ## Calling Convention
 

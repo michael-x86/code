@@ -1,14 +1,15 @@
 ; =============================================================================
 ; morse.asm — Display Morse code as text
 ; =============================================================================
+; Interactive Morse code translator with help panel
+; Press '-' to toggle help screen
+; =============================================================================
 
 [bits 32]
 [org 0x00000000]
 
 %include "userland.inc"
 
-%define SYS_PUTCHAR   0
-%define SYS_GETKEY    7
 %define BUFFER_SIZE   64
 
 ; =============================================================================
@@ -19,8 +20,7 @@ _start:
     USERLAND_START
 
     ; Clear screen
-    mov eax, 4              ; SYS_CLS
-    int 0x80
+    SYS_CLS
 
     call draw_ui
 
@@ -29,20 +29,19 @@ _start:
     SYS_PRINT_CR
 
     ; Initialize buffer index
-    xor ecx, ecx            ; ECX = buffer index
+    xor ecx, ecx
 
 .main_loop:
-    mov eax, SYS_GETKEY
-    int 0x80
-
-    test al, al              ; Check if key = 0 (no key)
-    jz .main_loop
+    call blocking_get_key
 
     cmp al, 'q'             ; quit on 'q'
     je .quit
 
     cmp al, 'Q'
     je .quit
+
+    cmp al, '-'             ; toggle help panel
+    je toggle_help
 
     cmp al, 13              ; Enter key
     je .process_input
@@ -54,15 +53,14 @@ _start:
     je .handle_backspace
 
     cmp al, 32              ; Space (printable)
-    jl .skip_unprintable
+    jl .main_loop
 
     ; Printable character - echo it
     movzx ebx, al
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
 
     ; Store in buffer
-    lea edi, [ebp + input_buffer]
+    lea edi, [ebp + input_buffer]   ;compute address of edi
     mov [edi + ecx], al
     inc ecx
 
@@ -74,19 +72,23 @@ _start:
 
     dec ecx
 
+    ; Proper backspace: BS + space + BS
     mov ebx, 8
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
+    mov ebx, ' '
+    SYS_PUTCHAR
+    mov ebx, 8
+    SYS_PUTCHAR
 
-    jmp .main_loop
-
-.skip_unprintable:
     jmp .main_loop
 
 .process_input:
+    ; Null-terminate the buffer
+    lea edi, [ebp + input_buffer]
+    mov byte [edi + ecx], 0
+
     ; Newline
-    mov eax, 3
-    int 0x80
+    SYS_NEWLINE
 
     ; Convert buffer to Morse code and display
     call display_morse
@@ -101,10 +103,67 @@ _start:
     jmp .main_loop
 
 .quit:
-    mov eax, 3              ; newline
-    int 0x80
-
+    SYS_NEWLINE
     ret
+
+; =============================================================================
+; blocking_get_key — Busy-loop until a non-zero key arrives
+; =============================================================================
+; Input:  None
+; Output: AL = ASCII character (non-zero)
+; Clobbers: EAX
+; =============================================================================
+blocking_get_key:
+    SYS_GETKEY
+    test al, al
+    jz blocking_get_key
+    ret
+
+; =============================================================================
+; toggle_help — Show/hide help panel (global label, not local to _start)
+; =============================================================================
+toggle_help:
+    ; Clear screen and show help
+    SYS_CLS
+
+    lea esi, [ebp + help_title]
+    SYS_PRINT_CR
+
+    lea esi, [ebp + help_sep]
+    SYS_PRINT_CR
+
+    lea esi, [ebp + help_1]
+    SYS_PRINT_CR
+
+    lea esi, [ebp + help_2]
+    SYS_PRINT_CR
+
+    lea esi, [ebp + help_3]
+    SYS_PRINT_CR
+
+    lea esi, [ebp + help_4]
+    SYS_PRINT_CR
+
+    lea esi, [ebp + help_5]
+    SYS_PRINT_CR
+
+    lea esi, [ebp + help_6]
+    SYS_PRINT_CR
+
+    lea esi, [ebp + help_sep]
+    SYS_PRINT_CR
+
+    ; Wait for any key to return
+    call blocking_get_key
+
+    ; Redraw main UI
+    SYS_CLS
+    call draw_ui
+
+    lea esi, [ebp + input_label]
+    SYS_PRINT_CR
+
+    jmp _start.main_loop
 
 ; =============================================================================
 ; Draw the UI
@@ -166,8 +225,7 @@ display_morse:
 
     ; Space between letters
     mov ebx, ' '
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
 
     jmp .next_char
 
@@ -395,8 +453,7 @@ print_string:
     test al, al
     jz .done
     movzx ebx, al
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
     jmp .loop
 
 .done:
@@ -413,6 +470,16 @@ title_msg:      db "=== Morse Code Tester ===", 13, 0
 instr_msg:      db "Type text to see Morse code (Enter=convert, q=quit)", 13, 0
 separator:      db "---", 13, 0
 input_label:    db "Input: ", 0
+
+; Help text
+help_title:     db "=== Morse Code Help ===", 13, 0
+help_sep:       db "-------------------", 13, 0
+help_1:         db "KEYBOARD COMMANDS:", 13, 0
+help_2:         db "  [Enter]   - Convert text to Morse code", 13, 0
+help_3:         db "  [Backsp]  - Delete last character", 13, 0
+help_4:         db "  [q] or [Q] - Quit program", 13, 0
+help_5:         db "  [-]        - Toggle this help screen", 13, 0
+help_6:         db "Press any key to return to main screen...", 13, 0
 
 ; Morse code strings
 str_A:       db ".-", 0

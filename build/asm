@@ -12,7 +12,7 @@ IMG="${BUILD_DIR}/os.img"
 
 # Programs to compile
 COMMANDS_DIR="${PROJECT_DIR}/kernel/src/commands"
-COMMANDS=(exit help env dump alloc dealloc poke peek
+COMMANDS=(exit help env debug dump alloc dealloc poke peek
           ps vi pwd ls cd ping cat touch write
           rm rmdir mkdir cp mv calc invaders zork gdemo elite enigma up morse)
 RUN_QEMU=false
