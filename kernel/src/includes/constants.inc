@@ -305,7 +305,7 @@ IDT_DPL3           equ 11101111b
 %assign SYSCALL_GFX_BLIT      45
 %assign SYSCALL_GFX_INFO      46
 %assign SYSCALL_MOUSE         47
-SYSCALL_COUNT      equ 48
+SYSCALL_COUNT      equ 49
 ; --- Legacy FS entry structure (still referenced by build pipeline) ---------
 ; Old 68-byte fixed-size file record. The current build does not embed
 ; this in the kernel image, but constants are kept here so any leftover

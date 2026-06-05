@@ -169,6 +169,7 @@ syscall_table:
     dd  sys_gfx_blit         ; 45 : copy backbuffer -> visible framebuffer
     dd  sys_gfx_info         ; 46 : edi = dst (w, h, bpp) -> 0
     dd  sys_mouse            ; 47 : edi = dst (x, y, buttons) -> 0
+    dd  sys_sound            ; 48 : ebx = frequency (Hz), ecx = duration (10ms ticks) -> 0 / -1
 
 
 ; --- VGA register dumps (used by graphics.inc vga_write_regs) ---------------

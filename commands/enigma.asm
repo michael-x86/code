@@ -213,37 +213,16 @@ _start:
     int 0x80
     jmp .read_date
 .date_done:
-    ; DEBUG: Print 'D' to show we reached .date_done
-    push ebx
-    mov ebx, 'D'
-    mov eax, SYS_PUTCHAR
-    int 0x80
-    pop ebx
-    
     mov byte [edi + ecx], 0
     mov eax, SYS_NEWLINE
     int 0x80
     test ecx, ecx
     jz .exit
 
-    ; DEBUG: Print 'C' before calling asc_to_int
-    push ebx
-    mov ebx, 'C'
-    mov eax, SYS_PUTCHAR
-    int 0x80
-    pop ebx
-    
     lea esi, [ebp + input_buf]
     call asc_to_int
     mov [ebp + date_val], eax
     
-    ; DEBUG: Print 'H' before calling hash_init
-    push ebx
-    mov ebx, 'H'
-    mov eax, SYS_PUTCHAR
-    int 0x80
-    pop ebx
-
     mov eax, [ebp + date_val]
     call hash_init
     call hash_expand
@@ -1333,7 +1312,7 @@ apply_message_key:
 ; ROData
 ; =============================================================================
 banner:
-    db "ENIGMA M4", 13, 0
+    db "ENIGMA M4", 0
 
 prompt_date: db 13, "Enter date (YYYYMMDD): ", 0
 prompt_msg:  db "> ", 0

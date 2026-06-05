@@ -1189,3 +1189,90 @@ sys_poke:
     mov byte [ebx], cl
     xor eax, eax
     ret
+
+
+; ── Sound (48) ──────────────────────────────────────────────────────────
+
+; 48: sound
+;   in:  ebx = frequency (Hz), ecx = duration (in 10ms ticks)
+;   out: 0 on success, -1 on invalid frequency
+;   Uses PIT channel 2 to generate sound on PC speaker
+sys_sound:
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+    
+    ; Check if frequency is valid (must be > 0 and <= 1193180)
+    cmp ebx, 0
+    je .sound_off
+    cmp ebx, 1193180
+    ja .invalid
+    
+    ; Calculate PIT divisor: 1193180 / frequency
+    ; Result must fit in 16 bits (max 0xFFFF)
+    mov eax, 1193180
+    mov edx, 0
+    div ebx
+    cmp eax, 0
+    je .invalid
+    cmp eax, 0xFFFF
+    ja .invalid
+    
+    ; Program PIT channel 2 for square wave mode
+    ; Send command byte 0xB6 to port 0x43
+    mov al, 0xB6        ; 10110110b: channel 2, LSB/MSB, mode 3 (square wave)
+    out 0x43, al
+    
+    ; Write divisor to channel 2 data port (0x42), LSB first
+    mov dx, ax          ; Save divisor (16-bit) in dx
+    mov al, dl          ; LSB
+    out 0x42, al
+    mov al, dh          ; MSB
+    out 0x42, al
+    
+    ; Enable PC speaker (set bits 0 and 1 of port 0x61)
+    in al, 0x61
+    or al, 0x03
+    out 0x61, al
+    
+    jmp .wait
+    
+.sound_off:
+    ; Just turn off the speaker
+    in al, 0x61
+    and al, 0xFC
+    out 0x61, al
+    xor eax, eax
+    jmp .done
+    
+.invalid:
+    mov eax, -1
+    jmp .done
+    
+.wait:
+    ; Wait for duration (ecx = number of 10ms ticks)
+    ; tick_count increments at 100 Hz (10ms per tick)
+    mov esi, [tick_count]
+    add esi, ecx        ; Target tick count
+    
+.wait_loop:
+    mov eax, [tick_count]
+    cmp eax, esi
+    jb .wait_loop
+    
+    ; Turn off speaker
+    in al, 0x61
+    and al, 0xFC
+    out 0x61, al
+    
+    xor eax, eax
+    
+.done:
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
