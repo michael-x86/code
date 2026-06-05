@@ -22,6 +22,62 @@
 
 section .text
 
+; --- Program metadata offsets (ABI contract) ---
+PROG_NAME_OFFSET    equ 16      ; offset from program base where program_name starts
+PROG_VERSION_OFFSET equ 32      ; offset from program base where program_version starts
+
+; -----------------------------------------------------------------------------
+; display_prog_metadata — extract and display program name/version in banner
+;
+; Reads program_name and program_version from the loaded binary and
+; displays them in row 0 after the system banner.
+; Format: " | name version"
+; -----------------------------------------------------------------------------
+display_prog_metadata:
+    pushad
+
+    mov edi, VGA_TEXT_BUFFER + 20 * 2
+
+    ; Write " | " (black-on-green)
+    mov ax, (VGA_COLOR_BANNER << 8) | ' '
+    stosw
+    mov ax, (VGA_COLOR_BANNER << 8) | '|'
+    stosw
+    mov ax, (VGA_COLOR_BANNER << 8) | ' '
+    stosw
+
+    ; Write program_name (black-on-green)
+    mov eax, [exec_vbase]
+    add eax, PROG_NAME_OFFSET
+    mov esi, eax
+.copy_name:
+    lodsb
+    test al, al
+    jz .name_done
+    mov ah, VGA_COLOR_BANNER
+    stosw
+    jmp .copy_name
+.name_done:
+
+    ; Write "v" (black-on-green)
+    mov ax, (VGA_COLOR_BANNER << 8) | 'v'
+    stosw
+
+    ; Write program_version (black-on-green)
+    mov eax, [exec_vbase]
+    add eax, PROG_VERSION_OFFSET
+    mov esi, eax
+.copy_version:
+    lodsb
+    test al, al
+    jz .version_done
+    mov ah, VGA_COLOR_BANNER
+    stosw
+    jmp .copy_version
+.version_done:
+
+    popad
+    ret
 
 ; -----------------------------------------------------------------------------
 ; exec_bin — load and run /bin/<argv[0]>
@@ -31,6 +87,9 @@ section .text
 ; read-only after the copy (we don't yet enforce this in the PTE; the
 ; mapping is RW for now). Frees the allocation and clears the
 ; alloc_table slot when the binary returns.
+;
+; Before calling the program, extracts program_name and program_version
+; from the binary header and displays them in the top banner row.
 ; -----------------------------------------------------------------------------
 exec_bin:
     cmp dword [argc], 0
@@ -141,9 +200,15 @@ exec_bin:
     pop esi
     pop edi
 
+    ; --- Extract and display program metadata ----------------------------
+    ;call display_prog_metadata
+
     ; --- Call the binary -------------------------------------------------
     mov eax, [exec_vbase]
     call eax
+
+    ; --- Restore original banner ----------------------------------------
+    call banner
 
     ; --- Cleanup on return ----------------------------------------------
     push edi

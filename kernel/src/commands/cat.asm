@@ -9,6 +9,7 @@
 
 _start:
     USERLAND_START
+    PROGRAM_INFO "cat", "1.0"
 
     mov ebx, 1
     lea edi, [ebp + arg]

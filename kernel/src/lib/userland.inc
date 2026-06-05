@@ -34,6 +34,28 @@
 %endmacro
 
 ; -----------------------------------------------------------------------------
+; PROGRAM_INFO — Define program name and version for ABI contract
+; -----------------------------------------------------------------------------
+; This macro must be used immediately after USERLAND_START to place
+; program_name at offset 16 and program_version at offset 32 from the
+; start of the binary. The kernel's exec.inc reads these offsets to
+; display the program info in the banner row.
+;
+; Usage:
+;   _start:
+;       USERLAND_START
+;       PROGRAM_INFO "ping", "1.0"
+; -----------------------------------------------------------------------------
+%macro PROGRAM_INFO 2
+    ; Pad to offset 16 (after USERLAND_START which is 9 bytes)
+    times 16 - ($ - $$) db 0
+    program_name    db %1, 0
+    ; Pad to offset 32
+    times 32 - ($ - $$) db 0
+    program_version db %2, 0
+%endmacro
+
+; -----------------------------------------------------------------------------
 ; Syscall wrapper macros — inline syscall invocation
 ; -----------------------------------------------------------------------------
 ; These macros set up the syscall number in EAX and invoke int 0x80.

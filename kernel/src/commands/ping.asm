@@ -9,6 +9,7 @@
 
 _start:
     USERLAND_START
+    PROGRAM_INFO "ping", "1.0"
 
     lea esi, [ebp + msg]
     mov eax, 2              ; sys_print_cr

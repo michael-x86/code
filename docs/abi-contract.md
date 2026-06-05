@@ -33,6 +33,41 @@ address is recomputed at runtime from the program's actual base.
 
 ---
 
+## Program metadata requirement
+
+Every userland program **must** provide a program name and version string. These are displayed in the top banner row when the program is executed.
+
+### Metadata format
+
+Programs must define two labels in their `.rodata` section:
+
+```nasm
+program_name    db "program_name", 0
+program_version db "version_string", 0
+```
+
+- `program_name`: A NUL-terminated string (max 16 chars recommended)
+- `program_version`: A NUL-terminated string (max 8 chars recommended)
+
+### Display location
+
+When a program is executed via `exec_bin`, the kernel will:
+1. Extract the program name and version from the loaded binary
+2. Display them in row 0 (the banner row) after the system banner
+3. Format: `ONO-SENDAI HosakaONE | program_name vversion`
+
+Example: `ONO-SENDAI HosakaONE | ping v1.0`
+
+### Implementation note
+
+The loader (`exec_bin` in `kernel/src/includes/exec.inc`) will look for these labels by convention. Since programs are position-independent, the loader computes the runtime addresses as:
+- `program_name` address = `[exec_vbase + offset_of_program_name]`
+- `program_version` address = `[exec_vbase + offset_of_program_version]`
+
+The offsets are determined by the binary structure. Programs must place these labels at a predictable location (typically at the start of `.rodata` section).
+
+---
+
 ## The four rules
 
 ### Rule 1 — anchor ebp on entry
