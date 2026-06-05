@@ -85,6 +85,21 @@
     int 0x80
 %endmacro
 
+%macro SYS_PUTCHAR 0
+    mov eax, 0
+    int 0x80
+%endmacro
+
+%macro SYS_GETKEY 0
+    mov eax, 7
+    int 0x80
+%endmacro
+
+%macro SYS_CLS 0
+    mov eax, 4
+    int 0x80
+%endmacro
+
 ; -----------------------------------------------------------------------------
 ; Error and usage message macros
 ; -----------------------------------------------------------------------------

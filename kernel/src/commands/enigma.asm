@@ -72,17 +72,6 @@
 %include "userland.inc"
 
 ; =============================================================================
-; 1. SYSTEM CALL NUMBERS (duplicated from userland.inc for clarity)
-; =============================================================================
-%define SYS_PUTCHAR   0       ; ebx = character to print
-%define SYS_PRINT     1       ; esi = NUL-terminated string
-%define SYS_PRINT_CR  2       ; esi = string (auto CR before)
-%define SYS_NEWLINE   3       ; Print newline (CR+LF)
-%define SYS_CLS       4       ; Clear screen
-%define SYS_GETKEY    7       ; Block until key, al = character
-%define SYS_GET_ARG   14      ; ebx = arg num, edi = buffer
-
-; =============================================================================
 ; 2. ENIGMA CONSTANTS
 ; =============================================================================
 %define ALPHA         26      ; Letters in alphabet
@@ -112,24 +101,21 @@ _start:
     ; arg 1: mode ('e' or 'd')
     lea edi, [ebp + arg_buf_1]
     mov ebx, 1
-    mov eax, SYS_GET_ARG
-    int 0x80
+    SYS_GET_ARG
     cmp eax, -1
     je .interactive
 
     ; arg 2: date (YYYYMMDD)
     lea edi, [ebp + arg_buf_2]
     mov ebx, 2
-    mov eax, SYS_GET_ARG
-    int 0x80
+    SYS_GET_ARG
     cmp eax, -1
     je .interactive
 
     ; arg 3: message
     lea edi, [ebp + arg_buf_3]
     mov ebx, 3
-    mov eax, SYS_GET_ARG
-    int 0x80
+    SYS_GET_ARG
     cmp eax, -1
     je .interactive
 
@@ -192,8 +178,7 @@ _start:
     call enigma_crypt
     add al, 'A'
     mov ebx, eax
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
     jmp .next_char
 
 .skip_char:
@@ -201,8 +186,7 @@ _start:
     push ecx
     push esi
     mov ebx, eax
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
     pop esi
     pop ecx
 
@@ -211,8 +195,7 @@ _start:
     jmp .process_msg
 
 .process_done:
-    mov eax, SYS_NEWLINE
-    int 0x80
+    SYS_NEWLINE
     ret
 
 ; =============================================================================
@@ -224,12 +207,10 @@ _start:
     ;mov eax, SYS_PUTCHAR
     ;int 0x80
 
-    mov eax, SYS_CLS
-    int 0x80
+    SYS_CLS
 
     lea esi, [ebp + banner]
-    mov eax, SYS_PRINT
-    int 0x80
+    SYS_PRINT
 
     ; DEBUG: Print 'P' to confirm we printed banner
     ;mov ebx, 'P'
@@ -237,8 +218,7 @@ _start:
     ;int 0x80
 
     lea esi, [ebp + prompt_date]
-    mov eax, SYS_PRINT_CR
-    int 0x80
+    SYS_PRINT_CR
 
     ; Read date string one byte at a time
     lea edi, [ebp + input_buf]
@@ -277,8 +257,7 @@ _start:
     mov [edi + ecx], al
     inc ecx
     mov ebx, eax
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
     jmp .read_date
 .not_digit:
     cmp al, 0x08
@@ -289,19 +268,15 @@ _start:
     jz .read_date
     dec ecx
     mov ebx, 0x08
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
     mov ebx, ' '
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
     mov ebx, 0x08
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
     jmp .read_date
 .date_done:
     mov byte [edi + ecx], 0
-    mov eax, SYS_NEWLINE
-    int 0x80
+    SYS_NEWLINE
     test ecx, ecx
     jz .exit
 
@@ -329,8 +304,7 @@ _start:
     call enigma_reset
 
     lea esi, [ebp + msg_interactive]
-    mov eax, SYS_PRINT_CR
-    int 0x80
+    SYS_PRINT_CR
 
     call interactive_loop
 
@@ -345,8 +319,7 @@ _start:
 ; Clobbers: EAX
 ; =============================================================================
 blocking_get_key:
-    mov eax, SYS_GETKEY
-    int 0x80
+    SYS_GETKEY
     test al, al
     jz blocking_get_key
     ret
@@ -409,8 +382,7 @@ io_print:
 .go:
     sub edx, esi
     mov ecx, esi
-    mov eax, SYS_PRINT
-    int 0x80
+    SYS_PRINT
     pop edx
     pop ecx
     pop esi
@@ -427,8 +399,7 @@ io_print_letter:
     add al, 'A'
     mov [ebp + letter_buf], al
     mov ebx, eax
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
     ret
 
 ; -----------------------------------------------------------------------------
@@ -439,8 +410,7 @@ io_print_letter:
 ; Clobbers: EAX
 ; =============================================================================
 io_newline:
-    mov eax, SYS_NEWLINE
-    int 0x80
+    SYS_NEWLINE
     ret
 
 ; =============================================================================
@@ -710,10 +680,9 @@ interactive_loop:
     call blocking_get_key
     movzx eax, al
     
-    ; Check for help command ('?' or 'h'/'H')
-    cmp al, '?'
-    je .show_help
-    ;cmp al, 'h'
+    ; Check for '-' (dash) - toggle settings panel
+    cmp al, '-'
+    je .toggle_settings
     ;je .show_help
     ;cmp al, 'H'
     ;je .show_help
@@ -750,8 +719,7 @@ interactive_loop:
     call enigma_crypt
     add al, 'A'
     mov ebx, eax
-    mov eax, SYS_PUTCHAR
-    int 0x80
+    SYS_PUTCHAR
     jmp .interactive_loop
     
 ; -----------------------------------------------------------------------------
@@ -784,6 +752,8 @@ interactive_loop:
     call io_print
     lea esi, [ebp + msg_help12]
     call io_print
+    lea esi, [ebp + msg_help12b]
+    call io_print
     lea esi, [ebp + msg_help13]
     call io_print
     lea esi, [ebp + msg_help14]
@@ -804,8 +774,7 @@ interactive_loop:
     jmp .interactive_loop
     
 .newline_or_eof:
-    mov eax, SYS_GETKEY
-    int 0x80
+    SYS_GETKEY
     test al, al
     jnz .had_real_newline
     jmp .interactive_done
@@ -822,6 +791,67 @@ interactive_loop:
     pop ecx
     pop eax
     ret
+
+; -----------------------------------------------------------------------------
+; Toggle settings panel visibility
+; -----------------------------------------------------------------------------
+.toggle_settings:
+    ; Flip the settings_visible flag
+    movzx eax, byte [ebp + settings_visible]
+    xor eax, 1
+    mov [ebp + settings_visible], al
+    
+    ; Clear screen and redraw
+    push eax
+    SYS_CLS
+    pop eax
+    
+    ; If settings not visible, just show prompt and return
+    cmp byte [ebp + settings_visible], 0
+    je .toggle_done
+    
+    ; === SETTINGS PANEL IS VISIBLE ===
+    ; Print title
+    lea esi, [ebp + msg_title]
+    call io_print
+    call io_newline
+    
+    ; Print separator
+    lea esi, [ebp + msg_separator]
+    call io_print
+    call io_newline
+    
+    ; Print date
+    lea esi, [ebp + msg_date]
+    call io_print
+    ; TODO: Convert date_val to string and print
+    call io_newline
+    call io_newline
+    
+    ; Display daily key (rotors, reflector, rings, grundstellung, plugboard)
+    call display_daily_key
+    call io_newline
+    
+    ; Display indicator
+    call display_indicator
+    call io_newline
+    
+    ; Display message key
+    call display_message_key
+    call io_newline
+    
+    ; Print close instruction
+    lea esi, [ebp + msg_press_section]
+    call io_print
+    call io_newline
+    
+    ; Return to interactive loop (don't print prompt yet)
+    jmp .interactive_loop
+    
+.toggle_done:
+    lea esi, [ebp + prompt_msg]
+    call io_print
+    jmp .interactive_loop
 
 ; =============================================================================
 ; 7. ENIGMA CORE ROUTINES
@@ -1600,7 +1630,8 @@ msg_help8:      db 13, "INTERACTIVE COMMANDS:", 13, 0
 msg_help9:      db "  A-Z, a-z  Encrypt typed letter (Space=encode 'X')", 13, 0
 msg_help10:     db "  Enter      Newline (submit message)", 13, 0
 msg_help11:     db "  ? or h     Show this help", 13, 0
-msg_help12:     db "  Empty line Quit", 13, 0
+msg_help12:     db "  -           Toggle settings panel", 13, 0
+msg_help12b:    db "  Empty line Quit", 13, 0
 msg_help13:     db 13, "KEY DERIVATION:", 13, 0
 msg_help14:     db "  Date (YYYYMMDD) → xorshift PRNG → daily key", 13, 0
 msg_help15:     db "  Same date = same settings (reproducible)", 13, 0
@@ -1609,6 +1640,10 @@ msg_help17:     db "  4 rotors (3 main + 1 thin)", 13, 0
 msg_help18:     db "  Reflector (B or C)", 13, 0
 msg_help19:     db "  Plugboard (max 10 pairs)", 13, 0
 msg_help20:     db 13, "NOTE: Encryption = Decryption (symmetric)", 0
+msg_title:      db 13, "ONO-SENDAI HosakaONE -- ENIGMA M4", 13, 0
+msg_separator:  db "=============================================", 13, 0
+msg_date:       db "  Date: ", 0
+msg_press_section: db 13, "  Press - to toggle settings", 13, 0
 
 ; Main rotor wiring tables (10 rotors × 26 bytes = 260 bytes)
 rotor_wiring:
@@ -1674,7 +1709,10 @@ letter_buf:   db 0
 char_in:      db 0
 char_out:     db 0
 date_val:     dd 0
-indicator:    times 8 db 0
+indicator:      times 8 db 0
+
+; UI state
+settings_visible: db 0           ; 0 = hidden, 1 = visible
 
 ; Argument buffers
 arg_buf_1:    times 32 db 0
