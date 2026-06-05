@@ -352,24 +352,6 @@ display_daily_key:
     ; Rotors
     lea esi, [ebp + msg_rotors]
     call io_print
-    ; DEBUG: print raw rotor indices
-    xor ecx, ecx
-.dbg_rot:
-    cmp ecx, 4
-    jge .dbg_rot_done
-    movzx eax, byte [ebp + daily_rotor_idx + ecx]
-    add al, '0'
-    mov [ebp + letter_buf], al
-    mov ebx, eax
-    mov eax, SYS_PUTCHAR
-    int 0x80
-    inc ecx
-    jmp .dbg_rot
-.dbg_rot_done:
-    mov byte [ebp + letter_buf], ' '
-    mov ebx, ' '
-    mov eax, SYS_PUTCHAR
-    int 0x80
     xor ecx, ecx
 .disp_rotor_loop:
     cmp ecx, 4
