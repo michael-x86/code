@@ -2,9 +2,9 @@
 # Usage: make [program_name] or make all or make clean
 
 PROJECT_ROOT = /home/janko/dev/code
-COMMANDS_DIR = $(PROJECT_ROOT)/commands
+COMMANDS_DIR = $(PROJECT_ROOT)/kernel/src/commands
 BUILD_DIR = $(PROJECT_ROOT)/build/bin
-LIB_DIR = $(PROJECT_ROOT)/lib
+LIB_DIR = $(PROJECT_ROOT)/kernel/src/lib
 
 # All .asm files in commands/
 ASM_FILES = $(wildcard $(COMMANDS_DIR)/*.asm)

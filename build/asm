@@ -11,6 +11,7 @@ KERNEL_INC_DIR="${PROJECT_DIR}/kernel/src/includes"
 IMG="${BUILD_DIR}/os.img"
 
 # Programs to compile
+COMMANDS_DIR="${PROJECT_DIR}/kernel/src/commands"
 COMMANDS=(exit help env dump alloc dealloc poke peek
           ps vi pwd ls cd ping cat touch write
           rm rmdir mkdir cp mv calc invaders zork gdemo elite enigma up morse)
@@ -64,13 +65,13 @@ done
 
 echo "[1/6] Building commands..."
 for p in "${COMMANDS[@]}"; do
-    src="${PROJECT_DIR}/commands/${p}.asm"
+    src="${COMMANDS_DIR}/${p}.asm"
     out="${BUILD_DIR}/bin/${p}"
     if [[ ! -f "$src" ]]; then
         echo "  ! missing $src — skipping"
         continue
     fi
-    nasm -f bin -i "${PROJECT_DIR}/lib/" "$src" -o "$out"
+    nasm -f bin -i "${PROJECT_DIR}/kernel/src/lib/" "$src" -o "$out"
     sz=$(stat -c%s "$out")
     if (( sz > 65536 )); then
         echo "ERROR: $src compiled to $sz bytes (max 65536)" >&2

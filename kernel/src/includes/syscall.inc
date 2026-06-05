@@ -96,7 +96,73 @@ syscall_isr:
 ;   in:  ebx = char
 sys_putchar:
     mov eax, ebx
+
+    ; Check for control characters
+    cmp al, 8              ; Backspace?
+    je .backspace
+
+    cmp al, 9              ; Tab?
+    je .tab
+
+    cmp al, 10             ; Line feed?
+    je .newline
+
+    cmp al, 13             ; Carriage return?
+    je .newline
+
+    ; Normal character - call putchar
     call putchar
+    xor eax, eax
+    ret
+
+.backspace:
+    ; Move cursor back one position and erase character
+    mov ebx, [cursor_pos]
+    test ebx, ebx
+    jz .done              ; At start, can't backspace
+
+    dec ebx                 ; Move back one character
+    mov [cursor_pos], ebx
+
+    ; Print a space to erase the character
+    mov eax, ' '
+    call putchar
+
+    ; Move cursor back again (putchar advanced it)
+    dec dword [cursor_pos]
+    call cursor
+
+.done:
+    xor eax, eax
+    ret
+
+.tab:
+    ; Simplified tab: just print spaces until next multiple of 8
+    mov ecx, [cursor_pos]
+    mov eax, ecx
+    mov ebx, VGA_COLS
+    xor edx, edx
+    div ebx                 ; eax = row, edx = col
+    mov ecx, edx            ; ecx = current column
+    add ecx, 8
+    and ecx, 0xFFFFFFF8    ; Round to next multiple of 8
+    cmp ecx, VGA_COLS
+    jb .tab_ok
+    mov ecx, VGA_COLS       ; Clamp to line width
+.tab_ok:
+.tab_loop:
+    mov eax, [cursor_pos]
+    cmp eax, ecx
+    jae .tab_done
+    mov eax, ' '
+    call putchar
+    jmp .tab_loop
+.tab_done:
+    xor eax, eax
+    ret
+
+.newline:
+    call newline
     xor eax, eax
     ret
 
