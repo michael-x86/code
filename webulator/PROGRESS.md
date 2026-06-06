@@ -129,17 +129,99 @@ CPU halted after 33853 instructions
 - CR0: 0x1
 - CR3: 0x0
 
-### Next Session TODO
+### Completed (This Session)
 
-1. **Implement opcode 0xFF (group opcode)**
+1. **Implemented opcode 0xFF (Group 5 instructions)**
    - INC r/m32 (reg field = 0)
    - DEC r/m32 (reg field = 1)
    - PUSH r/m32 (reg field = 6)
    - JMP near [r/m32] (reg field = 4)
-   - CALL near [r/m32] (reg field = 2)
-   - Purpose: Complex group opcode that handles multiple operations based on ModRM reg field
-   - Pattern: Read ModRM byte, check reg field, dispatch to appropriate operation
+   - CALL near [r/m32] (reg field = 2) - was already implemented
+   - Status: IMPLEMENTED
 
+2. **Fixed MOV CR0, EAX (two-byte opcode 0x0F 0x22)**
+   - Bug: `handleMovCR()` was incrementing EIP twice (executeInstruction already advanced EIP to ModRM)
+   - Fix: Removed extra `this.regs.eip++` at start of `handleMovCR()`
+   - Same fix applied to `handleLgdtLidt()`
+   - Status: FIXED
+
+3. **Fixed translateAddress() page table walk**
+   - Bug: Line 306 used `ptAddr` instead of `pteAddr` (typo)
+   - Fix: Changed `this.mem.read32(ptAddr)` to `this.mem.read32(pteAddr)`
+   - Also removed duplicate code block (lines 322-334) that was left from failed patch
+   - Status: FIXED
+
+4. **Implemented TEST instructions (0x84/0x85)**
+   - TEST r/m8, r8 (0x84) and TEST r/m32, r32 (0x85)
+   - ANDs operands, sets flags (ZF, SF, PF), clears CF/OF
+   - Does NOT store result
+   - Status: IMPLEMENTED
+
+5. **Added debug output**
+   - Added debug to `translateAddress()` to trace page table walks
+   - Added debug to `triggerException()` to show EIP and CR2
+   - Status: DONE
+
+### Current Status
+
+The emulator successfully:
+- Executes MOV CR0, EAX (enables paging, CR0=0x80000001)
+- Executes MOV EAX, 0xc010068a (loads jump target)
+- Executes JMP EAX (jumps to virtual address)
+- Gets to EIP=0xc01006ac (virtual address in kernel space)
+- Executed 33,860 instructions (up from 33,853 before)
+
+**Current blocker:**
+- After enabling paging, CPU tries to access virtual addresses 0x8f000052 and 0x177ff088
+- These aren't mapped in the page tables → #PF (Exception 14)
+- IDT not set up yet → can't dispatch #PF handler
+- CPU halts with "Exception 14 but IDT not set up!"
+
+**Final CPU state:**
+- EAX: 0xd88e0010
+- EBX: 0x13ff003
+- ECX: 0x0
+- EDX: 0x156000
+- ESI: 0x0
+- EDI: 0x15c000
+- EBP: 0x0
+- ESP: 0x1557ec
+- EIP: 0xc01006ac
+- EFLAGS: 0x42
+- CR0: 0x80000001 (paging enabled)
+- CR3: 0x156000 (page directory base)
+
+### Next Session TODO
+
+1. **Fix page table setup**
+   - The kernel loads CR3=0x156000, but page tables at that address may not be set up correctly
+   - Need to trace kernel code to see how it initializes page tables
+   - Or increase emulator memory and ensure identity mapping for kernel code
+
+2. **Set up IDT before enabling paging**
+   - The kernel enables paging before setting up IDT
+   - Need to either:
+     a. Modify kernel to set up IDT first
+     b. Set up a basic IDT in the test environment
+     c. Implement graceful #PF handling (print error and halt)
+
+3. **Continue implementing missing opcodes**
+   - Once paging works, kernel will likely hit more unimplemented opcodes
+   - Use `ndisasm -b 32 kernel.bin | awk '{print $2}' | sort | uniq -c | sort -rn` to find missing opcodes
+   - Implement in batches for efficiency
+
+4. **Test with larger memory**
+   - Currently using 256MB RAM
+   - Kernel tries to access addresses >512MB (0x177ff088)
+   - May need to increase memory size or fix page table mappings
+
+### Session Learnings
+
+- **Two-byte opcodes (0x0F prefix)**: `executeInstruction()` already advances EIP to ModRM byte. Extended instruction handlers (like `handleMovCR()`) should NOT increment EIP before reading ModRM.
+- **Page table walk debugging**: Added debug output to `translateAddress()` to trace PD/PT lookups. This helped identify that PDE/PTE not present was causing #PF.
+- **TEST instruction**: Doesn't store result, just sets flags. CF and OF are cleared (not like AND which preserves CF).
+- **Group opcode 0xFF**: Uses ModRM.reg field to determine operation (INC=0, DEC=1, CALL=2, JMP=4, PUSH=6). Need to handle both register and memory operands.
+- **EIP management**: Be very careful about when EIP is incremented. The main `step()` function reads opcode and increments EIP. Then `executeInstruction()` may increment further. Extended opcode handlers should NOT increment again for the ModRM byte.
 2. **After 0xFF, expect more unimplemented opcodes**
    - Run test-kernel.js again to find next missing opcode
    - Implement in batches for efficiency

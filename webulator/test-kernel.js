@@ -37,8 +37,8 @@ if (!X86Memory || !X86CPU) {
     process.exit(1);
 }
 
-// Create memory and CPU
-const mem = new X86Memory();
+// Create memory and CPU (use 1536MB to accommodate kernel at high addresses)
+const mem = new X86Memory(1536);
 const cpu = new X86CPU(mem, null);
 
 // Load kernel binary at physical address 0x100000 (1MB)
