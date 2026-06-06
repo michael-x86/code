@@ -631,6 +631,151 @@ class X86CPU {
                 this.regs.eip++;
                 return 3;
                 
+            // PUSHF (0x9C) and POPF (0x9D) (3 cycles)
+            case 0x9C: {
+                // Push EFLAGS onto stack
+                this.regs.esp -= 4;
+                this.writeMem(this.regs.esp, this.eflags, 4);
+                this.regs.eip++;
+                return 3;
+            }
+            case 0x9D: {
+                // Pop EFLAGS from stack
+                this.eflags = this.readMem(this.regs.esp, 4);
+                this.regs.esp += 4;
+                this.regs.eip++;
+                return 3;
+            }
+            
+            // INT 3 (0xCC) - Breakpoint interrupt (3 cycles)
+            case 0xCC: {
+                this.handleInt(3);
+                return 3;
+            }
+            
+            // INT imm8 (0xCD) - Software interrupt (5 cycles)
+            case 0xCD: {
+                this.regs.eip++;  // Skip opcode
+                const intNum = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;  // Skip interrupt number
+                this.handleInt(intNum);
+                return 5;
+            }
+            
+            // CALL rel32 (0xE8) - Call near, relative (5 cycles)
+            case 0xE8: {
+                this.regs.eip++;
+                const rel32 = this.readMem(this.regs.eip, 4);
+                this.regs.eip += 4;
+                // Push return address
+                this.regs.esp -= 4;
+                this.writeMem(this.regs.esp, this.regs.eip, 4);
+                // Jump to target
+                this.regs.eip += (rel32 & 0x80000000) ? (rel32 | 0xFFFFFFFF80000000) : rel32;
+                return 5;
+            }
+            
+            // CALL r/m32 (0xFF /2) - Call near, absolute indirect (5 cycles)
+            case 0xFF: {
+                this.regs.eip++;
+                const modrm = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                const mod = (modrm >> 6) & 3;
+                const reg = (modrm >> 3) & 7;
+                const rm = modrm & 7;
+                
+                if (reg === 2) {  // CALL r/m32
+                    let target;
+                    if (mod === 3) {
+                        // Register indirect
+                        const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                        target = this.getReg32(rmName);
+                    } else {
+                        // Memory indirect
+                        const addr = this.calculateAddress(modrm);
+                        target = this.readMem(addr, 4);
+                    }
+                    // Push return address
+                    this.regs.esp -= 4;
+                    this.writeMem(this.regs.esp, this.regs.eip, 4);
+                    // Jump to target
+                    this.regs.eip = target;
+                    return 5;
+                }
+                return 0;  // Error - invalid reg field
+            }
+            
+            // LEA r32, m (0x8D) - Load effective address (2 cycles)
+            case 0x8D: {
+                this.regs.eip++;
+                const modrm = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                
+                const mod = (modrm >> 6) & 3;
+                const reg = (modrm >> 3) & 7;   // Destination register
+                const rm = modrm & 7;            // Source operand
+                
+                const regName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
+                
+                // Calculate address but don't dereference - that's the point of LEA
+                let addr = 0;
+                if (mod === 0) {
+                    if (rm === 5) {
+                        // [disp32]
+                        addr = this.readMem(this.regs.eip, 4);
+                        this.regs.eip += 4;
+                    } else {
+                        const baseReg = ['eax','ecx','edx','ebx','','ebp','esi','edi'][rm];
+                        if (baseReg) {
+                            addr = this.getReg32(baseReg);
+                        }
+                    }
+                } else if (mod === 1) {
+                    const disp8 = this.readMem(this.regs.eip, 1);
+                    this.regs.eip++;
+                    const baseReg = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                    addr = (this.getReg32(baseReg) + (disp8 & 0x80 ? disp8 - 256 : disp8)) >>> 0;
+                } else if (mod === 2) {
+                    const disp32 = this.readMem(this.regs.eip, 4);
+                    this.regs.eip += 4;
+                    const baseReg = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                    addr = (this.getReg32(baseReg) + disp32) >>> 0;
+                }
+                
+                this.setReg32(regName, addr);
+                return 2;
+            }
+            
+            // Shift/Rotate instructions (0xC0, 0xC1, 0xD0, 0xD1, 0xD2, 0xD3)
+            // 0xC0/C1: GRP2 r/m8/r/m32, imm8
+            // 0xD0/D1: GRP2 r/m8/r/m32, 1
+            // 0xD2/D3: GRP2 r/m8/r/m32, CL
+            case 0xC0: case 0xC1: case 0xD0: case 0xD1: case 0xD2: case 0xD3: {
+                return this.handleShiftRotate(opcode);
+            }
+            
+            // MUL r/m8 (0xF6 /4) and MUL r/m32 (0xF7 /4)
+            // IMUL r/m8 (0xF6 /5) and IMUL r/m32 (0xF7 /5)
+            // DIV r/m8 (0xF6 /6) and DIV r/m32 (0xF7 /6)
+            // IDIV r/m8 (0xF6 /7) and IDIV r/m32 (0xF7 /7)
+            case 0xF6: case 0xF7: {
+                return this.handleMulDiv(opcode);
+            }
+            
+            // String operations: LODS/LODSB/LODSW/LODSD (0xAC, 0xAD)
+            //                   STOS/STOSB/STOSW/STOSD (0xAA, 0xAB)
+            //                   MOVS/MOVSB/MOVSW/MOVSD (0xA4, 0xA5)
+            //                   CMPS/CMPSB/CMPSW/CMPSD (0xA6, 0xA7)
+            case 0xA4: case 0xA5: case 0xA6: case 0xA7:
+            case 0xAA: case 0xAB: case 0xAC: case 0xAD: {
+                return this.handleStringOp(opcode);
+            }
+            
+            // MOV r/m16, segment (0x8C) and MOV segment, r/m16 (0x8E)
+            case 0x8C: case 0x8E: {
+                return this.handleMovSegReg(opcode);
+            }
+                
             // CLD (0xFC), STD (0xFD) (3 cycles)
             case 0xFC:
                 this.setFlag('DF', 0);
@@ -641,6 +786,92 @@ class X86CPU {
                 this.regs.eip++;
                 return 3;
                 
+            // IN AL, imm8 (0xE4), IN AX, imm8 (0xE5), IN EAX, imm8 (0xE5 with operand size)
+            // IN AL, DX (0xEC), IN AX, DX (0xED), IN EAX, DX (0xED with operand size)
+            // OUT imm8, AL (0xE6), OUT imm8, AX (0xE7), OUT imm8, EAX (0xE7 with operand size)
+            // OUT DX, AL (0xEE), OUT DX, AX (0xEF), OUT DX, EAX (0xEF with operand size)
+            case 0xE4: {
+                // IN AL, imm8
+                this.regs.eip++;
+                const port = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                // Read from I/O port - in emulator, this would call an I/O handler
+                const value = this.handleIn(port, 1);
+                this.regs.eax = (this.regs.eax & 0xFFFFFF00) | (value & 0xFF);
+                return 3;
+            }
+            case 0xE5: {
+                // IN (E)AX, imm8 (16 or 32 bit based on operand size prefix)
+                this.regs.eip++;
+                const port = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                const size = this.prefixes.operandSize ? 2 : 4;
+                const value = this.handleIn(port, size);
+                if (size === 2) {
+                    this.regs.eax = (this.regs.eax & 0xFFFF0000) | (value & 0xFFFF);
+                } else {
+                    this.regs.eax = value;
+                }
+                return 3;
+            }
+            case 0xEC: {
+                // IN AL, DX
+                const port = this.regs.edx & 0xFFFF;
+                const value = this.handleIn(port, 1);
+                this.regs.eax = (this.regs.eax & 0xFFFFFF00) | (value & 0xFF);
+                this.regs.eip++;
+                return 3;
+            }
+            case 0xED: {
+                // IN (E)AX, DX (16 or 32 bit)
+                const port = this.regs.edx & 0xFFFF;
+                const size = this.prefixes.operandSize ? 2 : 4;
+                const value = this.handleIn(port, size);
+                if (size === 2) {
+                    this.regs.eax = (this.regs.eax & 0xFFFF0000) | (value & 0xFFFF);
+                } else {
+                    this.regs.eax = value;
+                }
+                this.regs.eip++;
+                return 3;
+            }
+            case 0xE6: {
+                // OUT imm8, AL
+                this.regs.eip++;
+                const port = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                const value = this.regs.eax & 0xFF;
+                this.handleOut(port, value, 1);
+                return 3;
+            }
+            case 0xE7: {
+                // OUT imm8, (E)AX (16 or 32 bit)
+                this.regs.eip++;
+                const port = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                const size = this.prefixes.operandSize ? 2 : 4;
+                const value = size === 2 ? (this.regs.eax & 0xFFFF) : this.regs.eax;
+                this.handleOut(port, value, size);
+                return 3;
+            }
+            case 0xEE: {
+                // OUT DX, AL
+                const port = this.regs.edx & 0xFFFF;
+                const value = this.regs.eax & 0xFF;
+                this.handleOut(port, value, 1);
+                this.regs.eip++;
+                return 3;
+            }
+            case 0xEF: {
+                // OUT DX, (E)AX (16 or 32 bit)
+                const port = this.regs.edx & 0xFFFF;
+                const size = this.prefixes.operandSize ? 2 : 4;
+                const value = size === 2 ? (this.regs.eax & 0xFFFF) : this.regs.eax;
+                this.handleOut(port, value, size);
+                this.regs.eip++;
+                return 3;
+            }
+            
             // IRET/IRETD (0xCF) (10 cycles)
             case 0xCF: {
                 // Pop EIP, CS, EFLAGS
@@ -1034,6 +1265,527 @@ class X86CPU {
             return 4;  // MOV from CR = 4 cycles
         }
         return 0;
+    }
+    
+    // Handle Shift/Rotate instructions
+    // opcodes: 0xC0, 0xC1 (imm8), 0xD0, 0xD1 (1), 0xD2, 0xD3 (CL)
+    handleShiftRotate(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;  // Operation type
+        const rm = modrm & 7;
+        
+        // Determine operand size
+        const isByteOp = (opcode === 0xC0 || opcode === 0xD0 || opcode === 0xD2);
+        const mask = isByteOp ? 0xFF : 0xFFFFFFFF;
+        const bitWidth = isByteOp ? 8 : 32;
+        
+        // Get count (how many bits to shift/rotate)
+        let count = 0;
+        if (opcode === 0xC0 || opcode === 0xC1) {
+            // imm8
+            count = this.readMem(this.regs.eip, 1);
+            this.regs.eip++;
+        } else if (opcode === 0xD0 || opcode === 0xD1) {
+            // 1
+            count = 1;
+        } else {
+            // CL
+            count = this.regs.ecx & 0xFF;
+        }
+        
+        // Get operand value
+        let value = 0;
+        let result = 0;
+        
+        if (mod === 3) {
+            // Register operand
+            if (isByteOp) {
+                const regNames8 = ['al','cl','dl','bl','ah','ch','dh','bh'];
+                const rmName = regNames8[rm];
+                value = this.getReg8(rmName);
+            } else {
+                const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                value = this.getReg32(rmName);
+            }
+        } else {
+            // Memory operand
+            const addr = this.calculateAddress(modrm);
+            value = this.readMem(addr, isByteOp ? 1 : 4);
+        }
+        
+        // Perform operation
+        switch (reg) {
+            case 0:  // ROL (Rotate Left)
+                count %= bitWidth;
+                result = value >>> 0;  // Convert to unsigned
+                if (this.debug) {
+                    console.log(`ROL: value=0x${(value >>> 0).toString(16)}, count=${count}`);
+                }
+                for (let i = 0; i < count; i++) {
+                    // Extract MSB (bit 31 for 32-bit, bit 7 for 8-bit)
+                    const msb = (result & (1 << (bitWidth - 1))) ? 1 : 0;
+                    // Shift left by 1 (using arithmetic to avoid JS signed issues)
+                    const shifted = ((result & (mask >>> 1)) * 2) & mask;
+                    // Bring MSB to LSB
+                    result = (shifted | msb) >>> 0;
+                    if (this.debug) {
+                        console.log(`  iter ${i}: msb=${msb}, shifted=0x${(shifted >>> 0).toString(16)}, result=0x${(result >>> 0).toString(16)}`);
+                    }
+                }
+                // CF is set to the last bit rotated out (MSB of final result for ROL)
+                this.setFlag('CF', (result & 1));
+                if (count === 1) {
+                    // OF is set if result sign bit != CF (only for 1-bit rotation)
+                    this.setFlag('OF', ((result >> (bitWidth - 1)) & 1) ^ (result & 1));
+                }
+                if (this.debug) {
+                    console.log(`ROL result: 0x${(result >>> 0).toString(16)}, CF=${this.getFlag('CF')}`);
+                }
+                break;
+                
+            case 1:  // ROR (Rotate Right)
+                count %= bitWidth;
+                result = value >>> 0;  // Convert to unsigned
+                for (let i = 0; i < count; i++) {
+                    // Extract LSB (bit 0)
+                    const lsb = result & 1;
+                    // Shift right by 1 (using >>> which is unsigned right shift)
+                    const shifted = (result >>> 1) & mask;
+                    // Bring LSB to MSB
+                    const rotated = lsb ? (1 << (bitWidth - 1)) : 0;
+                    result = (shifted | rotated) >>> 0;
+                }
+                this.setFlag('CF', (result >> (bitWidth - 1)) & 1);
+                if (count === 1) {
+                    this.setFlag('OF', ((result >> (bitWidth - 1)) ^ (result >> (bitWidth - 2))) & 1);
+                }
+                break;
+                
+            case 2:  // RCL (Rotate through Carry Left)
+                count %= (bitWidth + 1);
+                const cf = this.getFlag('CF');
+                result = ((value << count) | (cf << (count - 1))) & mask;
+                this.setFlag('CF', (value >> (bitWidth - count)) & 1);
+                break;
+                
+            case 3:  // RCR (Rotate through Carry Right)
+                count %= (bitWidth + 1);
+                const cf2 = this.getFlag('CF');
+                result = ((value >>> count) | (cf2 << (bitWidth - count))) & mask;
+                this.setFlag('CF', (value >> (count - 1)) & 1);
+                break;
+                
+            case 4:  // SHL/SAL (Shift Left)
+                result = (value << count) & mask;
+                this.updateArithmeticFlags(result, 0, 0, (value >> (bitWidth - count)) & 1, isByteOp);
+                this.setFlag('OF', ((result >> (bitWidth - 1)) ^ (this.getFlag('CF') << (bitWidth - 1))) & 1);
+                break;
+                
+            case 5:  // SHR (Shift Right)
+                result = (value >>> count) & mask;
+                this.updateArithmeticFlags(result, 0, 0, (value >> (count - 1)) & 1, isByteOp);
+                this.setFlag('OF', (value >> (bitWidth - 1)) & 1);
+                break;
+                
+            case 7:  // SAR (Arithmetic Shift Right)
+                const signBit = value & (1 << (bitWidth - 1));
+                result = (value >> count) & mask;
+                if (signBit) {
+                    // Sign extend
+                    for (let i = 0; i < count; i++) {
+                        result |= (1 << (bitWidth - 1 - i));
+                    }
+                }
+                this.updateArithmeticFlags(result, 0, 0, (value >> (count - 1)) & 1, isByteOp);
+                this.setFlag('OF', 0);
+                break;
+                
+            default:
+                if (this.debug) {
+                    console.log(`Unhandled shift/rotate operation: ${reg}`);
+                }
+                return 0;
+        }
+        
+        // Write back result
+        if (mod === 3) {
+            if (isByteOp) {
+                const regNames8 = ['al','cl','dl','bl','ah','ch','dh','bh'];
+                this.setReg8(regNames8[rm], result);
+            } else {
+                const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                this.setReg32(rmName, result);
+            }
+        } else {
+            const addr = this.calculateAddress(modrm);
+            this.writeMem(addr, result, isByteOp ? 1 : 4);
+        }
+        
+        return 3;  // Shift/rotate = 3 cycles (typical)
+    }
+    
+    // Handle MUL/DIV/IMUL/IDIV instructions
+    handleMulDiv(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;  // Operation type
+        const rm = modrm & 7;
+        
+        const isByteOp = (opcode === 0xF6);
+        const isSigned = (reg === 5 || reg === 7);  // IMUL or IDIV
+        
+        // Get operand value
+        let operand = 0;
+        if (mod === 3) {
+            if (isByteOp) {
+                const regNames8 = ['al','cl','dl','bl','ah','ch','dh','bh'];
+                operand = this.getReg8(regNames8[rm]);
+            } else {
+                const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                operand = this.getReg32(rmName);
+            }
+        } else {
+            const addr = this.calculateAddress(modrm);
+            operand = this.readMem(addr, isByteOp ? 1 : 4);
+        }
+        
+        if (isByteOp) {
+            // 8-bit operations
+            if (reg === 4 || reg === 5) {
+                // MUL/IMUL r/m8: AX = AL * r/m8
+                let result;
+                if (isSigned) {
+                    // IMUL - sign extend
+                    const al = (this.regs.eax & 0x80) ? (this.regs.eax | 0xFFFFFF00) : (this.regs.eax & 0xFF);
+                    const op = (operand & 0x80) ? (operand | 0xFFFFFF00) : operand;
+                    result = al * op;
+                } else {
+                    // MUL
+                    result = (this.regs.eax & 0xFF) * operand;
+                }
+                this.regs.eax = result & 0xFFFF;
+                this.setFlag('CF', (result & 0xFF00) !== 0);
+                this.setFlag('OF', (result & 0xFF00) !== 0);
+                return 11;  // MUL r8 = 11 cycles
+            } else if (reg === 6 || reg === 7) {
+                // DIV/IDIV r/m8: AL = AX / r/m8, AH = AX % r/m8
+                const dividend = this.regs.eax & 0xFFFF;
+                if (operand === 0) {
+                    this.triggerException(0, 0);  // #DE - Divide Error
+                    return 0;
+                }
+                if (isSigned) {
+                    // IDIV
+                    const al = (dividend & 0x80) ? (dividend | 0xFFFFFF00) : dividend;
+                    const op = (operand & 0x80) ? (operand | 0xFFFFFF00) : operand;
+                    const quotient = Math.trunc(al / op);
+                    const remainder = al % op;
+                    this.regs.eax = (this.regs.eax & 0xFFFF0000) | ((quotient & 0xFF) | ((remainder & 0xFF) << 8));
+                } else {
+                    // DIV
+                    const quotient = Math.floor(dividend / operand);
+                    const remainder = dividend % operand;
+                    if (quotient > 0xFF) {
+                        this.triggerException(0, 0);  // #DE
+                        return 0;
+                    }
+                    this.regs.eax = (this.regs.eax & 0xFFFF0000) | (quotient & 0xFF) | ((remainder & 0xFF) << 8);
+                }
+                return 14;  // DIV r8 = 14 cycles
+            }
+        } else {
+            // 32-bit operations
+            if (reg === 4 || reg === 5) {
+                // MUL/IMUL r/m32: EDX:EAX = EAX * r/m32
+                let result;
+                if (isSigned) {
+                    // IMUL
+                    const eax = (this.regs.eax & 0x80000000) ? (this.regs.eax | 0xFFFFFFFF00000000) : this.regs.eax;
+                    const op = (operand & 0x80000000) ? (operand | 0xFFFFFFFF00000000) : operand;
+                    result = BigInt(eax) * BigInt(op);
+                } else {
+                    // MUL
+                    result = BigInt(this.regs.eax) * BigInt(operand);
+                }
+                this.regs.eax = Number(result & 0xFFFFFFFFn);
+                this.regs.edx = Number((result >> 32n) & 0xFFFFFFFFn);
+                this.setFlag('CF', (result >> 32n) !== 0n);
+                this.setFlag('OF', (result >> 32n) !== 0n);
+                return 11;  // MUL r32 = 11 cycles
+            } else if (reg === 6 || reg === 7) {
+                // DIV/IDIV r/m32: EAX = EDX:EAX / r/m32, EDX = EDX:EAX % r/m32
+                const dividend = (BigInt(this.regs.edx) << 32n) | BigInt(this.regs.eax);
+                if (operand === 0) {
+                    this.triggerException(0, 0);  // #DE
+                    return 0;
+                }
+                if (isSigned) {
+                    // IDIV
+                    const quotient = Number(dividend / BigInt(operand));
+                    const remainder = Number(dividend % BigInt(operand));
+                    this.regs.eax = quotient;
+                    this.regs.edx = remainder;
+                } else {
+                    // DIV
+                    const quotient = Number(dividend / BigInt(operand));
+                    const remainder = Number(dividend % BigInt(operand));
+                    if (quotient > 0xFFFFFFFF) {
+                        this.triggerException(0, 0);  // #DE
+                        return 0;
+                    }
+                    this.regs.eax = quotient;
+                    this.regs.edx = remainder;
+                }
+                return 14;  // DIV r32 = 14 cycles
+            }
+        }
+        
+        return 0;  // Error - unhandled
+    }
+    
+    // Handle INT (software interrupt)
+    handleInt(intNum) {
+        if (this.debug) {
+            console.log(`INT 0x${intNum.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
+        }
+        
+        // Push EFLAGS, CS, EIP (5 cycles for INT)
+        this.regs.esp -= 4;
+        this.writeMem(this.regs.esp, this.eflags, 4);
+        this.regs.esp -= 4;
+        this.writeMem(this.regs.esp, this.segregs.cs & 0xFFFF, 2);  // CS as 16-bit value (real mode)
+        this.regs.esp -= 2;  // Real mode pushes 16-bit CS
+        this.regs.esp += 2;  // Adjust back to 32-bit push for our implementation
+        this.regs.esp -= 4;
+        this.writeMem(this.regs.esp, this.regs.eip, 4);
+        
+        // Clear IF, TF, RF flags
+        this.setFlag('IF', 0);
+        this.setFlag('TF', 0);
+        this.setFlag('RF', 0);
+        
+        // Get interrupt handler from IDT
+        if (this.idtLimit === 0) {
+            // Real mode - use IVT at 0x0000:0x0000
+            const ivtAddr = intNum * 4;
+            const offset = this.readMem(ivtAddr, 2);
+            const segment = this.readMem(ivtAddr + 2, 2);
+            this.segregs.cs = segment;
+            this.regs.eip = offset;
+        } else {
+            // Protected mode - use IDT
+            const idtEntryAddr = this.idtBase + (intNum * 8);
+            const low = this.readMem(idtEntryAddr, 4);
+            const high = this.readMem(idtEntryAddr + 4, 4);
+            
+            const offset = (high << 16) | (low & 0xFFFF);
+            const selector = (low >> 16) & 0xFFFF;
+            
+            this.segregs.cs = selector;
+            this.regs.eip = offset;
+        }
+    }
+    
+    // Handle IN (port I/O read)
+    handleIn(port, size) {
+        // In a real emulator, this would call device handlers
+        // For now, return 0 or handle common ports
+        
+        if (this.debug) {
+            console.log(`IN from port 0x${port.toString(16)}, size=${size}`);
+        }
+        
+        // Handle common BIOS/CMOS ports for basic functionality
+        switch (port) {
+            case 0x60:  // Keyboard data
+            case 0x64:  // Keyboard status
+                return 0;  // No key pressed
+            case 0x3DA:  // VGA status register
+                return 0x08;  // Vertical blank bit set
+            default:
+                if (this.debug) {
+                    console.log(`Unhandled IN port: 0x${port.toString(16)}`);
+                }
+                return 0;
+        }
+    }
+    
+    // Handle OUT (port I/O write)
+    handleOut(port, value, size) {
+        if (this.debug) {
+            console.log(`OUT to port 0x${port.toString(16)}, value=0x${value.toString(16)}, size=${size}`);
+        }
+        
+        // Handle common BIOS/VGA ports
+        switch (port) {
+            case 0x3C8:  // VGA DAC address write mode
+            case 0x3C9:  // VGA DAC data
+            case 0x3D4:  // VGA CRT index
+            case 0x3D5:  // VGA CRT data
+                // VGA registers - could be handled by VGA emulation
+                break;
+            case 0x61:  // PC speaker
+                break;
+            default:
+                if (this.debug) {
+                    console.log(`Unhandled OUT port: 0x${port.toString(16)} = 0x${value.toString(16)}`);
+                }
+                break;
+        }
+    }
+    
+    // Handle string operations
+    // 0xA4: MOVSB, 0xA5: MOVSW/MOVSD
+    // 0xA6: CMPSB, 0xA7: CMPSW/CMPSD
+    // 0xAA: STOSB, 0xAB: STOSW/STOSD
+    // 0xAC: LODSB, 0xAD: LODSW/LODSD
+    handleStringOp(opcode) {
+        // Determine operand size
+        // The "B" variants (0xA4, 0xA6, 0xAA, 0xAC) ALWAYS operate on bytes
+        // The non-"B" variants (0xA5, 0xA7, 0xAB, 0xAD) depend on operand size prefix
+        let size;
+        if (opcode === 0xA4 || opcode === 0xA6 || opcode === 0xAA || opcode === 0xAC) {
+            // Byte operations (MOVSB, CMPSB, STOSB, LODSB)
+            size = 1;
+        } else {
+            // Word/Dword operations - depends on operand size prefix
+            size = this.prefixes.operandSize ? 2 : 4;
+        }
+        
+        const direction = this.getFlag('DF') ? -size : size;
+        
+        let count = 1;  // Default: 1 iteration
+        if (this.prefixes.rep === 1 || this.prefixes.rep === 2) {
+            // REP/REPZ/REPNZ
+            count = this.regs.ecx;
+        }
+        
+        let cycles = 0;
+        
+        for (let i = 0; i < count; i++) {
+            switch (opcode) {
+                case 0xA4:  // MOVSB
+                case 0xA5: {  // MOVSW/MOVSD
+                    const src = this.getReg32('esi');
+                    const dst = this.getReg32('edi');
+                    const val = this.readMem(src, size);
+                    this.writeMem(dst, val, size);
+                    this.setReg32('esi', this.getReg32('esi') + direction);
+                    this.setReg32('edi', this.getReg32('edi') + direction);
+                    cycles += 4;
+                    break;
+                }
+                
+                case 0xA6:  // CMPSB
+                case 0xA7: {  // CMPSW/CMPSD
+                    const src = this.getReg32('esi');
+                    const dst = this.getReg32('edi');
+                    const val1 = this.readMem(src, size);
+                    const val2 = this.readMem(dst, size);
+                    const result = (val1 - val2) >>> 0;
+                    this.updateArithmeticFlags(result, val1, val2, val1 < val2, size === 2);
+                    this.setReg32('esi', this.getReg32('esi') + direction);
+                    this.setReg32('edi', this.getReg32('edi') + direction);
+                    cycles += 4;
+                    
+                    // Check REPZ/REPNZ condition
+                    if (this.prefixes.rep === 1 && !this.getFlag('ZF')) break;
+                    if (this.prefixes.rep === 2 && this.getFlag('ZF')) break;
+                    break;
+                }
+                
+                case 0xAA:  // STOSB
+                case 0xAB: {  // STOSW/STOSD
+                    const dst = this.getReg32('edi');
+                    const val = size === 1 ? (this.regs.eax & 0xFF) : 
+                                size === 2 ? (this.regs.eax & 0xFFFF) : this.regs.eax;
+                    this.writeMem(dst, val, size);
+                    this.setReg32('edi', this.getReg32('edi') + direction);
+                    cycles += 3;
+                    break;
+                }
+                
+                case 0xAC:  // LODSB
+                case 0xAD: {  // LODSW/LODSD
+                    const src = this.getReg32('esi');
+                    const val = this.readMem(src, size);
+                    if (size === 1) {
+                        this.regs.eax = (this.regs.eax & 0xFFFFFF00) | (val & 0xFF);
+                    } else if (size === 2) {
+                        this.regs.eax = (this.regs.eax & 0xFFFF0000) | (val & 0xFFFF);
+                    } else {
+                        this.regs.eax = val;
+                    }
+                    this.setReg32('esi', this.getReg32('esi') + direction);
+                    cycles += 3;
+                    break;
+                }
+            }
+            
+            // Decrement ECX for REP
+            if (this.prefixes.rep === 1 || this.prefixes.rep === 2) {
+                this.regs.ecx--;
+                if (this.regs.ecx === 0) break;
+            }
+        }
+        
+        this.regs.eip++;
+        return cycles;
+    }
+    
+    // Handle MOV to/from segment registers
+    // 0x8C: MOV r/m16, segment (store segment to memory/register)
+    // 0x8E: MOV segment, r/m16 (load segment from memory/register)
+    handleMovSegReg(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;  // Segment register (0=ES, 1=CS, 2=SS, 3=DS, 4=FS, 5=GS)
+        const rm = modrm & 7;
+        
+        const segNames = ['es', 'cs', 'ss', 'ds', 'fs', 'gs'];
+        if (reg > 5) return 0;  // Invalid segment register
+        const segName = segNames[reg];
+        
+        if (opcode === 0x8C) {
+            // MOV r/m16, segment - store segment to r/m16
+            const segValue = this.segregs[segName];
+            if (mod === 3) {
+                // Register operand - but segment registers can't be the R/M in this encoding
+                // This is actually MOV r32, segment or MOV r16, segment
+                const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                // Store segment to lower 16 bits of 32-bit register
+                this.regs[rmName] = (this.regs[rmName] & 0xFFFF0000) | segValue;
+            } else {
+                // Memory operand
+                const addr = this.calculateAddress(modrm);
+                this.writeMem(addr, segValue, 2);
+            }
+            return 2;
+        } else {
+            // MOV segment, r/m16 - load segment from r/m16
+            let segValue = 0;
+            if (mod === 3) {
+                // Register operand
+                const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                segValue = this.regs[rmName] & 0xFFFF;
+            } else {
+                // Memory operand
+                const addr = this.calculateAddress(modrm);
+                segValue = this.readMem(addr, 2);
+            }
+            this.segregs[segName] = segValue;
+            return 3;  // Segment load = 3 cycles
+        }
     }
     
     // Run CPU for N cycles (instructions)
