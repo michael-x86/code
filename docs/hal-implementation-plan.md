@@ -1,7 +1,7 @@
 # HAL (Hardware Abstraction Layer) Implementation Plan & Progress
 ## Architecture-Agnostic Design
 
-**Last Updated:** Phase 1 Complete (June 6, 2026)
+**Last Updated:** Phase 2 Complete (June 6, 2026)
 
 ---
 
@@ -16,8 +16,30 @@
   - Updated `build/asm` with new include paths
   - **Build verified:** Kernel compiles successfully (19911 bytes)
 
+- [x] **Phase 2: CPU Control Abstraction** (Completed June 6, 2026)
+  - Created `hal/hal_cpu.inc` - HAL CPU control interface (HAL_DISABLE_INTS, HAL_ENABLE_INTS, HAL_HALT, HAL_INVLPG)
+  - Created `arch/x86/arch_cpu.inc` - x86 CPU implementation (cli, sti, hlt, invlpg)
+  - Created `arch/arm/arch_cpu.inc` - ARM CPU implementation (cpsid, cpsie, wfi, TLBIMVA)
+  - Migrated `panic.inc` to HAL (replaced `cli`/`hlt`)
+  - Migrated `task.inc` to HAL (replaced `sti`/`hlt`)
+  - Migrated `memory.inc` to HAL (replaced `invlpg [eax]`)
+  - Migrated `paging.inc` to HAL (replaced `invlpg [eax]` at line 239)
+  - Added BCM2711 memory map and register definitions for ARM target
+  - **Build verified:** Kernel compiles successfully (19911 bytes)
+  - **Note:** x86 builds and runs correctly; ARM implementation ready for future port
+
+- [x] **ARM I/O Implementation** (Completed June 6, 2026)
+  - Created `arch/arm/arch_io.inc` - ARM I/O implementation (memory-mapped)
+  - Uses ARM GAS syntax (ldr/str, not x86 mov/in/out)
+  - Implements HAL_READ_PORT, HAL_WRITE_PORT for memory-mapped I/O
+  - Implements PL011 UART driver (HAL_UART_WRITE, HAL_UART_READ, HAL_UART_INIT)
+  - Implements GIC-400 interrupt controller macros (HAL_PIC_*)
+  - Implements ARM Generic Timer macros (HAL_PIT_* using coprocessor registers)
+  - Added BCM2711 peripheral base and register definitions
+  - **Note:** Written in ARM GAS syntax, will NOT assemble with NASM (by design)
+  - **Next:** When porting to ARM, use arm-none-eabi-gcc/as to assemble these files
+
 ### Pending Phases
-- [ ] Phase 2: CPU Control Abstraction
 - [ ] Phase 3: Interrupt Controller Abstraction
 - [ ] Phase 4: Memory Management Abstraction
 - [ ] Phase 5: Timer Abstraction
@@ -145,6 +167,58 @@ Create a **truly architecture-agnostic HAL** where hardware-specific code is iso
 - **Built-in display**: VideoCore GPU via HDMI, might need framebuffer HAL
 - **Battery/PMIC**: Might need power management HAL
 - **Expansion ports**: GPIO, I2C, SPI available via HAL
+
+### ARM Assembly Syntax Guide
+
+**If you're familiar with x86 NASM assembly, read this first!**
+
+The ARM implementation files (`arch/arm/*.inc`) use **ARM GAS syntax** (GNU Assembler), NOT x86 NASM syntax. Key differences:
+
+| Feature | x86 (NASM) | ARM (GAS) |
+|----------|--------------|-------------|
+| **Registers** | eax, ebx, ecx | r0, r1, r2, ..., r15 |
+| **Load constant** | `mov eax, 0x3F8` | `ldr r0, =0x3F8` |
+| **Load from memory** | `mov eax, [0x3F8]` | `ldr r0, =0x3F8` then `ldr r1, [r0]` |
+| **Store to memory** | `mov [0x3F8], eax` | `str r0, [r1]` |
+| **Macro definition** | `%macro NAME 1` | `.macro NAME param` |
+| **Macro parameter** | `%1`, `%2` | `\param` (named) |
+| **Conditional jump** | `jz`, `jnz` | `b.eq`, `b.ne` |
+| **Function call** | `call func` | `bl func` |
+| **Return** | `ret` | `bx lr` |
+
+#### Critical Syntax Elements
+
+1. **`=` prefix** (load ADDRESS, not VALUE):
+   ```nasm
+   ldr r0, =0xFE00C000    ; r0 = 0xFE00C000 (loads CONSTANT)
+   ldr r0, [r1]            ; r0 = *(r1) (loads FROM MEMORY)
+   ```
+
+2. **`\` backslash** (macro parameter substitution):
+   ```nasm
+   .macro HAL_PIC_EOI irq
+       ldr r0, =GIC_CPU_BASE
+       mov r1, \irq          ; \irq = macro parameter
+       str r1, [r0]
+   .endm
+   
+   HAL_PIC_EOI 5            ; Expands: mov r1, #5
+   ```
+
+3. **Coprocessor instructions** (ARM-specific, no x86 equivalent):
+   ```nasm
+   mcr p15, 0, r0, c14, c2, 1   ; Write r0 to CNTP_CTL (timer)
+   mrc p15, 0, r0, c14, c2, 1   ; Read CNTP_CTL into r0
+   ```
+
+**Full Syntax Guide:** See the **"SYNTAX GUIDE: ARM GAS Assembly (for x86 developers)"** section at the top of `kernel/src/arch/arm/arch_io.inc` (lines 22-165). It includes:
+- Detailed `=` prefix explanation with examples
+- Macro parameter substitution (`\` backslash)
+- NASM vs ARM GAS quick reference table
+- Common ARM instruction patterns
+- ARM-specific instructions (coprocessor, cache/TLB operations)
+
+**Assembler:** ARM files assemble with `arm-none-eabi-as` (not NASM). Build system will need separate ARM toolchain.
 
 ### Porting Checklist (Pi 4 / CM4)
 - [ ] Create `arch/arm/` directory structure

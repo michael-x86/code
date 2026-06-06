@@ -33,7 +33,9 @@
 ;-- and transfers control to the task.
 ; =============================================================================
 
+%include "hal/hal.inc"
 
+section .text
 section .text
 
 
@@ -102,8 +104,8 @@ init_tasks:
 ; -----------------------------------------------------------------------------
 task0_entry:
 .loop:
-    sti
-    hlt
+    HAL_ENABLE_INTS
+    HAL_HALT
     jmp .loop
 
 
@@ -112,8 +114,8 @@ task0_entry:
 ; -----------------------------------------------------------------------------
 task1_entry:
 .loop:
-    sti
-    hlt
+    HAL_ENABLE_INTS
+    HAL_HALT
     jmp .loop
 
 
@@ -165,7 +167,7 @@ task2_entry:
     mov dword [cmd_len], 0
     mov byte [cmd_buf], 0
     call prompt
-    hlt
+    HAL_HALT
     jmp task2_entry
 .tab:
     call tab_complete
@@ -177,6 +179,6 @@ task2_entry:
     dec dword [cmd_len]
     call delchar
 .done:
-    sti
-    hlt
+    HAL_ENABLE_INTS
+    HAL_HALT
     jmp task2_entry

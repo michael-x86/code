@@ -9,8 +9,12 @@
 ; WHY THIS WORKS: Low memory (0x0000-0x003FFFFF) is identity-mapped,
 ; so virtual 0x0000 = physical 0x0000. No paging issues.
 ;
-; MEMORY LAYOUT at 0x0000:
-;   0x0000: Magic "PNIC" (0x504E4943)
+; NOTE: This file uses HAL macros for CPU control (HAL_DISABLE_INTS).
+; =============================================================================
+
+%include "hal/hal.inc"
+
+section .text
 ;   0x0004: Exception vector (DWORD)
 ;   0x0008: Error code (DWORD)
 ;   0x000C: CR2 (DWORD)
@@ -51,14 +55,14 @@ section .text
 ;   [esp+56] = SS (if CPL change)
 ; -----------------------------------------------------------------------------
 common_exception_handler:
-    cli                     ; 1. Disable interrupts
+    HAL_DISABLE_INTS                ; 1. Disable interrupts
     pushad                  ; 2. Save all GPRs
     mov eax, esp            ; 3. EAX = pointer to register frame
     call panic_handler       ; 4. Call the actual handler
     
     ; Should never return
 .hang:
-    hlt
+    HAL_HALT
     jmp .hang
 
 ; -----------------------------------------------------------------------------

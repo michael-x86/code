@@ -20,7 +20,9 @@
 ; right range when a userland program returns.
 ; =============================================================================
 
+%include "hal/hal.inc"
 
+section .text
 section .text
 
 
@@ -272,7 +274,7 @@ free_pages:
     pop eax
 .clear:
     mov dword [edi], 0                   ; clear the PTE
-    invlpg [eax]                         ; flush TLB
+    HAL_INVLPG eax                         ; flush TLB
 .next:
     pop eax
     add eax, PAGE_SIZE

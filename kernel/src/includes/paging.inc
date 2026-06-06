@@ -28,7 +28,13 @@
 ; to the physical base of the kernel image). map_page is called both
 ; before and after paging is enabled, so it uses ebp too.
 ; =============================================================================
+%include "hal/hal.inc"
 
+
+%include "hal/hal.inc"
+
+
+%include "hal/hal.inc"
 
 section .text
 
@@ -230,7 +236,7 @@ map_page:
     and edx, 0x03FF                      ; PTE index within the page table
     or  ebx, ecx                         ; merge phys addr with caller's flags
     mov [edi + edx * 4], ebx
-    invlpg [eax]                         ; flush stale TLB entry for this vaddr
+    HAL_INVLPG eax                       ; flush stale TLB entry for this vaddr
     clc
 .fail:
     pop edi
