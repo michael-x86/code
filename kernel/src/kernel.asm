@@ -200,7 +200,7 @@ kernel_main:
 %include "memory.inc"
 
 ; --- Block device and filesystem --------------------------------------------
-%include "drivers/ata.inc"
+%include "drivers/ata.drv"
 %include "fs_core.inc"
 %include "vfs.inc"
 %include "ecc.inc"
@@ -213,14 +213,14 @@ kernel_main:
 %include "irq.inc"
 
 ; --- User-visible subsystems (depend on the above) --------------------------
-%include "vga.inc"
-%include "input.inc"
+%include "drivers/vga.drv"
+%include "drivers/input.drv"
 %include "parser.inc"
 %include "commands.inc"
 %include "shell.inc"
 %include "syscall.inc"
 
-%include "graphics.inc"
+%include "drivers/graphics.drv"
 
 %include "task.inc"
 %include "exec.inc"
