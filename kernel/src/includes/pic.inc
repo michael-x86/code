@@ -11,8 +11,12 @@
 ; The PIT (Programmable Interval Timer) is a separate chip, but it
 ;-- sits on the PIC's IRQ0 line. set_freq configures channel 0 to
 ;-- PIT_FREQUENCY Hz, which is what drives our preemptive scheduler.
+;
+; NOTE: This file now uses HAL (Hardware Abstraction Layer) macros for
+;-- I/O operations. See arch/x86/arch_io.inc for x86 implementation.
 ; =============================================================================
 
+%include "hal.inc"
 
 section .text
 
@@ -29,22 +33,22 @@ section .text
 ; -----------------------------------------------------------------------------
 pic_remap:
     mov al, PIC_INIT
-    out PIC_MASTER_CMD, al
-    out PIC_SLAVE_CMD, al
+    HAL_PIC_WRITE_CMD master
+    HAL_PIC_WRITE_CMD slave
     mov al, PIC_MASTER_OFFSET
-    out PIC_MASTER_DATA, al
-    out PIC_SLAVE_DATA, al               ; slave offset
+    HAL_PIC_WRITE_DATA master
+    HAL_PIC_WRITE_DATA slave               ; slave offset
     mov al, 0x04                         ; master: slave is at IRQ2
-    out PIC_MASTER_DATA, al
+    HAL_PIC_WRITE_DATA master
     mov al, 0x02                         ; slave cascade identity
-    out PIC_SLAVE_DATA, al
+    HAL_PIC_WRITE_DATA slave
     mov al, 0x01                         ; 8086 mode
-    out PIC_MASTER_DATA, al
-    out PIC_SLAVE_DATA, al
+    HAL_PIC_WRITE_DATA master
+    HAL_PIC_WRITE_DATA slave
     mov al, 0b11111000                   ; unmask IRQ0/1/2 (2 = slave cascade)
-    out PIC_MASTER_DATA, al
+    HAL_PIC_WRITE_DATA master
     mov al, 0b11101111                   ; unmask IRQ12 (mouse) on the slave
-    out PIC_SLAVE_DATA, al
+    HAL_PIC_WRITE_DATA slave
     ret
 
 
@@ -60,9 +64,9 @@ pic_remap:
 ; -----------------------------------------------------------------------------
 set_freq:
     mov al, 0x36
-    out 0x43, al
+    HAL_PIT_WRITE_CMD
     mov ax, PIT_DIVISOR
-    out 0x40, al                         ; low byte
+    HAL_PIT_WRITE_DATA 0                         ; low byte
     mov al, ah
-    out 0x40, al                         ; high byte
+    HAL_PIT_WRITE_DATA 0                         ; high byte
     ret
