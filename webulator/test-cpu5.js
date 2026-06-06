@@ -245,7 +245,7 @@ test('ROL r/m32, 1 (0xD1 /0)', () => {
     
     // ROL EAX, 1
     mem.write8(0x2000, 0xD1);  // GRP2 with 1
-    mem.write8(0x2001, 0xE0);  // ModR/M: reg=EAX, op=000 (/0 = ROL)
+    mem.write8(0x2001, 0xC0);  // ModR/M: reg=EAX, op=000 (/0 = ROL) - 11_000_000 = 0xC0
     cpu.regs.eip = 0x2000;
     cpu.step();
     

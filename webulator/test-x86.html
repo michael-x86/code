@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>x86 Emulator Test</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            background: #000;
+            color: #0F0;
+            margin: 0;
+            padding: 20px;
+        }
+        #vga-canvas {
+            border: 2px solid #0F0;
+            background: #000;
+            image-rendering: pixelated;
+            width: 640px;
+            height: 400px;
+        }
+        #controls {
+            margin: 20px 0;
+        }
+        button {
+            background: #003300;
+            color: #0F0;
+            border: 1px solid #0F0;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        button:hover {
+            background: #005500;
+        }
+        #status {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #0F0;
+            background: #001100;
+        }
+        #debug {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #0F0;
+            background: #001100;
+            max-height: 300px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>x86 Emulator Test</h1>
+    
+    <div id="controls">
+        <button id="btn-load">Load test-hello.bin</button>
+        <button id="btn-run">Run</button>
+        <button id="btn-step">Step</button>
+        <button id="btn-reset">Reset</button>
+        <button id="btn-debug">Toggle Debug</button>
+    </div>
+    
+    <div id="status">
+        <strong>Status:</strong> <span id="status-text">Idle</span><br>
+        <strong>EIP:</strong> <span id="eip-val">0x00000000</span><br>
+        <strong>EAX:</strong> <span id="eax-val">0x00000000</span>
+    </div>
+    
+    <canvas id="vga-canvas" width="640" height="400"></canvas>
+    
+    <div id="debug" style="display:none;">
+        <strong>Debug Output:</strong><br>
+        <pre id="debug-text"></pre>
+    </div>
+    
+    <script src="hardemu/memory.js"></script>
+    <script src="hardemu/x86cpu.js"></script>
+    <script src="hardemu/vga.js"></script>
+    <script src="hardemu/machine_x86.js"></script>
+    
+    <script>
+        // Global machine instance
+        let machine = null;
+        let running = false;
+        let debugMode = false;
+        
+        // Initialize emulator
+        function initEmulator() {
+            const canvas = document.getElementById('vga-canvas');
+            machine = new X86Machine();
+            machine.setCanvas(canvas);
+            machine.setDebug(debugMode);
+            
+            // Set VGA update callback
+            machine.onVgaUpdate = () => {
+                machine.vga.render();
+            };
+            
+            // Set serial output callback (for debug)
+            machine.onSerialOutput = (char) => {
+                if (debugMode) {
+                    document.getElementById('debug-text').textContent += String.fromCharCode(char);
+                }
+            };
+            
+            updateStatus('Emulator initialized');
+        }
+        
+        // Load test binary
+        async function loadTest() {
+            try {
+                const response = await fetch('test-hello.bin');
+                const data = await response.arrayBuffer();
+                
+                // Load binary at 0x7C00 (boot sector)
+                machine.mem.loadBinary(data, 0x7C00);
+                
+                // Also load at 0x100000 for kernel
+                // (In real boot, bootloader loads kernel here)
+                
+                updateStatus('Loaded test-hello.bin at 0x7C00');
+                updateRegs();
+            } catch (e) {
+                updateStatus('Error loading binary: ' + e.message);
+            }
+        }
+        
+        // Run emulation
+        function run() {
+            if (!machine) return;
+            
+            running = true;
+            updateStatus('Running...');
+            
+            // Run for a fixed number of instructions
+            for (let i = 0; i < 100000; i++) {
+                if (!machine.cpu.step()) {
+                    updateStatus('CPU halted at EIP=0x' + machine.cpu.regs.eip.toString(16));
+                    running = false;
+                    break;
+                }
+            }
+            
+            if (running) {
+                updateStatus('Executed 100000 instructions');
+            }
+            
+            updateRegs();
+            machine.vga.render();
+        }
+        
+        // Step one instruction
+        function step() {
+            if (!machine) return;
+            
+            machine.step();
+            updateRegs();
+            machine.vga.render();
+        }
+        
+        // Reset machine
+        function reset() {
+            if (!machine) return;
+            
+            machine.reset();
+            updateStatus('Machine reset');
+            updateRegs();
+        }
+        
+        // Toggle debug mode
+        function toggleDebug() {
+            debugMode = !debugMode;
+            if (machine) {
+                machine.setDebug(debugMode);
+            }
+            document.getElementById('debug').style.display = debugMode ? 'block' : 'none';
+            updateStatus('Debug mode: ' + (debugMode ? 'ON' : 'OFF'));
+        }
+        
+        // Update status display
+        function updateStatus(msg) {
+            document.getElementById('status-text').textContent = msg;
+        }
+        
+        // Update register display
+        function updateRegs() {
+            if (!machine || !machine.cpu) return;
+            
+            document.getElementById('eip-val').textContent = '0x' + machine.cpu.regs.eip.toString(16).padStart(8, '0');
+            document.getElementById('eax-val').textContent = '0x' + machine.cpu.regs.eax.toString(16).padStart(8, '0');
+        }
+        
+        // Event listeners
+        document.getElementById('btn-load').addEventListener('click', loadTest);
+        document.getElementById('btn-run').addEventListener('click', run);
+        document.getElementById('btn-step').addEventListener('click', step);
+        document.getElementById('btn-reset').addEventListener('click', reset);
+        document.getElementById('btn-debug').addEventListener('click', toggleDebug);
+        
+        // Initialize on load
+        window.addEventListener('load', initEmulator);
+    </script>
+</body>
+</html>
