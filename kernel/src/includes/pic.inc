@@ -16,7 +16,7 @@
 ;-- I/O operations. See arch/x86/arch_io.inc for x86 implementation.
 ; =============================================================================
 
-%include "hal.inc"
+%include "hal/hal.inc"
 
 section .text
 
