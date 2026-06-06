@@ -38,7 +38,7 @@
 
 
 [org 0xC0100000]
-global start
+global _start
 bits 32
 
 
@@ -69,7 +69,7 @@ section .text
 ; 4. Build page tables, install them in CR3, enable paging.
 ; 5. Far jump to the higher-half copy of ourselves.
 ; -----------------------------------------------------------------------------
-start:
+_start:
     cli
     mov ax, DATA_SEG
     mov ds, ax
@@ -117,7 +117,7 @@ higher_half:
     ; ebp is the 32-bit value we pushed in start. pushad pushed 8 more
     ; registers above it, so it's at [esp + 32].
     mov ebp, [esp + 32]
-    lea eax, [start + ebp]
+    lea eax, [_start + ebp]
     mov [kernel_phys_start_var], eax
     lea eax, [page_bitmap + 32768 + ebp]
     mov [kernel_phys_end_var], eax
