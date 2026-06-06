@@ -59,6 +59,109 @@ Create a **truly architecture-agnostic HAL** where hardware-specific code is iso
 
 ---
 
+## ARM Target Hardware (Future Ports)
+
+### Specific Targets
+1. **Raspberry Pi 4** (BCM2711 SoC)
+2. **uConsole with CM4** (Compute Module 4, same BCM2711)
+
+### Key Hardware Differences from x86
+
+| Component | x86 (Current) | ARM (Pi 4 / CM4) |
+|-----------|----------------|---------------------|
+| **CPU** | x86 (32-bit) | ARM Cortex-A72 (ARMv8-A) |
+| **Interrupt Controller** | 8259A PIC | GIC-400 (Generic Interrupt Controller) |
+| **Timer** | PIT (Programmable Interval Timer) | ARM Generic Timer (CNTFRQ, CNTPCT) |
+| **I/O** | Port I/O (`in`/`out` instructions) | Memory-mapped I/O (load/store) |
+| **UART** | 8250/16550-compatible (port I/O) | PL011 or mini UART (memory-mapped) |
+| **MMU** | x86 paging (CR3, PDE/PTE) | ARMv8 MMU (TTBR0, TTBCR, LPAE format) |
+| **Boot** | BIOS/MBR bootloader | Bare metal from SD card (starts at 0x8000) |
+| **Graphics** | VGA text mode (0xB8000) | VideoCore GPU (HDMI framebuffer) |
+| **Peripherals** | PCI, ISA, etc. | GPIO, I2C, SPI, PWM (memory-mapped) |
+
+### BCM2711 Memory Map (Pi 4 / CM4)
+```
+0x00000000 - 0x3FFFFFFF  : SDRAM (1-8 GB, depending on model)
+0xFE000000 - 0xFFFFFFFF  : Peripherals (memory-mapped)
+  ├── 0xFE001000 - UART0 (PL011)
+  ├── 0xFE002000 - UART1 (mini UART)
+  ├── 0xFE00B000 - GIC-400 distributor
+  ├── 0xFE00C000 - GIC-400 CPU interface
+  ├── 0xFE200000 - GPIO controller
+  ├── 0xFE300000 - I2C controller
+  ├── 0xFE400000 - SPI controller
+  └── 0xFE500000 - PWM controller
+```
+
+### HAL Abstractions Needed for Pi 4 / CM4
+
+#### 1. Interrupt Controller (`hal_intr.inc` → `arch/arm/arch_intr.inc`)
+- **x86**: 8259A PIC (`out` to 0x20/0xA0)
+- **ARM**: GIC-400 (memory-mapped registers at 0xFE00B000/0xFE00C000)
+  - GICD_CTLR (Distributor Control Register)
+  - GICD_ISENABLER (Interrupt Set-Enable Registers)
+  - GICD_ICENABLER (Interrupt Clear-Enable Registers)
+  - GICD_ISPENDR (Interrupt Set-Pending Registers)
+  - GICC_IAR (CPU Interface: Interrupt Acknowledge Register)
+  - GICC_EOIR (CPU Interface: End of Interrupt Register)
+
+#### 2. Timer (`hal_timer.inc` → `arch/arm/arch_timer.inc`)
+- **x86**: PIT channel 0 (port I/O 0x40/0x43)
+- **ARM**: ARM Generic Timer (coprocessor registers)
+  - CNTPCT (Counter-timer Physical Count register)
+  - CNTFRQ (Counter-timer Frequency register)
+  - CNTP_TVAL (Counter-timer Physical Timer TimerValue register)
+  - CNTP_CTL (Counter-timer Physical Timer Control register)
+  - Interrupt: PPI 30 (Physical Timer Event)
+
+#### 3. UART (`hal_debug.inc` → `arch/arm/arch_debug.inc`)
+- **x86**: 8250 UART (port I/O 0x3F8)
+- **ARM**: PL011 UART (memory-mapped at 0xFE001000)
+  - UART_DR (Data Register)
+  - UART_FR (Flag Register)
+  - UART_IBRD (Integer Baud Rate Divisor)
+  - UART_FBRD (Fractional Baud Rate Divisor)
+  - UART_LCRH (Line Control Register)
+  - UART_CR (Control Register)
+  - UART_IMSC (Interrupt Mask Set/Clear Register)
+
+#### 4. MMU (`hal_mem.inc` → `arch/arm/arch_mem.inc`)
+- **x86**: x86 paging (CR3, 4MB pages with PDE/PTE)
+- **ARM**: ARMv8 MMU with LPAE (Large Physical Address Extension)
+  - TTBR0 (Translation Table Base Register 0)
+  - TTBCR (Translation Table Base Control Register)
+  - MAIR (Memory Attribute Indirection Register)
+  - TCR (Translation Control Register)
+  - Page table format: 3-level (L0/L1/L2/L3, 4KB pages)
+
+#### 5. CPU Control (`hal_cpu.inc` → `arch/arm/arch_cpu.inc`)
+- **x86**: `cli`/`sti` (PIC interrupt mask)
+- **ARM**: `cpsid i`/`cpsie i` (PRIMASK register, or DAIF for ARMv8)
+  - `wfi` (Wait For Interrupt) instead of `hlt`
+  - `mrs`/`msr` (move to/from system registers) instead of `mov` to CR0
+
+### uConsole-Specific Considerations
+- **Built-in keyboard**: Might use GPIO matrix or I2C, needs HAL abstraction
+- **Built-in display**: VideoCore GPU via HDMI, might need framebuffer HAL
+- **Battery/PMIC**: Might need power management HAL
+- **Expansion ports**: GPIO, I2C, SPI available via HAL
+
+### Porting Checklist (Pi 4 / CM4)
+- [ ] Create `arch/arm/` directory structure
+- [ ] Implement `arch/arm/arch_io.inc` (memory-mapped I/O macros)
+- [ ] Implement `arch/arm/arch_cpu.inc` (ARM CPU control instructions)
+- [ ] Implement `arch/arm/arch_intr.inc` (GIC-400 driver)
+- [ ] Implement `arch/arm/arch_timer.inc` (ARM Generic Timer driver)
+- [ ] Implement `arch/arm/arch_debug.inc` (PL011 UART driver)
+- [ ] Implement `arch/arm/arch_mem.inc` (ARMv8 MMU driver)
+- [ ] Create ARM boot code (start at 0x8000, no BIOS)
+- [ ] Configure BCM2711 peripheral base address (0xFE000000)
+- [ ] Test on QEMU system-arm (raspi4 machine type)
+- [ ] Test on real Pi 4 hardware
+- [ ] Test on uConsole (if available)
+
+---
+
 ## Current Hardware-Specific Code Identified
 
 ### High Priority (Must be abstracted)
