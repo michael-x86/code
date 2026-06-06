@@ -5,7 +5,9 @@
 ### Goal
 Implement and test x86 CPU instructions for the webulator project - an x86 emulator that runs in the browser to execute the user's OS kernel.
 
-### Completed (Previous Sessions)
+---
+
+## Completed (Previous Sessions)
 
 1. **Fixed INT 3 (0xCC) handling**
    - Bug: `this.regs.eip++` was incorrectly incrementing EIP after `handleInt(3)` already set EIP to the handler address
@@ -26,8 +28,6 @@ Implement and test x86 CPU instructions for the webulator project - an x86 emula
    - The ROL implementation was actually correct - the test encoding was wrong
    - Fix: Changed ModR/M byte from 0xE0 to 0xC0 in test-cpu5.js
    - Status: TEST PASSED (all 16 tests now pass)
-
-### Completed (This Session)
 
 5. **Implemented MOV r8, imm8 (0xB0-0xB7)**
    - Short form for loading immediate values into 8-bit registers (AL, CL, DL, BL, AH, CH, DH, BH)
@@ -75,7 +75,51 @@ Implement and test x86 CPU instructions for the webulator project - an x86 emula
     - Handles CF flag correctly in addition
     - Status: IMPLEMENTED
 
-### Test Results
+14. **Implemented opcode 0xFF (Group 5 instructions)**
+    - INC r/m32 (reg field = 0)
+    - DEC r/m32 (reg field = 1)
+    - PUSH r/m32 (reg field = 6)
+    - JMP near [r/m32] (reg field = 4)
+    - CALL near [r/m32] (reg field = 2) - was already implemented
+    - Status: IMPLEMENTED
+
+15. **Implemented TEST instructions (0x84/0x85)**
+    - TEST r/m8, r8 (0x84) and TEST r/m32, r32 (0x85)
+    - ANDs operands, sets flags (ZF, SF, PF), clears CF/OF
+    - Does NOT store result
+    - Status: IMPLEMENTED
+
+---
+
+## Completed (This Session - 2026-06-06 Part 2)
+
+**Focus: IDT Setup Before Paging**
+
+1. **Set up basic IDT in test environment** ✅
+   - Created IDT with 256 entries at physical address 0x5000
+   - Created simple exception handler at 0x6000 (CLI + HLT)
+   - Set `cpu.idtBase` and `cpu.idtLimit` before kernel execution
+   - Status: COMPLETE
+
+2. **Fixed triggerException() IDT entry parsing** ✅
+   - Bug: `typeAttr = high >> 16` was reading wrong bytes
+   - Fix: `typeAttr = (high >> 8) & 0xFF` to read byte 5 (Type/Attributes)
+   - Also fixed `offset` calculation to correctly combine high/low words
+   - Status: FIXED
+
+3. **Implemented HLT (0xF4) instruction** ✅
+   - Added case 0xF4 to executeInstruction()
+   - Sets `this.halted = true` to stop CPU
+   - Status: COMPLETE
+
+4. **Fixed step() to not treat HLT as error** ✅
+   - Bug: HLT returns 0 cycles, which step() treated as "unhandled opcode"
+   - Fix: Check `!this.halted` before printing "Unhandled opcode" error
+   - Status: FIXED
+
+---
+
+## Test Results
 
 **CPU Test Suite (test-cpu5.js):**
 ```
@@ -85,167 +129,140 @@ Total: 16
 ```
 
 **Kernel Execution Test (test-kernel.js):**
-- Successfully executes 33,853 instructions
-- Reaches EIP 0x100688 before hitting unimplemented opcode
-- Current blocker: Opcode 0xFF (group opcode for INC/DEC/PUSH/JMP/CALL)
+- Successfully sets up IDT and handles exceptions
+- IDT dispatch is NOW WORKING! ✅
+- Executed 33,862 instructions before page fault handler halts CPU
 
-### Code Changes
-- `hardemu/x86cpu.js`:
-  - Removed `this.regs.eip++` after `handleInt(3)` call (line ~653)
-  - Fixed ROL CF/OF flag calculation (lines ~1330-1343)
-  - Added MOV r8, imm8 (0xB0-0xB7) handlers
-  - Added arithmetic with immediate (0x80, 0x81, 0x83) handler
-  - Added PUSHAD/POPAD (0x60, 0x61) handlers
-  - Added LOOP instructions (0xE0, 0xE1, 0xE2) handlers
-  - Added ADD EAX, imm32 (0x05) handler
-  - Added AND instructions (0x20-0x25) handlers with handleAndRegMem()
-  - Added OR/AND/SUB/XOR/CMP EAX, imm32 (0x0d, 0x25, 0x2d, 0x35, 0x3d) handlers
-  - Added ADC instructions (0x10-0x13) handlers with handleAdcRegMem() and handleAdcRegMem8()
+---
 
-- `test-cpu5.js`:
-  - Fixed ModR/M byte in ROL test: 0xE0 → 0xC0
+## Code Changes
 
-### Current Status
+### `hardemu/x86cpu.js`:
+- Removed `this.regs.eip++` after `handleInt(3)` call
+- Fixed ROL CF/OF flag calculation
+- Added MOV r8, imm8 (0xB0-0xB7) handlers
+- Added arithmetic with immediate (0x80, 0x81, 0x83) handler
+- Added PUSHAD/POPAD (0x60, 0x61) handlers
+- Added LOOP instructions (0xE0, 0xE1, 0xE2) handlers
+- Added AND instructions (0x20-0x25) handlers
+- Added short-form EAX opcodes (0x0d, 0x25, 0x2d, 0x35, 0x3d)
+- Added ADC instructions (0x10-0x13) handlers
+- Added opcode 0xFF (Group 5) handlers
+- Added TEST instructions (0x84, 0x85)
+- **Fixed triggerException() IDT entry parsing (bytes 0-7 layout)**
+- **Implemented HLT (0xF4) instruction**
+- **Fixed step() to check `this.halted` before error**
 
-The emulator successfully boots the kernel and executes 33,853 instructions before hitting an unimplemented opcode:
+### `test-kernel.js`:
+- **Added IDT setup before kernel execution**
+- Created 256-entry IDT at 0x5000
+- Created exception handler at 0x6000 (CLI + HLT)
+- Set `cpu.idtBase = 0x5000`, `cpu.idtLimit = 0x7FF`
 
-**Last error:**
+### `test-cpu5.js`:
+- Fixed ModR/M byte in ROL test: 0xE0 → 0xC0
+
+---
+
+## Current Status (End of Session)
+
+### ✅ COMPLETED:
+- **IDT setup is WORKING!**
+- When page fault occurs (#PF, exception 14), CPU correctly jumps to handler at 0x6000
+- Handler executes CLI + HLT and halts CPU gracefully
+- No more "Exception 14 but IDT not set up!" or "handler not present!" errors
+
+### 🚧 CURRENT BLOCKER:
+**Page fault occurring after paging is enabled (paging issue, NOT IDT issue)**
+
+The kernel:
+1. Sets up page tables at 0x156000
+2. Loads CR3 = 0x156000
+3. Enables paging (CR0.PG = 1)
+4. Jumps to virtual address 0xc010068a
+5. **Page fault (#PF, exception 14) is triggered** when accessing unmapped virtual addresses
+
+The IDT correctly dispatches to the exception handler, but the **root cause is page table setup** - the kernel's page tables don't have the correct mappings for the virtual addresses being accessed.
+
+### Final CPU State (at halt):
 ```
-Unhandled opcode: 0xff at EIP=0x100688
-CPU halted after 33853 instructions
+EAX: 0xd88e0010
+EBX: 0x13ff003
+ECX: 0x0
+EDX: 0x156000
+ESI: 0x0
+EDI: 0x15c000
+EBP: 0x0
+ESP: 0x1557ec
+EIP: 0x6001 (in exception handler at 0x6000)
+EFLAGS: 0x42
+CR0: 0x80000001 (paging ENABLED)
+CR3: 0x156000 (page directory base)
 ```
 
-**Final CPU state:**
-- EAX: 0x-7feaa000 (negative when interpreted as signed)
-- EBX: 0x13ff003
-- ECX: 0x0
-- EDX: 0x156000
-- ESI: 0x0
-- EDI: 0x15c000
-- EBP: 0x40000000
-- ESP: 0x1557ec
-- EIP: 0x10068a
-- EFLAGS: 0x42
-- CR0: 0x1
-- CR3: 0x0
+---
 
-### Completed (This Session)
+## Next Session TODO
 
-1. **Implemented opcode 0xFF (Group 5 instructions)**
-   - INC r/m32 (reg field = 0)
-   - DEC r/m32 (reg field = 1)
-   - PUSH r/m32 (reg field = 6)
-   - JMP near [r/m32] (reg field = 4)
-   - CALL near [r/m32] (reg field = 2) - was already implemented
-   - Status: IMPLEMENTED
+### 1. **Fix page table setup (paging issue)** 🚧 CURRENT BLOCKER
+   - The kernel loads CR3=0x156000 and enables paging (CR0.PG=1)
+   - After paging enabled, kernel accesses virtual addresses that aren't mapped
+   - **Need to:**
+     - a. Trace kernel code to see how it initializes page tables
+     - b. Check if page tables at 0x156000 are set up correctly
+     - c. Implement identity mapping for kernel code in the test environment
+   - **Debugging approach:**
+     - Add debug output to `translateAddress()` to trace PD/PT lookups
+     - Check what virtual address is causing the #PF (check CR2)
+     - Disassemble kernel code around EIP=0xc01006ac to see what memory access triggers #PF
 
-2. **Fixed MOV CR0, EAX (two-byte opcode 0x0F 0x22)**
-   - Bug: `handleMovCR()` was incrementing EIP twice (executeInstruction already advanced EIP to ModRM)
-   - Fix: Removed extra `this.regs.eip++` at start of `handleMovCR()`
-   - Same fix applied to `handleLgdtLidt()`
-   - Status: FIXED
-
-3. **Fixed translateAddress() page table walk**
-   - Bug: Line 306 used `ptAddr` instead of `pteAddr` (typo)
-   - Fix: Changed `this.mem.read32(ptAddr)` to `this.mem.read32(pteAddr)`
-   - Also removed duplicate code block (lines 322-334) that was left from failed patch
-   - Status: FIXED
-
-4. **Implemented TEST instructions (0x84/0x85)**
-   - TEST r/m8, r8 (0x84) and TEST r/m32, r32 (0x85)
-   - ANDs operands, sets flags (ZF, SF, PF), clears CF/OF
-   - Does NOT store result
-   - Status: IMPLEMENTED
-
-5. **Added debug output**
-   - Added debug to `translateAddress()` to trace page table walks
-   - Added debug to `triggerException()` to show EIP and CR2
-   - Status: DONE
-
-### Current Status
-
-The emulator successfully:
-- Executes MOV CR0, EAX (enables paging, CR0=0x80000001)
-- Executes MOV EAX, 0xc010068a (loads jump target)
-- Executes JMP EAX (jumps to virtual address)
-- Gets to EIP=0xc01006ac (virtual address in kernel space)
-- Executed 33,860 instructions (up from 33,853 before)
-
-**Current blocker:**
-- After enabling paging, CPU tries to access virtual addresses 0x8f000052 and 0x177ff088
-- These aren't mapped in the page tables → #PF (Exception 14)
-- IDT not set up yet → can't dispatch #PF handler
-- CPU halts with "Exception 14 but IDT not set up!"
-
-**Final CPU state:**
-- EAX: 0xd88e0010
-- EBX: 0x13ff003
-- ECX: 0x0
-- EDX: 0x156000
-- ESI: 0x0
-- EDI: 0x15c000
-- EBP: 0x0
-- ESP: 0x1557ec
-- EIP: 0xc01006ac
-- EFLAGS: 0x42
-- CR0: 0x80000001 (paging enabled)
-- CR3: 0x156000 (page directory base)
-
-### Next Session TODO
-
-1. **Fix page table setup**
-   - The kernel loads CR3=0x156000, but page tables at that address may not be set up correctly
-   - Need to trace kernel code to see how it initializes page tables
-   - Or increase emulator memory and ensure identity mapping for kernel code
-
-2. **Set up IDT before enabling paging**
-   - The kernel enables paging before setting up IDT
-   - Need to either:
-     a. Modify kernel to set up IDT first
-     b. Set up a basic IDT in the test environment
-     c. Implement graceful #PF handling (print error and halt)
-
-3. **Continue implementing missing opcodes**
-   - Once paging works, kernel will likely hit more unimplemented opcodes
+### 2. **Continue implementing missing opcodes** (after paging works)
    - Use `ndisasm -b 32 kernel.bin | awk '{print $2}' | sort | uniq -c | sort -rn` to find missing opcodes
    - Implement in batches for efficiency
+   - **Likely missing opcodes** (from kernel disassembly):
+     - 0xAC: LODSB (Load string byte)
+     - 0xAA: STOSB (Store string byte)
+     - 0xC3: RET (near return)
+     - 0xC2: RET imm16 (near return with immediate pop)
 
-4. **Test with larger memory**
-   - Currently using 256MB RAM
+### 3. **Test with larger memory** (if needed)
+   - Currently using 1536MB RAM
    - Kernel tries to access addresses >512MB (0x177ff088)
    - May need to increase memory size or fix page table mappings
 
-### Session Learnings
+---
 
-- **Two-byte opcodes (0x0F prefix)**: `executeInstruction()` already advances EIP to ModRM byte. Extended instruction handlers (like `handleMovCR()`) should NOT increment EIP before reading ModRM.
-- **Page table walk debugging**: Added debug output to `translateAddress()` to trace PD/PT lookups. This helped identify that PDE/PTE not present was causing #PF.
-- **TEST instruction**: Doesn't store result, just sets flags. CF and OF are cleared (not like AND which preserves CF).
-- **Group opcode 0xFF**: Uses ModRM.reg field to determine operation (INC=0, DEC=1, CALL=2, JMP=4, PUSH=6). Need to handle both register and memory operands.
-- **EIP management**: Be very careful about when EIP is incremented. The main `step()` function reads opcode and increments EIP. Then `executeInstruction()` may increment further. Extended opcode handlers should NOT increment again for the ModRM byte.
-2. **After 0xFF, expect more unimplemented opcodes**
-   - Run test-kernel.js again to find next missing opcode
-   - Implement in batches for efficiency
+## Session Learnings
 
-3. **Potential next opcodes (from kernel disassembly):**
-   - 0xAC: LODSB (Load string byte)
-   - 0xAA: STOSB (Store string byte)
-   - 0x84: TEST r/m8, r8
-   - 0x85: TEST r/m32, r32
-   - 0xC3: RET (near return)
-   - 0xC2: RET imm16 (near return with immediate pop)
+### This Session:
+- **IDT entry format (bytes 0-7):**
+  ```
+  Byte 0-1: Offset[15:0]
+  Byte 2-3: Selector
+  Byte 4: Zero (reserved)
+  Byte 5: Type/Attributes (bit 7 = Present)
+  Byte 6-7: Offset[31:16]
+  ```
+- **HLT (0xF4) returns 0 cycles** - need to check `this.halted` in `step()` to not treat as error
+- **IDT setup in test environment** allows graceful exception handling even if kernel doesn't set up IDT before enabling paging
 
-4. **Long-term goals:**
-   - Get kernel to fully execute without unimplemented opcodes
-   - Implement video output (VGA text mode)
-   - Implement keyboard input
-   - Test userland programs (shell, elite game)
+### Previous Sessions:
+- **Two-byte opcodes (0x0F prefix)**: `executeInstruction()` already advances EIP to ModRM byte. Extended instruction handlers should NOT increment EIP again.
+- **Page table walk debugging**: Added debug output to `translateAddress()` to trace PD/PT lookups.
+- **TEST instruction**: Doesn't store result, just sets flags. CF and OF are cleared.
+- **Group opcode 0xFF**: Uses ModRM.reg field to determine operation (INC=0, DEC=1, CALL=2, JMP=4, PUSH=6).
+- **EIP management**: Be very careful about when EIP is incremented.
+- **JavaScript sign extension**: `(value << 24) >> 24` converts unsigned 8-bit to signed 32-bit.
 
-### Notes
+---
+
+## Notes
+
 - The x86 CPU emulator uses a sandboxed VM context to load memory.js and x86cpu.js
 - Tests create isolated CPU/memory instances for each test case
 - Debug output can be enabled via `cpu.debug = true`
 - JavaScript bitwise operators work on 32-bit SIGNED integers, requiring `>>> 0` for unsigned operations
-- ModR/M byte encoding: `11_xxx_000` = register mode, EAX, operation xxx
+- ModRM byte encoding: `11_xxx_000` = register mode, EAX, operation xxx
   - xxx=000 (0) = ROL
   - xxx=100 (4) = SHL/SAL
 - **Efficiency tip**: Instead of implementing one opcode at a time, disassemble the entire kernel and implement missing opcodes in batches
@@ -253,11 +270,11 @@ The emulator successfully:
 - **Group opcodes** (like 0x80, 0x81, 0x83, 0xFF) use the ModRM reg field to determine the specific operation
 - String instructions (LODSB, STOSB, etc.) use ESI/EDI and automatically increment/decrement based on DF flag
 
-### Session Learnings
-- Iterative opcode implementation (one at a time) is slow but ensures progress
-- Batch implementation (disassemble first, then implement all missing) is more efficient
-- The kernel uses string instructions (LODSB, STOSB) which aren't implemented yet
-- ADC is critical for multi-precision arithmetic and is used early in the kernel
-- AND/OR/XOR short forms with EAX (0x0d, 0x25, 0x35) are commonly used and should be implemented early
-- Group opcodes (0xFF, 0x8F, etc.) require careful ModRM decoding to determine the actual operation
-- JavaScript's sign extension for 8-bit values: `(value << 24) >> 24` converts unsigned 8-bit to signed 32-bit
+---
+
+## Long-term Goals
+
+- Get kernel to fully execute without unimplemented opcodes
+- Implement video output (VGA text mode)
+- Implement keyboard input
+- Test userland programs (shell, elite game)

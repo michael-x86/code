@@ -95,6 +95,76 @@ cpu.regs.ebp = cpu.regs.esp;
 // Enable protected mode (PE bit in CR0)
 cpu.cregs.cr0 = 0x1;  // Protected mode, no paging yet
 
+// Enable CPU debug mode (verbose, but helpful for debugging)
+// cpu.debug = true;
+
+// ============================================================================
+// Set up a basic IDT before the kernel starts
+// This allows the emulator to dispatch exceptions (like #PF) even if the kernel
+// hasn't set up its own IDT yet
+// ============================================================================
+console.log('\nSetting up basic IDT for exception handling...');
+
+const IDT_BASE = 0x5000;  // Place IDT at physical address 0x5000
+const IDT_LIMIT = 0x7FF;  // 256 entries * 8 bytes - 1 = 2047 = 0x7FF
+
+// Create a simple exception handler routine at 0x6000
+// This handler will:
+// 1. Disable interrupts (CLI)
+// 2. Halt the CPU (HLT)
+// This is a simple handler that doesn't require complex instruction support
+const HANDLER_ADDR = 0x6000;
+
+// Simple handler code (assembly):
+// cli    (0xFA) - disable interrupts
+// hlt    (0xF4) - halt CPU
+const handlerCode = [
+    0xFA,                    // cli
+    0xF4                     // hlt
+];
+
+for (let i = 0; i < handlerCode.length; i++) {
+    mem.write8(HANDLER_ADDR + i, handlerCode[i]);
+}
+
+// Build IDT entries (256 entries, 8 bytes each)
+// Each entry:
+//   - Offset 0-15: low 16 bits of handler address
+//   - Selector: code segment selector (0x08)
+//   - Zero byte: 0x00
+//   - Type/Attributes: 0x8E (Present=1, DPL=0, Type=0xE = 32-bit interrupt gate)
+//   - Offset 16-31: high 16 bits of handler address
+
+for (let i = 0; i < 256; i++) {
+    const entryAddr = IDT_BASE + (i * 8);
+    const offset = HANDLER_ADDR;
+    
+    // Offset 0-15
+    mem.write8(entryAddr + 0, offset & 0xFF);
+    mem.write8(entryAddr + 1, (offset >> 8) & 0xFF);
+    
+    // Selector (code segment)
+    mem.write8(entryAddr + 2, 0x08);  // Selector low
+    mem.write8(entryAddr + 3, 0x00);  // Selector high
+    
+    // Zero byte
+    mem.write8(entryAddr + 4, 0x00);
+    
+    // Type/Attributes (0x8E = Present, DPL=0, 32-bit interrupt gate)
+    mem.write8(entryAddr + 5, 0x8E);
+    
+    // Offset 16-31
+    mem.write8(entryAddr + 6, (offset >> 16) & 0xFF);
+    mem.write8(entryAddr + 7, (offset >> 24) & 0xFF);
+}
+
+// Set CPU IDT base and limit
+cpu.idtBase = IDT_BASE;
+cpu.idtLimit = IDT_LIMIT;
+
+console.log(`IDT set up at 0x${IDT_BASE.toString(16)}, limit 0x${IDT_LIMIT.toString(16)}`);
+console.log(`Exception handler at 0x${HANDLER_ADDR.toString(16)}`);
+
 console.log('\nStarting kernel execution...');
 console.log('Initial EIP: 0x' + cpu.regs.eip.toString(16));
 

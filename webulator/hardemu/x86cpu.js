@@ -335,18 +335,26 @@ class X86CPU {
             return;
         }
         
-        // Get IDT entry
+        // Get IDT entry (8 bytes per entry)
+        // Bytes 0-1: Offset[15:0]
+        // Bytes 2-3: Selector
+        // Byte 4: Zero (reserved)
+        // Byte 5: Type/Attributes
+        // Bytes 6-7: Offset[31:16]
         const idtEntryAddr = this.idtBase + (exceptionNum * 8);
-        const low = this.mem.read32(idtEntryAddr);
-        const high = this.mem.read32(idtEntryAddr + 4);
+        const low = this.mem.read32(idtEntryAddr);        // bytes 0-3: offset[15:0], selector
+        const high = this.mem.read32(idtEntryAddr + 4);   // bytes 4-7: zero, type_attr, offset[31:16]
         
-        const offset = (high << 16) | (low & 0xFFFF);
+        // Offset[15:0] from low[15:0], Offset[31:16] from high[31:16]
+        const offset = ((high >> 16) << 16) | (low & 0xFFFF);
+        // Selector from low[31:16]
         const selector = (low >> 16) & 0xFFFF;
-        const typeAttr = high >> 16;
+        // Type/Attributes from high[15:8] (byte 5)
+        const typeAttr = (high >> 8) & 0xFF;
         
-        // Check if handler is present
+        // Check if handler is present (bit 7 of typeAttr)
         if (!(typeAttr & 0x80)) {
-            console.error(`Exception ${exceptionNum} handler not present!`);
+            console.error(`Exception ${exceptionNum} handler not present! typeAttr=0x${typeAttr.toString(16)}`);
             this.halted = true;
             return;
         }
@@ -407,7 +415,9 @@ class X86CPU {
             // Execute instruction
             cycles = this.executeInstruction(prefix);
             
-            if (cycles === 0) {
+            // Check if instruction halted the CPU (e.g., HLT)
+            // Don't treat this as an error
+            if (cycles === 0 && !this.halted) {
                 console.error(`Unhandled opcode: 0x${opcode.toString(16)} at EIP=0x${startEip.toString(16)}`);
                 this.halted = true;
                 return 0;
@@ -444,6 +454,18 @@ class X86CPU {
     // Execute instruction based on opcode
     // Returns: cycles consumed (0 on error)
     executeInstruction(opcode) {
+        // SPECIAL HANDLING FOR HLT (0xF4) - before switch to ensure it's caught
+        if (opcode === 0xF4) {
+            console.log('HLT: Halting CPU');
+            this.halted = true;
+            return 0;
+        }
+        
+        // DEBUG: Log HLT opcode specifically
+        if (opcode === 0xF4) {
+            console.log(`DEBUG: executeInstruction received HLT (0xF4) at EIP=0x${(this.regs.eip - 1).toString(16)}`);
+        }
+        
         // Handle multi-byte opcodes (0x0F prefix)
         if (opcode === 0x0F) {
             this.regs.eip++;
@@ -805,7 +827,7 @@ class X86CPU {
                 return 2;  // DEC = 2 cycles
             }
                 
-            // CLI (0xFA), STI (0xFB) (3 cycles)
+            // CLI (0xFA), STI (0xFB), HLT (0xF4)
             case 0xFA:
                 this.setFlag('IF', 0);
                 this.regs.eip++;
@@ -814,6 +836,12 @@ class X86CPU {
                 this.setFlag('IF', 1);
                 this.regs.eip++;
                 return 3;
+            case 0xF4:
+                if (this.debug) {
+                    console.log('HLT: Halting CPU');
+                }
+                this.halted = true;
+                return 0;
             
             // PUSHAD (0x60) and POPAD (0x61)
             case 0x60: {
