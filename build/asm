@@ -85,7 +85,13 @@ cd "$BUILD_DIR"
 python3 gen_fs.py "$BUILD_DIR" fs.bin | sed 's/^/  /'
 
 echo "[3/6] Assembling kernel..."
-nasm -f bin "$KERNEL_ASM" -o "${BUILD_DIR}/kernel.bin" -I "${KERNEL_INC_DIR}/" -I "${KERNEL_INC_DIR}/drivers/" -I "${PROJECT_DIR}/kernel/src/" -w-label-redef-late
+nasm -f bin "$KERNEL_ASM" -o "${BUILD_DIR}/kernel.bin" \
+    -I "${KERNEL_INC_DIR}/" \
+    -I "${KERNEL_INC_DIR}/drivers/" \
+    -I "${PROJECT_DIR}/kernel/src/" \
+    -I "${PROJECT_DIR}/kernel/src/hal/" \
+    -I "${PROJECT_DIR}/kernel/src/arch/" \
+    -w-label-redef-late
 
 KERNEL_SIZE=$(stat -c%s "${BUILD_DIR}/kernel.bin")
 KERNEL_SECTORS=$(((KERNEL_SIZE + 511) / 512))
