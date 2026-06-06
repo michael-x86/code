@@ -164,29 +164,117 @@ Total: 16
 
 ---
 
+## Session: 2026-06-06 Part 3 — Paging Fixed + New Opcodes
+
+### Completed (This Session)
+
+**Focus: Fix page table setup and paging**
+
+1. **Traced page fault root cause** ✅
+   - Added debug output to `translateAddress()` to trace PD/PT walks
+   - Added debug to `triggerException()` for #PF with CR2
+   - Added debug to MOV CR0 handler (paging enable)
+   - Dumped full page table structure at halt
+   - **Finding**: Page tables are CORRECTLY set up by the kernel:
+     - PD[0-4]: identity-mapped 0x0–0x13FFFFF
+     - PD[768-772]: higher-half mapped 0xC0000000–0xC13FFFFF → phys 0x0–0x13FFFFF
+   - The old #PF for 0x8F000052 was caused by a **bug in the emulator**, not the kernel
+
+2. **Fixed `calculateAddress()` — SIB byte handling** ✅
+   - Bug: When ModRM.rm=4 (SIB follows), the SIB byte was read as disp8
+   - This caused `MOV EBP, [ESP+0x20]` to read the SIB byte (0x24) as the displacement
+   - Fix: Added full SIB byte decoding with scale/index/base support
+   - Handles all mod=0,1,2 cases with rm=4
+   - Also fixed sign extension: `disp8 | 0xFFFFFF00` instead of `disp8 - 256`
+
+3. **Fixed MOV r32, imm32 with 0x66 prefix** ✅
+   - Bug: The handler always read 4-byte immediate, ignoring operand-size prefix
+   - With 0x66 prefix, `MOV AX, 0x10` consumed 4 bytes (`10 00 8E C0`) instead of 2
+   - This skipped the `MOV DS, AX` instruction and corrupted EAX
+   - Fix: When `prefixes.operandSize` is set, read only 2 bytes and store to lower 16 bits
+
+4. **Implemented MOV moffs (0xA1, 0xA2, 0xA3)** ✅
+   - 0xA1: MOV EAX, moffs32 (load from absolute address)
+   - 0xA2: MOV moffs8, AL (store to absolute address)
+   - 0xA3: MOV moffs32, EAX (store to absolute address)
+   - All 5-byte instructions: opcode + 4-byte absolute address
+
+5. **Implemented CMP reg/mem (0x38–0x3B)** ✅
+   - 0x38: CMP r/m8, r8
+   - 0x39: CMP r/m32, r32
+   - 0x3A: CMP r8, r/m8
+   - 0x3B: CMP r32, r/m32
+   - Like SUB but only sets flags, doesn't store result
+
+6. **Added page table dump to test-kernel.js** ✅
+   - After halt, dumps all non-zero PDEs and their PT entries
+   - Shows PD index, virtual address range, present bit, and PT base
+
+---
+
+## Test Results
+
+**CPU Test Suite (test-cpu5.js):**
+```
+Passed: 16
+Failed: 0
+Total: 16
+```
+
+**Kernel Execution Test (test-kernel.js):**
+- 33,874 instructions (up from 33,862)
+- Paging is WORKING — kernel successfully executes higher-half code at 0xC0100000
+- Page tables correctly map 0xC0000000–0xC13FFFFF → physical 0x0–0x13FFFFF
+- Page fault bug is RESOLVED
+
+---
+
+## Code Changes
+
+### `hardemu/x86cpu.js`:
+- **Fixed `calculateAddress()`**: Added SIB byte handling for rm=4 (mod 0/1/2)
+- **Fixed `MOV r32, imm32`**: Respect 0x66 operand-size prefix (read 2 bytes, not 4)
+- **Added `handleCmpRegMem()`**: CMP reg/mem handler (0x38–0x3B)
+- **Added MOV moffs**: 0xA1 (load), 0xA2 (store byte), 0xA3 (store dword)
+- **Added debug**: `translateAddress()` traces first 15 page walks
+- **Added debug**: `triggerException()` logs CR2 on #PF
+- **Added debug**: MOV to CR0 logs when paging is enabled
+
+### `test-kernel.js`:
+- Added page table dump after CPU halt
+
+---
+
 ## Current Status (End of Session)
 
 ### ✅ COMPLETED:
-- **IDT setup is WORKING!**
-- When page fault occurs (#PF, exception 14), CPU correctly jumps to handler at 0x6000
-- Handler executes CLI + HLT and halts CPU gracefully
-- No more "Exception 14 but IDT not set up!" or "handler not present!" errors
+- **PAGING IS WORKING!** — Page tables are correct, higher-half kernel mapping works
+- SIB byte handling fixed (address calculation with ESP-relative addressing)
+- 0x66 operand-size prefix on MOV r32, imm32 fixed
+- MOV moffs opcodes (0xA1, 0xA2, 0xA3) implemented
+- CMP reg/mem opcodes (0x38–0x3B) implemented
+- Page table dump for debugging
 
 ### 🚧 CURRENT BLOCKER:
-**Page fault occurring after paging is enabled (paging issue, NOT IDT issue)**
+**0x73 (JNB/JNC) at EIP=0xC0100A11**
 
-The kernel:
-1. Sets up page tables at 0x156000
-2. Loads CR3 = 0x156000
-3. Enables paging (CR0.PG = 1)
-4. Jumps to virtual address 0xc010068a
-5. **Page fault (#PF, exception 14) is triggered** when accessing unmapped virtual addresses
+Missing JCC opcodes:
+- 0x70: JO (Jump if Overflow)
+- 0x71: JNO (Jump if Not Overflow)
+- 0x72: JB/JC (Jump if Below/Carry)
+- 0x73: JNB/JNC (Jump if Not Below/Carry) ← CURRENT BLOCKER
+- 0x76: JBE (Jump if Below or Equal)
+- 0x77: JA (Jump if Above)
+- 0x78: JS (Jump if Sign)
+- 0x79: JNS (Jump if Not Sign)
+- 0x7A: JP/JPE (Jump if Parity Even)
+- 0x7B: JNP/JPO (Jump if Not Parity / Parity Odd)
 
-The IDT correctly dispatches to the exception handler, but the **root cause is page table setup** - the kernel's page tables don't have the correct mappings for the virtual addresses being accessed.
+Only 0x74–0x7F are currently implemented in `handleJcc()`.
 
 ### Final CPU State (at halt):
 ```
-EAX: 0xd88e0010
+EAX: 0x100000
 EBX: 0x13ff003
 ECX: 0x0
 EDX: 0x156000
@@ -194,7 +282,7 @@ ESI: 0x0
 EDI: 0x15c000
 EBP: 0x0
 ESP: 0x1557ec
-EIP: 0x6001 (in exception handler at 0x6000)
+EIP: 0xc0100a11
 EFLAGS: 0x42
 CR0: 0x80000001 (paging ENABLED)
 CR3: 0x156000 (page directory base)
@@ -204,55 +292,42 @@ CR3: 0x156000 (page directory base)
 
 ## Next Session TODO
 
-### 1. **Fix page table setup (paging issue)** 🚧 CURRENT BLOCKER
-   - The kernel loads CR3=0x156000 and enables paging (CR0.PG=1)
-   - After paging enabled, kernel accesses virtual addresses that aren't mapped
-   - **Need to:**
-     - a. Trace kernel code to see how it initializes page tables
-     - b. Check if page tables at 0x156000 are set up correctly
-     - c. Implement identity mapping for kernel code in the test environment
-   - **Debugging approach:**
-     - Add debug output to `translateAddress()` to trace PD/PT lookups
-     - Check what virtual address is causing the #PF (check CR2)
-     - Disassemble kernel code around EIP=0xc01006ac to see what memory access triggers #PF
+### 1. **Implement remaining JCC opcodes (0x70–0x7B)** 🚧 CURRENT BLOCKER
+   - Add all missing conditional jump opcodes to `handleJcc()`
+   - Each checks a specific flag combination:
+     - 0x70: JO (OF=1)
+     - 0x71: JNO (OF=0)
+     - 0x72: JB/JC (CF=1)
+     - 0x73: JNB/JNC (CF=0)
+     - 0x76: JBE (CF=1 or ZF=1)
+     - 0x77: JA (CF=0 and ZF=0)
+     - 0x78: JS (SF=1)
+     - 0x79: JNS (SF=0)
+     - 0x7A: JP/JPE (PF=1)
+     - 0x7B: JNP/JPO (PF=0)
 
-### 2. **Continue implementing missing opcodes** (after paging works)
-   - Use `ndisasm -b 32 kernel.bin | awk '{print $2}' | sort | uniq -c | sort -rn` to find missing opcodes
-   - Implement in batches for efficiency
-   - **Likely missing opcodes** (from kernel disassembly):
-     - 0xAC: LODSB (Load string byte)
-     - 0xAA: STOSB (Store string byte)
-     - 0xC3: RET (near return)
-     - 0xC2: RET imm16 (near return with immediate pop)
+### 2. **Continue implementing missing opcodes**
+   - Use `ndisasm -b 32 kernel.bin | awk '{print $2}' | sort | uniq -c | sort -rn` to find next missing opcodes
+   - Likely candidates: 0x0F B6 (MOVZX), 0x0F B7 (MOVZX word), string ops variants
 
 ### 3. **Test with larger memory** (if needed)
    - Currently using 1536MB RAM
-   - Kernel tries to access addresses >512MB (0x177ff088)
-   - May need to increase memory size or fix page table mappings
+   - Kernel tries to access addresses >512MB — may need more memory or fix mappings
 
 ---
 
 ## Session Learnings
 
 ### This Session:
-- **IDT entry format (bytes 0-7):**
-  ```
-  Byte 0-1: Offset[15:0]
-  Byte 2-3: Selector
-  Byte 4: Zero (reserved)
-  Byte 5: Type/Attributes (bit 7 = Present)
-  Byte 6-7: Offset[31:16]
-  ```
-- **HLT (0xF4) returns 0 cycles** - need to check `this.halted` in `step()` to not treat as error
-- **IDT setup in test environment** allows graceful exception handling even if kernel doesn't set up IDT before enabling paging
+- **Page tables ARE correct** — the kernel sets up proper identity + higher-half mappings
+- **SIB byte is critical**: `rm=4` in ModRM means a SIB byte follows, not a simple register
+- **0x66 prefix on MOV imm eats bytes**: Without operand-size handling, it reads 4 bytes instead of 2
+- **calculateAddress() must handle SIB**: Any instruction using ESP-relative addressing breaks without SIB support
+- **Debugging paging**: Adding `_pagingDebugCount` counter to `translateAddress()` avoids log flooding
+- **Page table dump**: Dumping PD/PT contents at halt was invaluable for diagnosing the issue
 
 ### Previous Sessions:
-- **Two-byte opcodes (0x0F prefix)**: `executeInstruction()` already advances EIP to ModRM byte. Extended instruction handlers should NOT increment EIP again.
-- **Page table walk debugging**: Added debug output to `translateAddress()` to trace PD/PT lookups.
-- **TEST instruction**: Doesn't store result, just sets flags. CF and OF are cleared.
-- **Group opcode 0xFF**: Uses ModRM.reg field to determine operation (INC=0, DEC=1, CALL=2, JMP=4, PUSH=6).
-- **EIP management**: Be very careful about when EIP is incremented.
-- **JavaScript sign extension**: `(value << 24) >> 24` converts unsigned 8-bit to signed 32-bit.
+- (see above)
 
 ---
 

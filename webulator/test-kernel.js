@@ -260,3 +260,36 @@ console.log(`EIP: 0x${cpu.regs.eip.toString(16)}`);
 console.log(`EFLAGS: 0x${cpu.eflags.toString(16)}`);
 console.log(`CR0: 0x${cpu.cregs.cr0.toString(16)}`);
 console.log(`CR3: 0x${cpu.cregs.cr3.toString(16)}`);
+
+// Dump page table structure
+if (cpu.cregs.cr3) {
+    const cr3 = cpu.cregs.cr3 & 0xFFFFF000;
+    console.log('\n=== Page Directory at 0x' + cr3.toString(16) + ' ===');
+    let pdeCount = 0;
+    for (let i = 0; i < 1024; i++) {
+        const pde = mem.read32(cr3 + i * 4);
+        if (pde !== 0) {
+            console.log('PD[' + i + '] (vaddr 0x' + (i * 0x400000).toString(16) + '-0x' + ((i+1)*0x400000-1).toString(16) + ') = 0x' + pde.toString(16) + ' (PS=' + ((pde>>7)&1) + ' present=' + (pde&1) + ' PT_base=0x' + (pde & 0xFFFFF000).toString(16) + ')');
+            pdeCount++;
+            
+            // Dump page table entries for this PDE (if not 4MB page)
+            if (!(pde & 0x80) && (pde & 1)) {
+                const ptBase = pde & 0xFFFFF000;
+                let pteCount = 0;
+                for (let j = 0; j < 1024; j++) {
+                    const pte = mem.read32(ptBase + j * 4);
+                    if (pte !== 0) {
+                        if (pteCount === 0) console.log('  PT entries at 0x' + ptBase.toString(16) + ':');
+                        if (pteCount < 5) {
+                            console.log('  PT[' + j + '] (vaddr 0x' + (i * 0x400000 + j * 0x1000).toString(16) + ') = 0x' + pte.toString(16) + ' (present=' + (pte&1) + ' phys=0x' + (pte&0xFFFFF000).toString(16) + ')');
+                        }
+                        pteCount++;
+                    }
+                }
+                if (pteCount > 5) console.log('  ... and ' + (pteCount - 5) + ' more PTEs');
+                console.log('  Total PTEs: ' + pteCount);
+            }
+        }
+    }
+    console.log('Total non-zero PDEs: ' + pdeCount);
+}
