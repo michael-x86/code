@@ -538,7 +538,42 @@ class X86CPU {
             case 0x7D: return this.handleJcc(0x7D);  // JGE/JNL
             case 0x7E: return this.handleJcc(0x7E);  // JLE/JNG
             case 0x7F: return this.handleJcc(0x7F);  // JG/JNLE
-                
+            
+            // LOOP instructions (0xE0, 0xE1, 0xE2)
+            case 0xE0: {  // LOOPNE/LOOPNZ (loop while ECX!=0 and ZF=0)
+                this.regs.eip++;
+                const rel8 = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                this.regs.ecx = (this.regs.ecx - 1) >>> 0;
+                if (this.regs.ecx !== 0 && this.getFlag('ZF') === 0) {
+                    const offset = (rel8 & 0x80) ? (rel8 - 256) : rel8;
+                    this.regs.eip = (this.regs.eip + offset) >>> 0;
+                }
+                return 5;  // LOOP = 5 cycles
+            }
+            case 0xE1: {  // LOOPE/LOOPZ (loop while ECX!=0 and ZF=1)
+                this.regs.eip++;
+                const rel8 = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                this.regs.ecx = (this.regs.ecx - 1) >>> 0;
+                if (this.regs.ecx !== 0 && this.getFlag('ZF') === 1) {
+                    const offset = (rel8 & 0x80) ? (rel8 - 256) : rel8;
+                    this.regs.eip = (this.regs.eip + offset) >>> 0;
+                }
+                return 5;
+            }
+            case 0xE2: {  // LOOP (loop while ECX!=0)
+                this.regs.eip++;  // Skip opcode
+                const rel8 = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;  // Skip rel8 (will be adjusted if jump taken)
+                this.regs.ecx = (this.regs.ecx - 1) >>> 0;
+                if (this.regs.ecx !== 0) {
+                    const offset = (rel8 & 0x80) ? (rel8 - 256) : rel8;
+                    this.regs.eip = (this.regs.eip + offset) >>> 0;
+                }
+                return 5;
+            }
+            
             // CMP AL, imm8 (0x3C), CMP EAX, imm32 (0x3D)
             case 0x3C: {
                 this.regs.eip++;
@@ -585,6 +620,71 @@ class X86CPU {
                 return this.handleAddRegMem(opcode);
             }
             
+            // ADD EAX, imm32 (0x05) - short form for EAX
+            case 0x05: {
+                this.regs.eip++;
+                const imm32 = this.readMem(this.regs.eip, 4);
+                this.regs.eip += 4;
+                const oldEax = this.regs.eax;
+                this.regs.eax = (this.regs.eax + imm32) >>> 0;
+                this.setFlag('CF', (oldEax >>> 0) + (imm32 >>> 0) > 0xFFFFFFFF);
+                this.updateArithmeticFlags(this.regs.eax, oldEax, imm32, false, false);
+                return 2;
+            }
+            
+            // OR EAX, imm32 (0x0d) - short form for EAX
+            case 0x0d: {
+                this.regs.eip++;
+                const imm32 = this.readMem(this.regs.eip, 4);
+                this.regs.eip += 4;
+                this.regs.eax = (this.regs.eax | imm32) >>> 0;
+                this.updateArithmeticFlags(this.regs.eax, 0, 0, 0, false);
+                return 2;
+            }
+            
+            // AND EAX, imm32 (0x25) - short form for EAX
+            case 0x25: {
+                this.regs.eip++;
+                const imm32 = this.readMem(this.regs.eip, 4);
+                this.regs.eip += 4;
+                this.regs.eax = (this.regs.eax & imm32) >>> 0;
+                this.updateArithmeticFlags(this.regs.eax, 0, 0, 0, false);
+                return 2;
+            }
+            
+            // SUB EAX, imm32 (0x2d) - short form for EAX
+            case 0x2d: {
+                this.regs.eip++;
+                const imm32 = this.readMem(this.regs.eip, 4);
+                this.regs.eip += 4;
+                const oldEax = this.regs.eax;
+                this.regs.eax = (this.regs.eax - imm32) >>> 0;
+                this.setFlag('CF', (oldEax >>> 0) < (imm32 >>> 0));
+                this.updateArithmeticFlags(this.regs.eax, oldEax, imm32, true, false);
+                return 2;
+            }
+            
+            // XOR EAX, imm32 (0x35) - short form for EAX
+            case 0x35: {
+                this.regs.eip++;
+                const imm32 = this.readMem(this.regs.eip, 4);
+                this.regs.eip += 4;
+                this.regs.eax = (this.regs.eax ^ imm32) >>> 0;
+                this.updateArithmeticFlags(this.regs.eax, 0, 0, 0, false);
+                return 2;
+            }
+            
+            // CMP EAX, imm32 (0x3d) - short form for EAX (flags only, no write)
+            case 0x3d: {
+                this.regs.eip++;
+                const imm32 = this.readMem(this.regs.eip, 4);
+                this.regs.eip += 4;
+                const result = (this.regs.eax - imm32) >>> 0;
+                this.setFlag('CF', (this.regs.eax >>> 0) < (imm32 >>> 0));
+                this.updateArithmeticFlags(result, this.regs.eax, imm32, true, false);
+                return 2;
+            }
+            
             // ADC r/m32, r32 (0x11) and ADC r32, r/m32 (0x13)
             case 0x11: case 0x13: {
                 return this.handleAdcRegMem(opcode);
@@ -599,7 +699,21 @@ class X86CPU {
             case 0x29: case 0x2B: {
                 return this.handleSubRegMem(opcode);
             }
-                
+            
+            // AND r/m8, r8 (0x20), AND r/m32, r32 (0x21)
+            // AND r8, r/m8 (0x22), AND r32, r/m32 (0x23)
+            case 0x20: case 0x21: case 0x22: case 0x23: {
+                return this.handleAndRegMem(opcode);
+            }
+            
+            // Arithmetic with immediate: ADD/OR/ADC/SBB/AND/SUB/XOR/CMP
+            // 0x80: r/m8, imm8    (8-bit operand, 8-bit immediate)
+            // 0x81: r/m32, imm32  (32-bit operand, 32-bit immediate)
+            // 0x83: r/m32, imm8   (32-bit operand, 8-bit sign-extended immediate)
+            case 0x80: case 0x81: case 0x83: {
+                return this.handleArithmeticImmediate(opcode);
+            }
+            
             // MOV r/m8, r8 (0x88) and MOV r8, r/m8 (0x8A)
             case 0x88: case 0x8A: {
                 return this.handleMovRegMem8(opcode);
@@ -640,7 +754,39 @@ class X86CPU {
                 this.setFlag('IF', 1);
                 this.regs.eip++;
                 return 3;
-                
+            
+            // PUSHAD (0x60) and POPAD (0x61)
+            case 0x60: {
+                // Push all 32-bit general-purpose registers
+                // Order: EAX, ECX, EDX, EBX, ESP (original), EBP, ESI, EDI
+                const origEsp = this.regs.esp - 32;  // Leave room for all 8 registers
+                this.regs.esp = origEsp;
+                this.writeMem(this.regs.esp, this.regs.eax, 4); this.regs.esp += 4;
+                this.writeMem(this.regs.esp, this.regs.ecx, 4); this.regs.esp += 4;
+                this.writeMem(this.regs.esp, this.regs.edx, 4); this.regs.esp += 4;
+                this.writeMem(this.regs.esp, this.regs.ebx, 4); this.regs.esp += 4;
+                this.writeMem(this.regs.esp, origEsp + 32, 4); this.regs.esp += 4;  // Original ESP
+                this.writeMem(this.regs.esp, this.regs.ebp, 4); this.regs.esp += 4;
+                this.writeMem(this.regs.esp, this.regs.esi, 4); this.regs.esp += 4;
+                this.writeMem(this.regs.esp, this.regs.edi, 4); this.regs.esp += 4;
+                this.regs.esp = origEsp;  // Reset ESP to start of pushed data
+                this.regs.eip++;
+                return 5;  // PUSHAD = 5 cycles
+            }
+            case 0x61: {
+                // Pop all 32-bit general-purpose registers (reverse order)
+                this.regs.edi = this.readMem(this.regs.esp, 4); this.regs.esp += 4;
+                this.regs.esi = this.readMem(this.regs.esp, 4); this.regs.esp += 4;
+                this.regs.ebp = this.readMem(this.regs.esp, 4); this.regs.esp += 4;
+                this.regs.esp += 4;  // Skip original ESP (was popped but discarded)
+                this.regs.ebx = this.readMem(this.regs.esp, 4); this.regs.esp += 4;
+                this.regs.edx = this.readMem(this.regs.esp, 4); this.regs.esp += 4;
+                this.regs.ecx = this.readMem(this.regs.esp, 4); this.regs.esp += 4;
+                this.regs.eax = this.readMem(this.regs.esp, 4); this.regs.esp += 4;
+                this.regs.eip++;
+                return 5;  // POPAD = 5 cycles
+            }
+            
             // PUSHF (0x9C) and POPF (0x9D) (3 cycles)
             case 0x9C: {
                 // Push EFLAGS onto stack
@@ -1146,6 +1292,224 @@ class X86CPU {
             return 4;
         }
     }
+    
+    // Handle AND r/m8, r8 (0x20), AND r/m32, r32 (0x21)
+    // AND r8, r/m8 (0x22), AND r32, r/m32 (0x23)
+    handleAndRegMem(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+        
+        const isByteOp = (opcode & 0x01) === 0x00;  // 0x20, 0x22 are 8-bit
+        
+        if (isByteOp) {
+            // 8-bit AND (0x20, 0x22)
+            const reg8Names = ['al', 'cl', 'dl', 'bl', 'ah', 'ch', 'dh', 'bh'];
+            const regName = reg8Names[reg];
+            const regValue = this.getReg8(regName);
+            
+            if (mod === 3) {
+                // Register to register
+                const rmName = reg8Names[rm];
+                if (opcode === 0x20) {
+                    // AND r/m8, r8
+                    const result = (this.getReg8(rmName) & regValue) & 0xFF;
+                    this.setReg8(rmName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, true);
+                } else {
+                    // AND r8, r/m8
+                    const result = (regValue & this.getReg8(rmName)) & 0xFF;
+                    this.setReg8(regName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, true);
+                }
+                return 2;
+            } else {
+                // Memory operand
+                const addr = this.calculateAddress(modrm);
+                if (opcode === 0x20) {
+                    // AND r/m8, r8
+                    const memValue = this.mem.read8(addr);
+                    const result = (memValue & regValue) & 0xFF;
+                    this.mem.write8(addr, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, true);
+                } else {
+                    // AND r8, r/m8
+                    const memValue = this.mem.read8(addr);
+                    const result = (regValue & memValue) & 0xFF;
+                    this.setReg8(regName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, true);
+                }
+                return 4;
+            }
+        } else {
+            // 32-bit AND (0x21, 0x23)
+            const regName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
+            const regValue = this.getReg32(regName);
+            
+            if (mod === 3) {
+                // Register to register
+                const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                if (opcode === 0x21) {
+                    // AND r/m32, r32
+                    const result = (this.getReg32(rmName) & regValue) >>> 0;
+                    this.setReg32(rmName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, false);
+                } else {
+                    // AND r32, r/m32
+                    const result = (regValue & this.getReg32(rmName)) >>> 0;
+                    this.setReg32(regName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, false);
+                }
+                return 2;
+            } else {
+                // Memory operand
+                const addr = this.calculateAddress(modrm);
+                if (opcode === 0x21) {
+                    // AND r/m32, r32
+                    const memValue = this.read32(addr);
+                    const result = (memValue & regValue) >>> 0;
+                    this.write32(addr, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, false);
+                } else {
+                    // AND r32, r/m32
+                    const memValue = this.read32(addr);
+                    const result = (regValue & memValue) >>> 0;
+                    this.setReg32(regName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, false);
+                }
+                return 4;
+            }
+        }
+    }
+    
+    // Handle arithmetic with immediate: ADD/OR/ADC/SBB/AND/SUB/XOR/CMP
+    // 0x80: r/m8, imm8    (8-bit operand, 8-bit immediate)
+    // 0x81: r/m32, imm32  (32-bit operand, 32-bit immediate)
+    // 0x83: r/m32, imm8   (32-bit operand, 8-bit sign-extended immediate)
+    handleArithmeticImmediate(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 0x3;
+        const reg = (modrm >> 3) & 0x7;  // Operation type
+        const rm = modrm & 0x7;
+        
+        // Determine operand size and read destination value
+        const isByteOp = (opcode === 0x80);
+        
+        let destValue, destAddr, destRegName;
+        
+        if (mod === 0x3) {
+            // Register operand
+            if (isByteOp) {
+                const reg8Names = ['al', 'cl', 'dl', 'bl', 'ah', 'ch', 'dh', 'bh'];
+                destRegName = reg8Names[rm];
+                destValue = this.getReg8(destRegName);
+                destAddr = null;
+            } else {
+                const reg32Names = ['eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi'];
+                destRegName = reg32Names[rm];
+                destValue = this.getReg32(destRegName);
+                destAddr = null;
+            }
+        } else {
+            // Memory operand
+            destAddr = this.calculateAddress(modrm);
+            destValue = isByteOp ? this.mem.read8(destAddr) : this.mem.read32(destAddr);
+            destRegName = null;
+        }
+        
+        // Read immediate value
+        let immValue;
+        if (opcode === 0x80) {
+            immValue = this.readMem(this.regs.eip, 1);
+            this.regs.eip++;
+        } else if (opcode === 0x81) {
+            immValue = this.readMem(this.regs.eip, 4);
+            this.regs.eip += 4;
+        } else {  // 0x83
+            immValue = this.readMem(this.regs.eip, 1);
+            this.regs.eip++;
+            // Sign-extend 8-bit to 32-bit
+            if (immValue & 0x80) immValue |= 0xFFFFFF00;
+        }
+        
+        // Execute operation based on reg field
+        let result;
+        const signedDest = isByteOp ? (destValue << 24) >> 24 : (destValue << 0) >> 0;
+        const signedImm = isByteOp ? (immValue << 24) >> 24 : (immValue << 0) >> 0;
+        
+        switch (reg) {
+            case 0x0:  // ADD
+                result = (destValue + immValue) >>> 0;
+                this.setFlag('CF', (destValue >>> 0) + (immValue >>> 0) > 0xFFFFFFFF);
+                this.updateArithmeticFlags(result, destValue, immValue, false, isByteOp);
+                break;
+            case 0x1:  // OR
+                result = destValue | immValue;
+                this.updateArithmeticFlags(result, 0, 0, 0, isByteOp);
+                break;
+            case 0x2:  // ADC (add with carry)
+                const oldCF = this.getFlag('CF') ? 1 : 0;
+                result = (destValue + immValue + oldCF) >>> 0;
+                this.setFlag('CF', (destValue >>> 0) + (immValue >>> 0) + oldCF > 0xFFFFFFFF);
+                this.updateArithmeticFlags(result, destValue, immValue + oldCF, false, isByteOp);
+                break;
+            case 0x3:  // SBB (subtract with borrow)
+                const oldCF2 = this.getFlag('CF') ? 1 : 0;
+                result = (destValue - immValue - oldCF2) >>> 0;
+                this.setFlag('CF', (destValue >>> 0) < (immValue >>> 0) + oldCF2);
+                this.updateArithmeticFlags(result, destValue, immValue + oldCF2, true, isByteOp);
+                break;
+            case 0x4:  // AND
+                result = destValue & immValue;
+                this.updateArithmeticFlags(result, 0, 0, 0, isByteOp);
+                break;
+            case 0x5:  // SUB
+                result = (destValue - immValue) >>> 0;
+                this.setFlag('CF', (destValue >>> 0) < (immValue >>> 0));
+                this.updateArithmeticFlags(result, destValue, immValue, true, isByteOp);
+                break;
+            case 0x6:  // XOR
+                result = destValue ^ immValue;
+                this.updateArithmeticFlags(result, 0, 0, 0, isByteOp);
+                break;
+            case 0x7:  // CMP (compare, only sets flags)
+                result = (destValue - immValue) >>> 0;
+                this.setFlag('CF', (destValue >>> 0) < (immValue >>> 0));
+                this.updateArithmeticFlags(result, destValue, immValue, true, isByteOp);
+                result = destValue;  // CMP doesn't write result
+                break;
+        }
+        
+        // Write result back (unless it was CMP)
+        if (reg !== 0x7) {
+            if (mod === 0x3) {
+                // Register destination
+                if (isByteOp) {
+                    this.setReg8(destRegName, result & 0xFF);
+                } else {
+                    this.setReg32(destRegName, result);
+                }
+            } else {
+                // Memory destination
+                if (isByteOp) {
+                    this.mem.write8(destAddr, result & 0xFF);
+                } else {
+                    this.mem.write32(destAddr, result);
+                }
+            }
+        }
+        
+        return isByteOp ? 2 : 4;  // 8-bit = 2 cycles, 32-bit = 4 cycles
+    }
+    
+
     
     // Handle SUB r/m32, r32 (0x29) and SUB r32, r/m32 (0x2B)
     handleSubRegMem(opcode) {
