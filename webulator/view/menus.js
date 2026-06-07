@@ -1,7 +1,7 @@
 $("#step").on("click",     () => { if (machine) machine.step(); });
 $("#reset").on("click",    () => { if (machine) machine.reset(); });
-$("#continue").on("click", () => { if (machine) machine.cont(); });
-$("#pause").on("click",    () => { if (machine) machine.stop(); });
+$("#continue").on("click", () => { if (machine) { machine.cont(); showPauseView(); } });
+$("#pause").on("click",    () => { if (machine) { machine.stop(); showContinueView(); } });
 $("#clean").on("click",    () => {
     if (machine) machine.reset();
     resetKernel();
