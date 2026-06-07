@@ -22,9 +22,9 @@ $('#uart-cols').val(UART_SIZE.cols);
 $('#uart-rows').val(UART_SIZE.rows);
 terminal.open(document.getElementById('terminal'));
 
-// Forward terminal input to emulator's PS/2 keyboard.
-// We attach to the xterm.js helper textarea directly since that's
-// where xterm.js routes keyboard events.
+// Forward terminal input to emulator's PS/2 keyboard, but let
+// xterm.js process the event normally so typed characters appear
+// in the terminal display.
 function captureTerminalInput() {
     const ta = $('#terminal .xterm-helper-textarea, #terminal textarea');
     if (ta.length) {
@@ -40,10 +40,9 @@ function captureTerminalInput() {
             }
             machine.keyboard.handleKeyEvent(key, true);
             machine.keyboard.handleKeyEvent(key, false);
-            e.preventDefault();
+            // Do NOT preventDefault — let xterm.js display the character
         });
     } else {
-        // Terminal textarea not ready yet — retry after open
         setTimeout(captureTerminalInput, 100);
     }
 }
