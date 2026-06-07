@@ -66,11 +66,9 @@ class X86Machine {
         this.cpu = new X86CPU(this.mem, this.pic);
         this.cpu.debug = this.debug;
         
-        // Connect VGA callback
-        this.mem.onVgaUpdate = (offset, size) => {
-            if (this.onVgaUpdate) {
-                this.onVgaUpdate(offset, size);
-            }
+        // Mark VGA dirty when memory is written at 0xB8000
+        this.mem.onVgaUpdate = () => {
+            this.vga.dirty = true;
         };
         
         // Map VGA memory-mapped I/O

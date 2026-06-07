@@ -110,6 +110,7 @@ async function loadBuiltBinaries() {
     if (kernelLoaded) {
         showPauseView();
         updateRegView();
+        machine.start();
     }
 }
 
