@@ -36,6 +36,7 @@ class X86Machine {
         
         // CPU frequency (Hz) - target 10 MHz like Zeal 8-bit
         this.cpuFreq = 10000000;
+        this.speedDivider = 1;  // 1 = full speed, 2 = half, etc.
         this.tstatesPerInterval = 0;
         
         // Initialize components
@@ -131,7 +132,7 @@ class X86Machine {
         this.halted = false;
         
         // Calculate T-states per 16ms interval (roughly 60 FPS)
-        this.tstatesPerInterval = Math.floor(this.cpuFreq / 60);
+        this.tstatesPerInterval = Math.floor(this.cpuFreq / 60 / this.speedDivider);
         
         // Start execution loop
         const outerThis = this;

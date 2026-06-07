@@ -7,6 +7,18 @@ $("#clean").on("click",    () => {
     resetKernel();
 });
 
+$("#speed-slider").on("input", function() {
+    const val = parseInt($(this).val());
+    $("#speed-label").text(val + 'x');
+    if (machine) {
+        machine.speedDivider = val;
+        if (machine.running) {
+            machine.stop();
+            machine.start();
+        }
+    }
+});
+
 function showPauseView() {
     $("#continue").hide();
     $("#pause").show();
