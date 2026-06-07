@@ -176,7 +176,7 @@ try {
     while (instructions < maxInstructions && !cpu.halted) {
         const eipBefore = cpu.regs.eip;
         
-        // Debug: print first few instructions
+        // Debug: print instructions near the crash point
         if (instructions < 50) {
             const opcode = mem.read8(cpu.regs.eip);
             const bytes = [];

@@ -533,7 +533,7 @@ class X86CPU {
             case 0xB8: case 0xB9: case 0xBA: case 0xBB:
             case 0xBC: case 0xBD: case 0xBE: case 0xBF: {
                 const regIndex = opcode - 0xB8;
-                const regName = ['eax','ecx','edx','ebx','esi','edi','esp','ebp'][regIndex];
+                const regName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][regIndex];
                 this.regs.eip++;
                 if (this.prefixes.operandSize) {
                     // 0x66 prefix: MOV r16, imm16
