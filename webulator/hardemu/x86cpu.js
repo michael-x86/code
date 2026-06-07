@@ -1123,8 +1123,16 @@ class X86CPU {
                 return 5;
             }
             
-            // MOV moffs8, AL (0xA2) and MOV moffs32, EAX (0xA3) (2 cycles)
-            // MOV EAX, moffs32 (0xA1) (2 cycles)
+            // MOV AL, moffs8 (0xA0), MOV EAX, moffs32 (0xA1)
+            // MOV moffs8, AL (0xA2), MOV moffs32, EAX (0xA3) (2 cycles)
+            case 0xA0: {
+                // MOV AL, moffs8
+                this.regs.eip++;
+                const addr = this.readMem(this.regs.eip, 4);
+                this.regs.eip += 4;
+                this.regs.eax = (this.regs.eax & 0xFFFFFF00) | (this.readMem(addr, 1) & 0xFF);
+                return 2;
+            }
             case 0xA1: {
                 // MOV EAX, moffs32
                 this.regs.eip++;

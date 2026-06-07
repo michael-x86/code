@@ -90,6 +90,13 @@ async function loadBuiltBinaries() {
 
             // Set up machine state as bootloader would:
             // Flat protected mode with kernel at 1MB mark
+            
+            // Bootloader handoff: store FS disk parameters at physical 0x500
+            // (normally written by bootloader.asm before jumping to kernel)
+            machine.mem.write32(0x500, 0x01F0);   // fs_ata_base = primary IDE
+            machine.mem.write8(0x504, 0xE0);       // fs_ata_drive = master
+            machine.mem.write32(0x508, 40);        // fs_base_lba = after boot+image
+            
             machine.cpu.regs.eip = 0x100000;
             machine.cpu.segregs.cs = 0x08;
             machine.cpu.segregs.ds = 0x10;
@@ -145,6 +152,9 @@ async function loadBuiltBinaries() {
     if (kernelLoaded) {
         showPauseView();
         updateRegView();
+        machine.onFrame = () => {
+            setRegView();
+        };
         machine.start();
     }
 }

@@ -25,6 +25,7 @@ class X86Machine {
         // Callbacks
         this.onVgaUpdate = null;
         this.onSerialOutput = null;  // For debug output via serial port
+        this.onFrame = null;         // Called at end of each execution frame (for UI refresh)
         
         // Debug mode
         this.debug = false;
@@ -177,6 +178,11 @@ class X86Machine {
         // Render VGA if dirty
         if (this.vga.dirty) {
             this.vga.render();
+        }
+        
+        // Notify UI for refresh (register display, etc.)
+        if (this.onFrame) {
+            this.onFrame();
         }
     }
     
