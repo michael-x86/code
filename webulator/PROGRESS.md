@@ -950,6 +950,80 @@ IRQs delivered: 1  EIP: 0xdead0020  ESP: 0x7ff4
 
 ---
 
+## Session: 2026-06-07 (Part 6) — Kernel Boot Fix, Register Display, Bootloader Handoff
+
+### Completed
+
+1. **Fixed register display never updating** ✅
+   - `setRegView()` was called only at startup (init.js lines 73, 147) — never during execution
+   - Register dump always showed T-States=0 and initial EIP, making the kernel look frozen
+   - Fix: Added `onFrame` callback to `executionLoop()` called after each 16ms frame
+   - `init.js` sets `machine.onFrame = () => setRegView()` — register panel now updates live
+
+2. **Fixed #UD from missing opcode 0xA0 (MOV AL, moffs8)** ✅
+   - Kernel ATA driver uses `MOV AL, [0xC0104BD9]` (opcode 0xA0) to read a global
+   - Emulator only had 0xA1 (MOV EAX, moffs32), 0xA2 (MOV moffs8, AL), 0xA3 (MOV moffs32, EAX)
+   - Missing 0xA0 triggered #UD → kernel's `common_exception_handler` → CLI + HLT → frozen with IF=0
+   - Fix: Added `case 0xA0` to `executeInstruction()`
+
+3. **Fixed ATA port polling spinning forever** ✅
+   - Bootloader stores FS disk parameters at physical 0x500 before jumping to kernel:
+     - `[0x500]` = 0x01F0 (ATA primary IDE base port)
+     - `[0x504]` = 0xF0 (drive select)
+     - `[0x508]` = 0 (FS base LBA)
+   - In the webulator, the bootloader doesn't run — EIP is set to 0x100000 directly
+   - Physical 0x500 is zeroed by memory init → `fs_ata_base` = 0
+   - ATA driver reads port 0 + 7 = 7 (unhandled → returns 0xFF)
+   - Bit 7 (BSY) stays set → polling loop spins until ECX timeout
+   - Fix: `init.js` now writes bootloader handoff values to physical 0x500
+
+4. **Rebuilt kernel binary** ✅
+   - Ran `/home/janko/dev/code/asm` to rebuild kernel.bin, bootloader.bin, os.img
+   - Copied to `webulator/kernel-bin/`
+
+### Test Results
+
+Full kernel boot verified in Node:
+```
+Frame 0: kernel init (40996 steps) → paging enabled → kernel_main → PIT program → iretd
+Frame 1: task0 idle loop (STI; HLT) → PIT ticks → IRQ0 fires → scheduler runs
+IRQs delivered: 1  —  Timer tick delivery: WORKING
+```
+
+Kernel progression:
+| Stage | EIP | Status |
+|-------|-----|--------|
+| Entry | 0x100000 | CLI, set up segments |
+| Paging enabled | 0x10003C | CR0.PG=1, CR3=0x155000 |
+| Higher half jump | 0xC0100043 | Code running at 3GB+ |
+| kernel_main | 0xC0100xxx | Build IDT, PIC remap, PIT program |
+| iretd → task0 | 0xC0103ED1 | STI; HLT (idle loop, IF=1) |
+| IRQ0 fires | — | PIT→PIC→CPU→scheduler |
+
+### Code Changes
+
+**`hardemu/machine_x86.js`** (+6 lines):
+- Added `this.onFrame = null` to constructor callbacks
+- Added `if (this.onFrame) this.onFrame()` at end of `executionLoop()`
+
+**`hardemu/x86cpu.js`** (+12 / -2 lines):
+- Added `case 0xA0`: MOV AL, moffs8 — reads byte from absolute address into AL
+- Reorganized moffs comments to include all four variants (0xA0-0xA3)
+
+**`view/init.js`** (+10 lines):
+- Added bootloader handoff: `write32(0x500, 0x01F0)`, `write8(0x504, 0xE0)`, `write32(0x508, 40)`
+- Added `machine.onFrame = () => setRegView()` for live register updates
+
+### 🔍 DISCOVERED THIS SESSION:
+- **Register display was a lie**: T-States=0 and EIP=0x100000 were just the initial state captured at startup. The kernel was executing thousands of instructions but the UI never refreshed.
+- **Bootloader handoff is critical**: The kernel reads FS parameters from physical 0x500, written by the bootloader at boot time. Without them, ATA driver uses port base 0 instead of 0x1F0.
+- **Unhandled port reads return 0xFF**: x86 convention is to return 0xFF for unmapped I/O ports (floating bus). Bit 7 of ATA status = BSY, so 0xFF makes every device appear busy.
+- **Kernel hits #UD on early init**: The first exception occurs during `ensure_fs_ready`, before the kernel's own IDT is active. The emulator's fallback IDT (CLI+HLT at 0x6000) catches it and halts with IF=0 — the PIT can never wake it.
+- **idle loop is `STI; HLT; JMP $-3`**: task0_entry and task1_entry both enable interrupts, halt, and jump back. The PIT IRQ0 preempts HLT via the scheduler.
+- **0xA0 is MOV AL, moffs8**: The 0xA0-0xA3 family loads/stores AL or EAX from/to an absolute 32-bit address embedded in the instruction.
+
+---
+
 ## Long-term Goals
 
 - Get kernel to fully execute without unimplemented opcodes ✅ (NO MORE UNHANDLED OPCODES!)
