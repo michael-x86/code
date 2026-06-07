@@ -30,7 +30,6 @@ terminal.onData((data) => {
         machine.keyboard.handleKeyEvent(key, true);
         machine.keyboard.handleKeyEvent(key, false);
     }
-    $('#screen').focus();
 });
 
 document.addEventListener('keydown', function(event) {
