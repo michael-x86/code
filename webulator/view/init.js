@@ -22,15 +22,32 @@ $('#uart-cols').val(UART_SIZE.cols);
 $('#uart-rows').val(UART_SIZE.rows);
 terminal.open(document.getElementById('terminal'));
 
-// Forward terminal input to emulator's PS/2 keyboard
-terminal.onData((data) => {
-    if (!machine || !machine.keyboard) return;
-    for (const ch of data) {
-        const key = ch === '\r' ? 'Enter' : ch === '\x7f' ? 'Backspace' : ch;
-        machine.keyboard.handleKeyEvent(key, true);
-        machine.keyboard.handleKeyEvent(key, false);
+// Forward terminal input to emulator's PS/2 keyboard.
+// We attach to the xterm.js helper textarea directly since that's
+// where xterm.js routes keyboard events.
+function captureTerminalInput() {
+    const ta = $('#terminal .xterm-helper-textarea, #terminal textarea');
+    if (ta.length) {
+        ta.off('.termkey').on('keydown.termkey', function(e) {
+            if (!machine || !machine.keyboard) return;
+            let key = e.key;
+            if (key === 'Enter' || key === 'Backspace' || key === 'Tab' || key === 'Escape') {
+                // pass through as-is
+            } else if (key.length === 1) {
+                key = key.toLowerCase();
+            } else {
+                return; // Skip modifier keys, arrows, etc.
+            }
+            machine.keyboard.handleKeyEvent(key, true);
+            machine.keyboard.handleKeyEvent(key, false);
+            e.preventDefault();
+        });
+    } else {
+        // Terminal textarea not ready yet — retry after open
+        setTimeout(captureTerminalInput, 100);
     }
-});
+}
+captureTerminalInput();
 
 document.addEventListener('keydown', function(event) {
     var handled = false;
