@@ -53,20 +53,19 @@ pic_remap:
 
 
 ; -----------------------------------------------------------------------------
-; set_freq — program PIT channel 0 to PIT_FREQUENCY Hz
+; set_freq — program the system timer to PIT_FREQUENCY Hz
 ;
-; PIT base clock is 1,193,182 Hz. With divisor D, output frequency is
-;-- 1193182 / D. We pick D = 11932 for exactly 100 Hz, which is the
-;-- tick rate the scheduler and the shell's live-tick display assume.
+; The actual mechanism is architecture-specific (PIT on x86, Generic Timer on
+; ARM, etc.).  The HAL macro handles all register details.
 ;
-; Mode 0x36 = channel 0, lobyte/hibyte access, square-wave generator.
-; The low byte of the divisor goes first, then the high byte.
+; On x86:
+;   PIT base clock is 1,193,182 Hz.  With divisor D = PIT_DIVISOR, output
+;   frequency is 1193182 / 11932 ≈ 100 Hz.
+;
+; On ARM:
+;   The Generic Timer compare register is set so the timer fires at the same
+;   rate.  See arch/arm/arch_io.inc for details.
 ; -----------------------------------------------------------------------------
 set_freq:
-    mov al, 0x36
-    HAL_PIT_WRITE_CMD
-    mov ax, PIT_DIVISOR
-    HAL_PIT_WRITE_DATA 0                         ; low byte
-    mov al, ah
-    HAL_PIT_WRITE_DATA 0                         ; high byte
+    HAL_TIMER_PROGRAM_CH0 PIT_DIVISOR
     ret

@@ -62,45 +62,29 @@
 
 
 ; --- PIT (Programmable Interval Timer) ----------------------------------------
+;
+; The PIT uses x86 port I/O.  To keep the HAL portable, callers MUST NOT
+; directly manipulate PIT registers or use x86-specific registers (al, ax, etc.).
+; Use HAL_TIMER_PROGRAM_CH0 instead.
+;
+; =============================================================================
+; HAL_TIMER_PROGRAM_CH0  divisor
+;   Program PIT channel 0 in mode 3 (square-wave generator) for the given
+;   16-bit divisor.  The output frequency is 1,193,182 Hz / divisor.
+;
+;   Modern x86 systems also provide the HPET, but we target 586-class
+;   compatibility, so we use the legacy PIT/8254.
+;
+;   Clobbers: ax (16-bit), agnostic of architecture-specific register names.
+; =============================================================================
 
-%define PIT_CMD_PORT   0x43
-%define PIT_CH0_PORT   0x40
-%define PIT_CH1_PORT   0x41
-%define PIT_CH2_PORT   0x42
-
-; HAL_PIT_WRITE_CMD  (writes al to PIT command port 0x43)
-%macro HAL_PIT_WRITE_CMD 0
-    out PIT_CMD_PORT, al
-%endmacro
-
-; HAL_PIT_WRITE_DATA channel  (writes al/ax to PIT channel port)
-;   channel = 0, 1, or 2
-%macro HAL_PIT_WRITE_DATA 1
-    %if %1 == 0
-        out PIT_CH0_PORT, al
-    %elif %1 == 1
-        out PIT_CH1_PORT, al
-    %elif %1 == 2
-        out PIT_CH2_PORT, al
-    %else
-        %error "HAL_PIT_WRITE_DATA: channel must be 0, 1, or 2"
-    %endif
-%endmacro
-
-; HAL_PIT_READ_CMD  (reads PIT command port into al)
-%macro HAL_PIT_READ_CMD 0
-    in al, PIT_CMD_PORT
-%endmacro
-
-; HAL_PIT_READ_DATA channel  (reads PIT channel port into al)
-%macro HAL_PIT_READ_DATA 1
-    %if %1 == 0
-        in al, PIT_CH0_PORT
-    %elif %1 == 1
-        in al, PIT_CH1_PORT
-    %elif %1 == 2
-        in al, PIT_CH2_PORT
-    %endif
+%macro HAL_TIMER_PROGRAM_CH0 1
+    mov al, 0x36               ; channel 0, lobyte/hibyte, mode 3, binary
+    out 0x43, al
+    mov ax, %1                 ; divisor
+    out 0x40, al               ; low byte
+    mov al, ah
+    out 0x40, al               ; high byte
 %endmacro
 
 

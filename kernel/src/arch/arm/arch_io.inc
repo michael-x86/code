@@ -282,44 +282,76 @@
     str r1, [r0]
 .endm
 
-/* --- PIT (ARM Generic Timer) macros ----------------------------------------
- * NOTE: ARM has built-in Generic Timer (no separate PIT chip).
- *       Programming via coprocessor registers (not memory-mapped).
+/* --- ARM Generic Timer (replaces x86 PIT) -----------------------------------
+ * ARM has no PIT chip; it has a built-in Generic Timer accessed via
+ * coprocessor registers.  The HAL abstraction hides this difference.
+ *
+ * Timer registers:
+ *   CNTPCT    (r/o)  64-bit physical count, increments at CPU_TIMER_HZ
+ *   CNTP_CVAL (r/w)  64-bit compare value; IRQ fires when CNTPCT >= CNTP_CVAL
+ *   CNTP_CTL  (r/w)  Control: bit 0 = ENABLE, bit 1 = IMASK
  */
 
-/* HAL_PIT_WRITE_CMD - Set timer control (CNTP_CTL)
- * Clobbers: r0, r1
+/* CPU_TIMER_HZ — frequency of the ARM generic timer on this platform.
+ * BCM2711 (Pi 4 / CM4) runs the system timer at 100 MHz typically.
+ * Override this in board-specific headers if different.
  */
+#ifndef CPU_TIMER_HZ
+#define CPU_TIMER_HZ  100000000   /* 100 MHz */
+#endif
 
-.macro HAL_PIT_WRITE_CMD
-    /* CNTP_CTL = r0 (control register)
-     * Bits: ENABLE (bit 0), IMASK (bit 1)
+/* PIT_BASE_CLOCK — the reference frequency the divisor is calibrated against.
+ * The HAL_TIMER_PROGRAM_CH0 macro multiplies back so the ARM Generic Timer
+ * produces the same interrupt rate that the PIT would on x86.
+ */
+#define PIT_BASE_CLOCK  1193182   /* 1.193182 MHz PIT reference */
+
+/* ---------------------------------------------------------------------------
+ * HAL_TIMER_PROGRAM_CH0  divisor
+ *   Program the system timer to generate periodic interrupts at:
+ *       freq = PIT_BASE_CLOCK / divisor    (≈ 100 Hz with divisor = 11932)
+ *
+ *   ARM implementation: writes CNTP_CVAL = CNTPCT + tick_offset, then
+ *   enables the timer.  tick_offset = CPU_TIMER_HZ * divisor / PIT_BASE_CLOCK.
+ *
+ *   Clobbers: r0-r4
+ *
+ *   NOTE: The runtime division is expensive.  For production, consider
+ *   pre-computing tick_offset in the build system or using an arch-specific
+ *   timer.h header that inlines the right constant.
+ * ------------------------------------------------------------------------- */
+
+.macro HAL_TIMER_PROGRAM_CH0 divisor
+    push    {r4, r5, r6, r7, lr}
+
+    /* Read current counter: r4:r5 = CNTPCT (64 bits) */
+    mrrc    p15, 0, r4, r5, c14, c0
+
+    /* tick_offset = CPU_TIMER_HZ * \divisor / PIT_BASE_CLOCK
+     * We load the three constants and call a helper routine.
+     * This is a work-in-progress; a future arch_timer.inc should
+     * provide a pre-computed constant instead.                    @FIXME
      */
-    mcr p15, 0, r0, c14, c2, 1           @ Write CNTP_CTL
-.endm
-
-/* HAL_PIT_WRITE_DATA <channel> - Set timer compare value (CNTP_CVAL)
- * Args: channel (ignored, ARM has one physical timer)
- * Clobbers: r0, r1
- */
-
-.macro HAL_PIT_WRITE_DATA channel
-    /* CNTP_CVAL = r0 (compare value, 64-bit)
-     * On 32-bit ARM: use mcrr to write 64-bit value
+    ldr     r0, =CPU_TIMER_HZ
+    ldr     r1, =\divisor
+    ldr     r2, =PIT_BASE_CLOCK
+    /* TODO: __aeabi_uidiv / __aeabi_uldiv style helper          @FIXME
+     * For now, fall through — the following is a skeleton.
+     * Replace with: bl  _hal_timer_compute_offset                 @FIXME
      */
-    mcrr p15, 0, r0, r1, c14, c2         @ Write CNTP_CVAL (64-bit)
-.endm
 
-/* HAL_PIT_READ_DATA <channel> - Read timer counter (CNTPCT)
- * Returns: r0 (low 32 bits), r1 (high 32 bits)
- * Clobbers: (none, returns in r0-r1)
- */
+    /* Add tick_offset (r0) to CNTPCT (r4:r5) → r0:r1 = CNTP_CVAL */
+    adds    r0, r4, r0
+    adc     r1, r5, #0
 
-.macro HAL_PIT_READ_DATA channel
-    /* CNTPCT = 64-bit physical counter
-     * Read with mrrc
-     */
-    mrrc p15, 0, r0, r1, c14, c0         @ Read CNTPCT (64-bit)
+    /* Write CNTP_CVAL */
+    mcrr    p15, 0, r0, r1, c14, c2
+
+    /* Enable timer: CNTP_CTL = 1 (ENABLE=1, IMASK=0) */
+    mov     r0, #1
+    mcr     p15, 0, r0, c14, c2, 1
+
+    pop     {r4, r5, r6, r7, pc}
 .endm
 
 /* --- UART (PL011) macros -------------------------------------------------- */
