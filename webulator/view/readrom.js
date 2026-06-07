@@ -1,5 +1,5 @@
 function loadKernel(file_rom) {
-    if (!file_rom) return;
+    if (!file_rom) { console.log('loadKernel: no file selected'); return; }
     let reader = new FileReader();
     reader.onload = function(e) {
         const data = new Uint8Array(e.target.result);
@@ -8,13 +8,18 @@ function loadKernel(file_rom) {
             machine.cpu.regs.eip = 0x100000;
             $("#kernready").addClass("ready");
             console.log(`Kernel loaded: ${data.length} bytes at 0x100000`);
+        } else {
+            console.error('loadKernel: machine not ready');
         }
+    };
+    reader.onerror = function(e) {
+        console.error('loadKernel: file read error', e);
     };
     reader.readAsArrayBuffer(file_rom);
 }
 
 function loadDisk(file_disk) {
-    if (!file_disk) return;
+    if (!file_disk) { console.log('loadDisk: no file selected'); return; }
     let reader = new FileReader();
     reader.onload = function(e) {
         const data = new Uint8Array(e.target.result);
@@ -25,11 +30,14 @@ function loadDisk(file_disk) {
             console.log(`Disk image loaded: ${data.length} bytes`);
         }
     };
+    reader.onerror = function(e) {
+        console.error('loadDisk: file read error', e);
+    };
     reader.readAsArrayBuffer(file_disk);
 }
 
 function loadBootloader(file_boot) {
-    if (!file_boot) return;
+    if (!file_boot) { console.log('loadBootloader: no file selected'); return; }
     let reader = new FileReader();
     reader.onload = function(e) {
         const data = new Uint8Array(e.target.result);
@@ -39,6 +47,9 @@ function loadBootloader(file_boot) {
             $("#bootready").addClass("ready");
             console.log(`Bootloader loaded: ${data.length} bytes at 0x7C00`);
         }
+    };
+    reader.onerror = function(e) {
+        console.error('loadBootloader: file read error', e);
     };
     reader.readAsArrayBuffer(file_boot);
 }

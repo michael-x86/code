@@ -80,31 +80,35 @@ async function loadBuiltBinaries() {
     let diskLoaded = false;
 
     try {
-        const kernelResp = await fetch(`${base}/kernel.bin`);
-        if (kernelResp.ok) {
-            const data = await kernelResp.arrayBuffer();
+        const resp = await fetch(`${base}/kernel.bin`);
+        if (resp.ok) {
+            const data = await resp.arrayBuffer();
             machine.mem.loadBinary(data, 0x100000);
             machine.cpu.regs.eip = 0x100000;
             $("#kernready").addClass("ready");
             kernelLoaded = true;
             console.log(`[webulator] Auto-loaded kernel.bin (${data.byteLength} bytes)`);
+        } else {
+            console.log(`[webulator] kernel.bin not found (HTTP ${resp.status}), use manual upload`);
         }
     } catch (e) {
-        console.log('[webulator] No pre-built kernel.bin found, use manual upload');
+        console.log('[webulator] Cannot fetch kernel.bin, use manual upload');
     }
 
     try {
-        const imgResp = await fetch(`${base}/os.img`);
-        if (imgResp.ok) {
-            const data = await imgResp.arrayBuffer();
+        const resp = await fetch(`${base}/os.img`);
+        if (resp.ok) {
+            const data = await resp.arrayBuffer();
             machine.loadDiskImage(data);
             machine.mem.loadDiskImage(data);
             $("#diskready").addClass("ready");
             diskLoaded = true;
             console.log(`[webulator] Auto-loaded os.img (${data.byteLength} bytes)`);
+        } else {
+            console.log(`[webulator] os.img not found (HTTP ${resp.status}), use manual upload`);
         }
     } catch (e) {
-        console.log('[webulator] No pre-built os.img found, use manual upload');
+        console.log('[webulator] Cannot fetch os.img, use manual upload');
     }
 
     if (kernelLoaded) {
