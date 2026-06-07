@@ -34,11 +34,28 @@
         button:hover {
             background: #005500;
         }
+        button:disabled {
+            opacity: 0.5;
+            cursor: default;
+        }
         #status {
             margin: 10px 0;
             padding: 10px;
             border: 1px solid #0F0;
             background: #001100;
+        }
+        #regs {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #0F0;
+            background: #001100;
+            font-size: 13px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 4px;
+        }
+        #regs span {
+            display: inline-block;
         }
         #debug {
             margin: 10px 0;
@@ -49,157 +66,191 @@
             overflow-y: auto;
             font-size: 12px;
         }
+        .label {
+            color: #080;
+        }
+        .loaded { color: #0F0; }
+        .not-loaded { color: #F00; }
     </style>
 </head>
 <body>
     <h1>x86 Emulator Test</h1>
-    
+
     <div id="controls">
         <button id="btn-load">Load test-hello.bin</button>
-        <button id="btn-run">Run</button>
-        <button id="btn-step">Step</button>
+        <button id="btn-run" disabled>Run</button>
+        <button id="btn-step" disabled>Step</button>
         <button id="btn-reset">Reset</button>
         <button id="btn-debug">Toggle Debug</button>
+        <span id="binary-status" class="not-loaded">(no binary loaded)</span>
     </div>
-    
+
     <div id="status">
         <strong>Status:</strong> <span id="status-text">Idle</span><br>
-        <strong>EIP:</strong> <span id="eip-val">0x00000000</span><br>
-        <strong>EAX:</strong> <span id="eax-val">0x00000000</span>
     </div>
-    
+
+    <div id="regs">
+        <span><span class="label">EIP:</span> <span id="eip-val">0x00000000</span></span>
+        <span><span class="label">EAX:</span> <span id="eax-val">0x00000000</span></span>
+        <span><span class="label">EBX:</span> <span id="ebx-val">0x00000000</span></span>
+        <span><span class="label">ECX:</span> <span id="ecx-val">0x00000000</span></span>
+        <span><span class="label">EDX:</span> <span id="edx-val">0x00000000</span></span>
+        <span><span class="label">ESP:</span> <span id="esp-val">0x00000000</span></span>
+        <span><span class="label">EBP:</span> <span id="ebp-val">0x00000000</span></span>
+        <span><span class="label">ESI:</span> <span id="esi-val">0x00000000</span></span>
+        <span><span class="label">EDI:</span> <span id="edi-val">0x00000000</span></span>
+        <span><span class="label">CS:</span> <span id="cs-val">0x0000</span></span>
+        <span><span class="label">FLAGS:</span> <span id="flags-val">0x00000000</span></span>
+        <span><span class="label">Instr:</span> <span id="instr-count">0</span></span>
+    </div>
+
     <canvas id="vga-canvas" width="640" height="400"></canvas>
-    
+
     <div id="debug" style="display:none;">
         <strong>Debug Output:</strong><br>
         <pre id="debug-text"></pre>
     </div>
-    
+
     <script src="hardemu/memory.js"></script>
     <script src="hardemu/x86cpu.js"></script>
     <script src="hardemu/vga.js"></script>
     <script src="hardemu/machine_x86.js"></script>
-    
+
     <script>
-        // Global machine instance
         let machine = null;
         let running = false;
         let debugMode = false;
-        
-        // Initialize emulator
+        let binaryLoaded = false;
+
         function initEmulator() {
             const canvas = document.getElementById('vga-canvas');
             machine = new X86Machine();
             machine.setCanvas(canvas);
             machine.setDebug(debugMode);
-            
-            // Set VGA update callback
-            machine.onVgaUpdate = () => {
-                machine.vga.render();
-            };
-            
-            // Set serial output callback (for debug)
+            machine.onVgaUpdate = () => { machine.vga.render(); };
             machine.onSerialOutput = (char) => {
-                if (debugMode) {
-                    document.getElementById('debug-text').textContent += String.fromCharCode(char);
-                }
+                const el = document.getElementById('debug-text');
+                if (el) el.textContent += String.fromCharCode(char);
             };
-            
+            setState('reset');
+            updateRegs();
+            document.getElementById('btn-debug').addEventListener('click', toggleDebug);
+            document.getElementById('btn-load').addEventListener('click', loadTest);
+            document.getElementById('btn-run').addEventListener('click', run);
+            document.getElementById('btn-step').addEventListener('click', stepOnce);
+            document.getElementById('btn-reset').addEventListener('click', reset);
             updateStatus('Emulator initialized');
         }
-        
-        // Load test binary
-        async function loadTest() {
-            try {
-                const response = await fetch('test-hello.bin');
-                const data = await response.arrayBuffer();
-                
-                // Load binary at 0x7C00 (boot sector)
-                machine.mem.loadBinary(data, 0x7C00);
-                
-                // Also load at 0x100000 for kernel
-                // (In real boot, bootloader loads kernel here)
-                
-                updateStatus('Loaded test-hello.bin at 0x7C00');
-                updateRegs();
-            } catch (e) {
-                updateStatus('Error loading binary: ' + e.message);
-            }
+
+        function setBinaryLoaded(loaded) {
+            binaryLoaded = loaded;
+            document.getElementById('btn-run').disabled = !loaded;
+            document.getElementById('btn-step').disabled = !loaded;
+            const el = document.getElementById('binary-status');
+            el.textContent = loaded ? '(binary loaded)' : '(no binary loaded)';
+            el.className = loaded ? 'loaded' : 'not-loaded';
         }
-        
-        // Run emulation
-        function run() {
-            if (!machine) return;
-            
-            running = true;
-            updateStatus('Running...');
-            
-            // Run for a fixed number of instructions
-            for (let i = 0; i < 100000; i++) {
-                if (!machine.cpu.step()) {
-                    updateStatus('CPU halted at EIP=0x' + machine.cpu.regs.eip.toString(16));
-                    running = false;
-                    break;
-                }
-            }
-            
-            if (running) {
-                updateStatus('Executed 100000 instructions');
-            }
-            
-            updateRegs();
-            machine.vga.render();
+
+        function setState(state) {
+            document.getElementById('status-text').textContent = state;
         }
-        
-        // Step one instruction
-        function step() {
-            if (!machine) return;
-            
-            machine.step();
-            updateRegs();
-            machine.vga.render();
-        }
-        
-        // Reset machine
-        function reset() {
-            if (!machine) return;
-            
-            machine.reset();
-            updateStatus('Machine reset');
-            updateRegs();
-        }
-        
-        // Toggle debug mode
-        function toggleDebug() {
-            debugMode = !debugMode;
-            if (machine) {
-                machine.setDebug(debugMode);
-            }
-            document.getElementById('debug').style.display = debugMode ? 'block' : 'none';
-            updateStatus('Debug mode: ' + (debugMode ? 'ON' : 'OFF'));
-        }
-        
-        // Update status display
+
         function updateStatus(msg) {
             document.getElementById('status-text').textContent = msg;
         }
-        
-        // Update register display
+
         function updateRegs() {
             if (!machine || !machine.cpu) return;
-            
-            document.getElementById('eip-val').textContent = '0x' + machine.cpu.regs.eip.toString(16).padStart(8, '0');
-            document.getElementById('eax-val').textContent = '0x' + machine.cpu.regs.eax.toString(16).padStart(8, '0');
+            const cpu = machine.cpu;
+            document.getElementById('eip-val').textContent = '0x' + (cpu.regs.eip >>> 0).toString(16).padStart(8, '0');
+            document.getElementById('eax-val').textContent = '0x' + (cpu.regs.eax >>> 0).toString(16).padStart(8, '0');
+            document.getElementById('ebx-val').textContent = '0x' + (cpu.regs.ebx >>> 0).toString(16).padStart(8, '0');
+            document.getElementById('ecx-val').textContent = '0x' + (cpu.regs.ecx >>> 0).toString(16).padStart(8, '0');
+            document.getElementById('edx-val').textContent = '0x' + (cpu.regs.edx >>> 0).toString(16).padStart(8, '0');
+            document.getElementById('esp-val').textContent = '0x' + (cpu.regs.esp >>> 0).toString(16).padStart(8, '0');
+            document.getElementById('ebp-val').textContent = '0x' + (cpu.regs.ebp >>> 0).toString(16).padStart(8, '0');
+            document.getElementById('esi-val').textContent = '0x' + (cpu.regs.esi >>> 0).toString(16).padStart(8, '0');
+            document.getElementById('edi-val').textContent = '0x' + (cpu.regs.edi >>> 0).toString(16).padStart(8, '0');
+            document.getElementById('cs-val').textContent = '0x' + (cpu.segregs.cs).toString(16).padStart(4, '0');
+            document.getElementById('flags-val').textContent = '0x' + (cpu.eflags >>> 0).toString(16).padStart(8, '0');
         }
-        
-        // Event listeners
-        document.getElementById('btn-load').addEventListener('click', loadTest);
-        document.getElementById('btn-run').addEventListener('click', run);
-        document.getElementById('btn-step').addEventListener('click', step);
-        document.getElementById('btn-reset').addEventListener('click', reset);
-        document.getElementById('btn-debug').addEventListener('click', toggleDebug);
-        
-        // Initialize on load
+
+        async function loadTest() {
+            try {
+                const response = await fetch('test-hello.bin');
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const data = await response.arrayBuffer();
+
+                // Reset machine before loading
+                machine.reset();
+
+                // test-hello.bin is a boot sector meant to run at 0x7C00
+                const loadAddr = 0x7C00;
+                machine.mem.loadBinary(data, loadAddr);
+
+                // Set up machine state as a BIOS would after loading boot sector:
+                // Real-mode state: CS:IP = 0x0000:0x7C00
+                machine.cpu.regs.eip = loadAddr;
+                machine.cpu.segregs.cs = 0x0000;
+                machine.cpu.segregs.ds = 0x0000;
+                machine.cpu.segregs.es = 0x0000;
+                machine.cpu.segregs.ss = 0x0000;
+                machine.cpu.regs.esp = 0x7C00;
+
+                // Real mode: CR0.PE = 0
+                machine.cpu.cregs.cr0 = 0x00000000;
+
+                setBinaryLoaded(true);
+                updateRegs();
+                machine.vga.render();
+                updateStatus('Loaded test-hello.bin at 0x7C00, EIP=0x7C00');
+            } catch (e) {
+                updateStatus('Error loading binary: ' + e.message);
+                console.error(e);
+            }
+        }
+
+        function run() {
+            if (!machine || !binaryLoaded) return;
+            running = true;
+            updateStatus('Running...');
+            const maxInstr = 100000;
+            let i;
+            for (i = 0; i < maxInstr; i++) {
+                const cycles = machine.cpu.step();
+                if (cycles === 0) break;
+                if (i % 1000 === 999) updateRegs();
+            }
+            running = false;
+            updateStatus('Halted after ' + i + ' instructions at EIP=0x' + (machine.cpu.regs.eip >>> 0).toString(16));
+            updateRegs();
+            machine.vga.render();
+        }
+
+        function stepOnce() {
+            if (!machine || !binaryLoaded) return;
+            machine.step();
+            updateRegs();
+            machine.vga.render();
+            updateStatus('Stepped to EIP=0x' + (machine.cpu.regs.eip >>> 0).toString(16));
+        }
+
+        function reset() {
+            if (!machine) return;
+            machine.reset();
+            setBinaryLoaded(false);
+            updateRegs();
+            machine.vga.render();
+            updateStatus('Machine reset');
+        }
+
+        function toggleDebug() {
+            debugMode = !debugMode;
+            if (machine) machine.setDebug(debugMode);
+            document.getElementById('debug').style.display = debugMode ? 'block' : 'none';
+            updateStatus('Debug: ' + (debugMode ? 'ON' : 'OFF'));
+        }
+
         window.addEventListener('load', initEmulator);
     </script>
 </body>

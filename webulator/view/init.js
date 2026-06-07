@@ -79,12 +79,43 @@ async function loadBuiltBinaries() {
     let kernelLoaded = false;
     let diskLoaded = false;
 
+    const IDT_BASE = 0x5000;
+    const HANDLER_ADDR = 0x6000;
+
     try {
         const resp = await fetch(`${base}/kernel.bin`);
         if (resp.ok) {
             const data = await resp.arrayBuffer();
             machine.mem.loadBinary(data, 0x100000);
+
+            // Set up machine state as bootloader would:
+            // Flat protected mode with kernel at 1MB mark
             machine.cpu.regs.eip = 0x100000;
+            machine.cpu.segregs.cs = 0x08;
+            machine.cpu.segregs.ds = 0x10;
+            machine.cpu.segregs.es = 0x10;
+            machine.cpu.segregs.fs = 0x10;
+            machine.cpu.segregs.gs = 0x10;
+            machine.cpu.segregs.ss = 0x10;
+            machine.cpu.regs.esp = 0x200000;
+            machine.cpu.regs.ebp = 0x200000;
+            machine.cpu.cregs.cr0 = 0x00000001;
+
+            // Set up a minimal IDT so exceptions don't crash
+            machine.mem.write8(HANDLER_ADDR, 0xFA);
+            machine.mem.write8(HANDLER_ADDR + 1, 0xF4);
+            for (let i = 0; i < 256; i++) {
+                const entryAddr = IDT_BASE + (i * 8);
+                machine.mem.write16(entryAddr, HANDLER_ADDR & 0xFFFF);
+                machine.mem.write16(entryAddr + 2, 0x0008);
+                machine.mem.write8(entryAddr + 4, 0x00);
+                machine.mem.write8(entryAddr + 5, 0x8E);
+                machine.mem.write8(entryAddr + 6, (HANDLER_ADDR >> 16) & 0xFF);
+                machine.mem.write8(entryAddr + 7, (HANDLER_ADDR >> 24) & 0xFF);
+            }
+            machine.cpu.idtBase = IDT_BASE;
+            machine.cpu.idtLimit = 0x7FF;
+
             $("#kernready").addClass("ready");
             kernelLoaded = true;
             console.log(`[webulator] Auto-loaded kernel.bin (${data.byteLength} bytes)`);

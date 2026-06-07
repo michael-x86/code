@@ -241,6 +241,9 @@ class X86Machine {
         } else if (port >= 0x3C0 && port <= 0x3CF) {
             // VGA ports
             this.vga.portWrite(port, value);
+        } else if (port >= 0x3D4 && port <= 0x3D5) {
+            // Color CRT Controller
+            this.vga.portWrite(port, value);
         } else if (port >= 0x20 && port <= 0x21) {
             // Master PIC
             this.pic.writeMaster(port, value);
@@ -286,6 +289,8 @@ class X86Machine {
         if (port >= 0x3B4 && port <= 0x3B5) {
             return this.vga.portRead(port);
         } else if (port >= 0x3C0 && port <= 0x3CF) {
+            return this.vga.portRead(port);
+        } else if (port >= 0x3D4 && port <= 0x3D5) {
             return this.vga.portRead(port);
         } else if (port >= 0x20 && port <= 0x21) {
             return this.pic.readMaster(port);

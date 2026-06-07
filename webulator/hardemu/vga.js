@@ -28,8 +28,9 @@ class VGATextMode {
         this.crtcIndex = 0;  // CRT Controller index register (port 0x3D4)
         this.crtcRegisters = new Uint8Array(25);  // CRT Controller registers
         
-        // Attribute controller state
+        // Attribute controller state (with toggle flip-flop)
         this.attribIndex = 0;
+        this.attribFF = 0;  // 0 = index mode, 1 = data mode
         this.attribRegs = new Uint8Array(21);
         
         // Sequencer state
@@ -93,7 +94,9 @@ class VGATextMode {
         this.crtcRegisters[0x10] = 0x9C;  // Vertical sync pulse start
         this.crtcRegisters[0x11] = 0x8E;  // Vertical sync pulse end
         
-        // Set attribute controller registers
+        // Set attribute controller registers (reset flip-flop)
+        this.attribIndex = 0;
+        this.attribFF = 0;
         for (let i = 0; i < 16; i++) {
             this.attribRegs[i] = i;  // Default palette (0-15)
         }
@@ -191,11 +194,14 @@ class VGATextMode {
                 break;
                 
             case 0x3C0:  // Attribute Controller Index/Data
-                if (this.attribIndex & 0x80) {
-                    // Writing data
+                if (this.attribFF) {
+                    // Data mode: write to selected register, flip-flop stays 1
                     this.attribRegs[this.attribIndex & 0x1F] = value;
+                } else {
+                    // Index mode: set register index (bits 0-4), bit 5 stored as PAS
+                    this.attribIndex = value;
+                    this.attribFF = 1;
                 }
-                this.attribIndex = value;  // Next write will be data or new index
                 break;
                 
             case 0x3C2:  // Misc Output Register
@@ -254,11 +260,16 @@ class VGATextMode {
                 return this.crtcRegisters[this.crtcIndex] || 0;
                 
             case 0x3C0:  // Attribute Controller Index/Data
-                return this.attribRegs[this.attribIndex & 0x1F] || 0;
+                return this.attribIndex;
                 
             case 0x3C1:  // Attribute Controller Status (bit 7 = 1 if waiting for data)
                 return (this.attribIndex & 0x80) ? 0x00 : 0x80;
                 
+            case 0x3BA:  // Mono Input Status #1 — resets attribute flip-flop
+            case 0x3DA:  // Color Input Status #1 — resets attribute flip-flop
+                this.attribFF = 0;  // Reset attribute controller flip-flop
+                return 0x08;  // Bit 3 = vertical blank (simplified)
+
             case 0x3C2:  // Input Status #0 (bit 4 = vertical retrace)
                 // Simulate vertical retrace (simplified)
                 return 0x00;  // Not in vblank
