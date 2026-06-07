@@ -39,6 +39,9 @@ class X86CPU {
         // PIC for interrupt handling
         this.pic = pic;
         
+        // Machine (set by machine_x86.js for port I/O routing)
+        this.machine = null;
+        
         // IDT (Interrupt Descriptor Table)
         this.idtBase = 0;
         this.idtLimit = 0;
@@ -613,6 +616,13 @@ class X86CPU {
                 this.writeMem(this.regs.esp, imm32, 4);
                 return 2;
             }
+                
+            // I/O string instructions (0x6C-0x6F)
+            case 0x6C:  // INSB
+            case 0x6D:  // INSW/INSD
+            case 0x6E:  // OUTSB
+            case 0x6F:  // OUTSW/OUTSD
+                return this.handleStringIO(opcode);
                 
             // RET (0xC3) and RET imm16 (0xC2) (4 cycles)
             case 0xC3: {
@@ -2599,6 +2609,20 @@ class X86CPU {
                 return this.handleJccNear(opcode2);
             }
                 
+            // Group 6/7: SLDT, STR, LLDT, LTR, VERR, VERW (0x00)
+            case 0x00: {
+                return this.handleGroup6_7();
+            }
+                
+            // INVD (0x08) — Invalidate cache, no-op in emulation
+            case 0x08: {
+                // Privileged instruction — invalidates internal cache
+                // We don't model cache, so this is a no-op
+                // Need to still read the ModRM byte (even though unused)
+                this.regs.eip++;
+                return 3;
+            }
+                
             default:
                 if (this.debug) {
                     console.log(`Unhandled extended opcode: 0x0F 0x${opcode2.toString(16)}`);
@@ -3047,49 +3071,28 @@ class X86CPU {
     
     // Handle IN (port I/O read)
     handleIn(port, size) {
-        // In a real emulator, this would call device handlers
-        // For now, return 0 or handle common ports
+        // Delegate to machine if available (routes to proper device handlers)
+        if (this.machine) {
+            return this.machine.cpuPortRead(port);
+        }
         
         if (this.debug) {
             console.log(`IN from port 0x${port.toString(16)}, size=${size}`);
         }
         
-        // Handle common BIOS/CMOS ports for basic functionality
-        switch (port) {
-            case 0x60:  // Keyboard data
-            case 0x64:  // Keyboard status
-                return 0;  // No key pressed
-            case 0x3DA:  // VGA status register
-                return 0x08;  // Vertical blank bit set
-            default:
-                if (this.debug) {
-                    console.log(`Unhandled IN port: 0x${port.toString(16)}`);
-                }
-                return 0;
-        }
+        return 0;
     }
     
     // Handle OUT (port I/O write)
     handleOut(port, value, size) {
-        if (this.debug) {
-            console.log(`OUT to port 0x${port.toString(16)}, value=0x${value.toString(16)}, size=${size}`);
+        // Delegate to machine if available (routes to proper device handlers)
+        if (this.machine) {
+            this.machine.cpuPortWrite(port, value);
+            return;
         }
         
-        // Handle common BIOS/VGA ports
-        switch (port) {
-            case 0x3C8:  // VGA DAC address write mode
-            case 0x3C9:  // VGA DAC data
-            case 0x3D4:  // VGA CRT index
-            case 0x3D5:  // VGA CRT data
-                // VGA registers - could be handled by VGA emulation
-                break;
-            case 0x61:  // PC speaker
-                break;
-            default:
-                if (this.debug) {
-                    console.log(`Unhandled OUT port: 0x${port.toString(16)} = 0x${value.toString(16)}`);
-                }
-                break;
+        if (this.debug) {
+            console.log(`OUT to port 0x${port.toString(16)}, value=0x${value.toString(16)}, size=${size}`);
         }
     }
     
@@ -3216,6 +3219,116 @@ class X86CPU {
         
         this.regs.eip++;
         return cycles;
+    }
+    
+    // Handle I/O string instructions (0x6C-0x6F)
+    // 0x6C: INSB, 0x6D: INSW/INSD
+    // 0x6E: OUTSB, 0x6F: OUTSW/OUTSD
+    handleStringIO(opcode) {
+        let size;
+        if (opcode === 0x6C || opcode === 0x6E) {
+            // Byte operations (INSB, OUTSB)
+            size = 1;
+        } else {
+            // Word/Dword operations — depends on operand size prefix
+            size = this.prefixes.operandSize ? 2 : 4;
+        }
+        
+        const direction = this.getFlag('DF') ? -size : size;
+        const port = this.regs.edx & 0xFFFF;
+        
+        let count = 1;
+        if (this.prefixes.rep === 1 || this.prefixes.rep === 2) {
+            count = this.regs.ecx;
+        }
+        
+        let cycles = 0;
+        
+        for (let i = 0; i < count; i++) {
+            if (opcode === 0x6C || opcode === 0x6D) {
+                // INSB/INSW/INSD: port → [EDI]
+                const addr = this.getReg32('edi');
+                const value = this.handleIn(port, size);
+                this.writeMem(addr, value, size);
+                this.setReg32('edi', this.getReg32('edi') + direction);
+            } else {
+                // OUTSB/OUTSW/OUTSD: [ESI] → port
+                const addr = this.getReg32('esi');
+                const value = this.readMem(addr, size);
+                this.handleOut(port, value, size);
+                this.setReg32('esi', this.getReg32('esi') + direction);
+            }
+            cycles += 4;
+            
+            // Decrement ECX for REP
+            if (this.prefixes.rep === 1 || this.prefixes.rep === 2) {
+                this.regs.ecx--;
+            }
+        }
+        
+        this.regs.eip++;
+        return cycles;
+    }
+    
+    // Handle Group 6/7 extended opcodes (0x0F 0x00)
+    // SLDT (reg=0), STR (reg=1), LLDT (reg=2), LTR (reg=3)
+    // VERR (reg=4), VERW (reg=5)
+    handleGroup6_7() {
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+        
+        switch (reg) {
+            case 0: {  // SLDT — Store LDTR to r/m16
+                // We don't use LDT, so store 0
+                if (mod === 3) {
+                    const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                    this.regs[rmName] = (this.regs[rmName] & 0xFFFF0000) | 0;
+                } else {
+                    const addr = this.calculateAddress(modrm);
+                    this.writeMem(addr, 0, 2);
+                }
+                return 2;
+            }
+            case 1: {  // STR — Store Task Register to r/m16
+                // We don't use task switching, so store 0
+                if (mod === 3) {
+                    const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                    this.regs[rmName] = (this.regs[rmName] & 0xFFFF0000) | 0;
+                } else {
+                    const addr = this.calculateAddress(modrm);
+                    this.writeMem(addr, 0, 2);
+                }
+                return 2;
+            }
+            case 2:   // LLDT — Load LDTR (no-op, we don't use LDT)
+            case 3: { // LTR — Load Task Register (no-op)
+                // Read r/m16 operand but ignore it
+                if (mod === 3) {
+                    // Register — just consume
+                } else {
+                    this.calculateAddress(modrm);  // Consume ModRM bytes (SIB+disp)
+                }
+                return 3;
+            }
+            case 4:   // VERR — Verify segment for reading
+            case 5: { // VERW — Verify segment for writing
+                // In flat mode, all segments are accessible, so succeed
+                this.setFlag('ZF', 1);  // Set ZF to indicate success
+                // Need to read the r/m16 source operand
+                if (mod === 3) {
+                    // Register — just consume
+                } else {
+                    this.calculateAddress(modrm);
+                }
+                return 3;
+            }
+            default:
+                return 0;  // Invalid or unimplemented
+        }
     }
     
     // Handle MOV to/from segment registers

@@ -64,6 +64,7 @@ class X86Machine {
         
         // Create CPU (pass memory and PIC)
         this.cpu = new X86CPU(this.mem, this.pic);
+        this.cpu.machine = this;
         this.cpu.debug = this.debug;
         
         // Mark VGA dirty when memory is written at 0xB8000
@@ -385,7 +386,13 @@ class PIC8259A {
             imr: 0,   // Interrupt Mask Register
             icw: 0,   // ICW state
             ocw: 0,   // OCW state
-            base: 0x08  // Vector base (default 0x08)
+            base: 0x08,  // Vector base (default 0x08)
+            readMode: 0,  // 0=IRR, 1=ISR
+            icw4Needed: true,
+            single: true,
+            interval4: false,
+            specialMask: false,
+            priority: 0  // Lowest-priority IRQ (default 0 = IRQ0 highest)
         };
         
         // Slave PIC state (cascaded to master IR2)
@@ -395,7 +402,13 @@ class PIC8259A {
             imr: 0,
             icw: 0,
             ocw: 0,
-            base: 0x70  // Vector base (default 0x70)
+            base: 0x70,  // Vector base (default 0x70)
+            readMode: 0,
+            icw4Needed: true,
+            single: true,
+            interval4: false,
+            specialMask: false,
+            priority: 0
         };
         
         this.init();
@@ -437,15 +450,54 @@ class PIC8259A {
         if (value & 0x10) {
             // ICW1: Initialization command
             pic.icw = 1;
-            // TODO: Handle ICW2, ICW3, ICW4
+            pic.ocw = 0;
+            // ICW1 indicates edge-triggered (bit 3=1 means level-triggered)
+            // Bit 0: ICW4 needed
+            // Bit 1: Single/cascade
+            // Bit 2: Address interval (4/8)
+            pic.icw4Needed = !!(value & 1);
+            pic.single = !!(value & 2);
+            pic.interval4 = !!(value & 4);
+            // Reset ISR/IRR on initialization
+            pic.isr = 0;
+            pic.irr = 0;
+            // Default read mode: IRR
+            pic.readMode = 0;  // 0 = IRR, 1 = ISR
         } else if (value & 0x08) {
-            // OCW3: Read registers
-            // TODO
+            // OCW3: Read registers / special mask / polling
+            if (value & 0x01) {
+                // Bit 0 selects read register: 0 = IRR, 1 = ISR
+                pic.readMode = (value >> 1) & 1;
+            }
+            if (value & 0x02) {
+                // Polling command
+            }
+            if (value & 0x40) {
+                // Special mask mode
+                pic.specialMask = !!(value & 0x10);
+            }
         } else {
             // OCW2: EOI, rotate, etc.
             if (value & 0x20) {
                 // EOI (End of Interrupt)
-                pic.isr = 0;  // Simplified: clear all in-service
+                const eoiLevel = value & 0x07;
+                if (value & 0x80) {
+                    // Rotate modes
+                    if (value & 0x40) {
+                        // Rotate on specific EOI
+                        pic.isr &= ~(1 << eoiLevel);
+                        pic.priority = eoiLevel;
+                    } else {
+                        // Rotate on automatic EOI
+                        pic.priority = (pic.priority + 1) & 7;
+                    }
+                } else if (value & 0x40) {
+                    // Specific EOI
+                    pic.isr &= ~(1 << eoiLevel);
+                } else {
+                    // Non-specific EOI
+                    pic.isr = 0;
+                }
             }
         }
     }
@@ -455,6 +507,18 @@ class PIC8259A {
             // ICW2: Vector base
             pic.base = value & 0xF8;
             pic.icw = 2;
+        } else if (pic.icw === 2) {
+            // ICW3: Cascade mapping (master: which IRQs have slaves, slave: slave ID)
+            if (pic.icw3 === undefined) pic.icw3 = 0;
+            pic.icw3 = value;
+            pic.icw = pic.icw4Needed ? 3 : 0;
+        } else if (pic.icw === 3) {
+            // ICW4: Mode control
+            // Bit 0: 8086 mode (1) or 8080 mode (0)
+            // Bit 1: Auto EOI
+            // Bit 3: Buffered mode
+            // Bit 4: Special fully nested mode
+            pic.icw = 0;
         } else {
             // OCW1: IMR (Interrupt Mask Register)
             pic.imr = value;
@@ -463,18 +527,26 @@ class PIC8259A {
     
     readMaster(port) {
         if (port === 0x20) {
-            return pic.isr;  // TODO: Return appropriate register
+            if (this.master.readMode) {
+                return this.master.isr;
+            } else {
+                return this.master.irr;
+            }
         } else if (port === 0x21) {
-            return pic.imr;
+            return this.master.imr;
         }
         return 0;
     }
     
     readSlave(port) {
         if (port === 0xA0) {
-            return pic.isr;
+            if (this.slave.readMode) {
+                return this.slave.isr;
+            } else {
+                return this.slave.irr;
+            }
         } else if (port === 0xA1) {
-            return pic.imr;
+            return this.slave.imr;
         }
         return 0;
     }
@@ -597,6 +669,12 @@ class PS2Keyboard {
         this.buffer = [];  // Scancode buffer
         this.outputFull = false;
         this.data = 0;
+        this.enabled = true;
+        this.keyboardDisabled = false;
+        this.auxDisabled = false;
+        this.expectedArg = 0;
+        this.ctrlCmdByte = 0x47;  // Default: enable keyboard, mouse, IRQ1, IRQ12
+        this.outputPort = 0x00;
         
         this.init();
     }
@@ -605,6 +683,10 @@ class PS2Keyboard {
         this.buffer = [];
         this.outputFull = false;
         this.data = 0;
+        this.enabled = true;
+        this.keyboardDisabled = false;
+        this.auxDisabled = false;
+        this.expectedArg = 0;
     }
     
     reset() {
@@ -614,11 +696,131 @@ class PS2Keyboard {
     write(port, value) {
         if (port === 0x60) {
             // Data port (write to keyboard)
-            // TODO: Handle keyboard commands
+            if (this.expectedArg) {
+                // This is an argument for a previous command
+                const cmd = this.expectedArg;
+                this.expectedArg = 0;
+                this.buffer.push(0xFA);  // ACK
+                if (cmd === 0x60) {
+                    // Write controller command byte
+                    this.ctrlCmdByte = value;
+                } else if (cmd === 0xD1) {
+                    // Write output port
+                    this.outputPort = value;
+                } else if (cmd === 0xD2) {
+                    // Write keyboard output buffer (echo to buffer)
+                    this.buffer.push(value);
+                }
+                // Other commands (0xED, 0xF0, 0xF3) — argument consumed, no further action
+            } else {
+                this.handleKeyboardCommand(value);
+            }
         } else if (port === 0x64) {
-            // Command port
-            // TODO: Handle controller commands
+            // Command port — send command to controller
+            this.handleControllerCommand(value);
         }
+        this.outputFull = (this.buffer.length > 0);
+    }
+    
+    handleKeyboardCommand(cmd) {
+        switch (cmd) {
+            case 0xED:  // Set LEDs
+                // Next byte written to port 0x60 is LED status
+                this.expectedArg = 0xED;
+                this.buffer.push(0xFA);  // ACK
+                break;
+            case 0xEE:  // Echo
+                this.buffer.push(0xEE);  // Echo response
+                break;
+            case 0xF0:  // Set scancode set
+                this.expectedArg = 0xF0;
+                this.buffer.push(0xFA);  // ACK
+                break;
+            case 0xF2:  // Identify keyboard
+                this.buffer.push(0xFA);  // ACK
+                this.buffer.push(0xAB);  // Standard PS/2 keyboard
+                this.buffer.push(0x41);  // Keyboard ID byte 2
+                break;
+            case 0xF3:  // Set typematic rate/delay
+                this.expectedArg = 0xF3;
+                this.buffer.push(0xFA);  // ACK
+                break;
+            case 0xF4:  // Enable scanning
+                this.enabled = true;
+                this.buffer.push(0xFA);  // ACK
+                break;
+            case 0xF5:  // Disable scanning
+                this.enabled = false;
+                this.buffer.push(0xFA);  // ACK
+                break;
+            case 0xF6:  // Set default parameters
+                this.enabled = true;
+                this.buffer.push(0xFA);  // ACK
+                break;
+            case 0xFF:  // Reset
+                this.enabled = true;
+                this.buffer = [];
+                this.buffer.push(0xFA);  // ACK
+                this.buffer.push(0xAA);  // Self-test passed
+                break;
+            default:
+                if (this.expectedArg) {
+                    // Consume expected argument byte
+                    this.expectedArg = 0;
+                    this.buffer.push(0xFA);  // ACK
+                }
+                break;
+        }
+        this.outputFull = (this.buffer.length > 0);
+    }
+    
+    handleControllerCommand(cmd) {
+        switch (cmd) {
+            case 0x20:  // Read controller command byte
+                this.buffer.push(this.ctrlCmdByte);
+                break;
+            case 0x60:  // Write controller command byte
+                this.expectedArg = 0x60;
+                break;
+            case 0xA7:  // Disable auxiliary device (mouse)
+                this.auxDisabled = true;
+                break;
+            case 0xA8:  // Enable auxiliary device
+                this.auxDisabled = false;
+                break;
+            case 0xA9:  // Test auxiliary device
+                this.buffer.push(0x00);  // No error
+                break;
+            case 0xAA:  // Controller self-test
+                this.buffer.push(0x55);  // Self-test passed
+                break;
+            case 0xAB:  // Test keyboard interface
+                this.buffer.push(0x00);  // No error
+                break;
+            case 0xAD:  // Disable keyboard
+                this.keyboardDisabled = true;
+                break;
+            case 0xAE:  // Enable keyboard
+                this.keyboardDisabled = false;
+                break;
+            case 0xC0:  // Read input port
+                this.buffer.push(0x00);
+                break;
+            case 0xD0:  // Read output port
+                this.buffer.push(this.outputPort);
+                break;
+            case 0xD1:  // Write output port
+                this.expectedArg = 0xD1;
+                break;
+            case 0xD2:  // Write keyboard output buffer
+                this.expectedArg = 0xD2;
+                break;
+            case 0xFE:  // System board reset
+                break;
+            default:
+                break;
+        }
+        this.outputFull = (this.buffer.length > 0);
     }
     
     read(port) {
@@ -704,6 +906,12 @@ class ATADisk {
             command: 0
         };
         
+        // PIO data buffer for sector reads/writes
+        this.pioBuffer = new Uint16Array(256);
+        this.pioOffset = 0;
+        this.pioCount = 0;  // Number of words remaining in buffer
+        this.pioWriteMode = false;  // true if we're expecting writes
+        
         this.init();
     }
     
@@ -722,7 +930,22 @@ class ATADisk {
     writePrimary(port, value) {
         const reg = port - 0x1F0;
         switch (reg) {
-            case 0: this.regs.data = value; break;
+            case 0: {
+                // Data register — PIO mode
+                if (this.pioWriteMode && this.pioCount > 0) {
+                    // Accept write data into PIO buffer
+                    this.pioBuffer[this.pioOffset] = value & 0xFFFF;
+                    this.pioOffset++;
+                    this.pioCount--;
+                    if (this.pioCount === 0) {
+                        // All data received — write to disk
+                        this.pioWriteMode = false;
+                        this.flushPioBuffer();
+                    }
+                }
+                this.regs.data = value;
+                break;
+            }
             case 1: this.regs.features = value; break;
             case 2: this.regs.sectorCount = value; break;
             case 3: this.regs.lbaLow = value; break;
@@ -739,7 +962,26 @@ class ATADisk {
     readPrimary(port) {
         const reg = port - 0x1F0;
         switch (reg) {
-            case 0: return this.regs.data;
+            case 0: {
+                // Data register — PIO mode: return next word from buffer
+                if (this.pioCount > 0) {
+                    const val = this.pioBuffer[this.pioOffset];
+                    this.pioOffset++;
+                    this.pioCount--;
+                    if (this.pioCount === 0) {
+                        // All data transferred
+                        this.regs.status = 0x40;  // Ready
+                    }
+                    return val;
+                }
+                return 0;
+            }
+            case 1: return this.regs.error;
+            case 2: return this.regs.sectorCount;
+            case 3: return this.regs.lbaLow;
+            case 4: return this.regs.lbaMid;
+            case 5: return this.regs.lbaHigh;
+            case 6: return this.regs.driveHead;
             case 7: return this.regs.status;
             default: return 0;
         }
@@ -770,24 +1012,151 @@ class ATADisk {
                     (this.regs.lbaHigh << 16) |
                     ((this.regs.driveHead & 0x0F) << 24);
         
-        // Read sectors from disk image
+        const count = this.regs.sectorCount || 1;
+        
+        // Read sectors from disk image into PIO buffer
         if (this.disk && lba * 512 < this.disk.length) {
-            // TODO: Copy disk data to memory (usually via DMA or PIO)
-            this.regs.status = 0x40;  // Ready
-            // Trigger IRQ14
+            const srcOffset = lba * 512;
+            const wordsToRead = count * 256;
+            
+            for (let i = 0; i < wordsToRead && (srcOffset + i * 2 + 1) < this.disk.length; i++) {
+                const lo = this.disk[srcOffset + i * 2];
+                const hi = this.disk[srcOffset + i * 2 + 1];
+                this.pioBuffer[i] = (hi << 8) | lo;
+            }
+            
+            this.pioOffset = 0;
+            this.pioCount = count * 256;
+            this.pioWriteMode = false;
+            
+            this.regs.status = 0x58;  // DRDY + DRQ + SERV
+        } else {
+            this.regs.status = 0x21;  // Error: AMNF
+        }
+    }
+    
+    writeSectors() {
+        const lba = (this.regs.lbaLow) |
+                    (this.regs.lbaMid << 8) |
+                    (this.regs.lbaHigh << 16) |
+                    ((this.regs.driveHead & 0x0F) << 24);
+        
+        const count = this.regs.sectorCount || 1;
+        
+        if (this.disk && lba * 512 < this.disk.length) {
+            // Set up PIO buffer to accept sector data
+            this.pioOffset = 0;
+            this.pioCount = count * 256;
+            this.pioWriteMode = true;
+            
+            this.regs.status = 0x58;  // DRDY + DRQ + SERV
         } else {
             this.regs.status = 0x21;  // Error
         }
     }
     
-    writeSectors() {
-        // TODO: Implement write
-        this.regs.status = 0x40;
+    flushPioBuffer() {
+        // Calculate LBA from registers
+        const lba = (this.regs.lbaLow) |
+                    (this.regs.lbaMid << 8) |
+                    (this.regs.lbaHigh << 16) |
+                    ((this.regs.driveHead & 0x0F) << 24);
+        
+        if (!this.disk) return;
+        
+        const dstOffset = lba * 512;
+        for (let i = 0; i < 256 && (dstOffset + i * 2 + 1) < this.disk.length; i++) {
+            const word = this.pioBuffer[i];
+            this.disk[dstOffset + i * 2] = word & 0xFF;
+            this.disk[dstOffset + i * 2 + 1] = (word >> 8) & 0xFF;
+        }
+        
+        this.regs.status = 0x40;  // Ready
     }
     
     identifyDevice() {
-        // TODO: Return device identification data
-        this.regs.status = 0x40;
+        // Fill PIO buffer with ATA identify data
+        // This is a simplified but valid identify structure
+        this.pioBuffer.fill(0);
+        
+        // Word 0: General configuration (0x0040 = fixed disk, non-removable)
+        this.pioBuffer[0] = 0x0040;
+        
+        // Word 1: Number of cylinders (default 16383)
+        this.pioBuffer[1] = 16383;
+        
+        // Word 3: Number of heads (default 16)
+        this.pioBuffer[3] = 16;
+        
+        // Word 6: Number of sectors per track (default 63)
+        this.pioBuffer[6] = 63;
+        
+        // Words 10-19: Serial number (20 chars, ASCII)
+        const serial = 'WEBULATOR00001';
+        for (let i = 0; i < serial.length && i < 20; i += 2) {
+            const c1 = serial.charCodeAt(i);
+            const c2 = (i + 1 < serial.length) ? serial.charCodeAt(i + 1) : 0x20;
+            this.pioBuffer[10 + i / 2] = (c2 << 8) | c1;
+        }
+        
+        // Words 23-26: Firmware revision (8 chars)
+        const fw = '1.00    ';
+        for (let i = 0; i < fw.length && i < 8; i += 2) {
+            const c1 = fw.charCodeAt(i);
+            const c2 = (i + 1 < fw.length) ? fw.charCodeAt(i + 1) : 0x20;
+            this.pioBuffer[23 + i / 2] = (c2 << 8) | c1;
+        }
+        
+        // Words 27-46: Model number (40 chars)
+        const model = 'Webulator Virtual Disk          ';
+        for (let i = 0; i < model.length && i < 40; i += 2) {
+            const c1 = model.charCodeAt(i);
+            const c2 = (i + 1 < model.length) ? model.charCodeAt(i + 1) : 0x20;
+            this.pioBuffer[27 + i / 2] = (c2 << 8) | c1;
+        }
+        
+        // Word 47: Maximum PIO transfer cycle time (0x8000 = IORDY supported)
+        this.pioBuffer[47] = 0x8010;
+        
+        // Word 49: Capabilities (0x2F00 = LBA supported, DMA, etc.)
+        this.pioBuffer[49] = 0x2F00;
+        
+        // Word 51: PIO timing
+        this.pioBuffer[51] = 0x0200;
+        
+        // Word 53: Valid fields (bit 0 = words 54-58 valid, bit 1 = word 64 valid)
+        this.pioBuffer[53] = 0x0003;
+        
+        // Words 54-58: CHS values
+        this.pioBuffer[54] = this.pioBuffer[1];   // Current cylinders
+        this.pioBuffer[55] = this.pioBuffer[3];   // Current heads
+        this.pioBuffer[56] = this.pioBuffer[6];   // Current sectors/track
+        // Total sectors
+        const totalSectors = this.disk ? Math.min(this.disk.length / 512, 0x0FFFFFFF) : 0;
+        this.pioBuffer[57] = totalSectors & 0xFFFF;
+        this.pioBuffer[58] = (totalSectors >> 16) & 0xFFFF;
+        
+        // Word 60-61: Total LBA sectors (28-bit)
+        this.pioBuffer[60] = totalSectors & 0xFFFF;
+        this.pioBuffer[61] = (totalSectors >> 16) & 0xFFFF;
+        
+        // Word 64: PIO modes supported
+        this.pioBuffer[64] = 0x0003;  // Modes 0-3
+        
+        // Word 80: Major version
+        this.pioBuffer[80] = 0x01F0;  // ATA/ATAPI-4
+        
+        // Word 81: Minor version
+        this.pioBuffer[81] = 0x0000;
+        
+        // Word 255: Integrity signature
+        this.pioBuffer[255] = 0x00A5;
+        
+        this.pioOffset = 0;
+        this.pioCount = 256;
+        this.pioWriteMode = false;
+        
+        this.regs.status = 0x58;  // DRDY + DRQ + SERV
     }
 }
 

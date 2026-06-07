@@ -1626,7 +1626,14 @@ function run() {
     test('ATA identify device', () => {
       const machine = new X86Machine();
       machine.ata.writePrimary(0x1F7, 0xEC);
-      assertEq(machine.ata.regs.status, 0x40);
+      // DRQ + DRDY set (PIO buffer has data ready)
+      assertEq(machine.ata.regs.status, 0x58);
+      // PIO buffer should be populated with identify data
+      assert(machine.ata.pioCount > 0, 'PIO buffer should have data');
+      assertEq(machine.ata.pioBuffer[0], 0x0040, 'Word 0: fixed disk config');
+      assertEq(machine.ata.pioBuffer[47] & 0x8000, 0x8000, 'IORDY supported');
+      // Model string should start with 'W' for 'Webulator'
+      assertEq(machine.ata.pioBuffer[27] & 0xFF, 0x57, 'Model: W');
       machine.destroy();
     });
 

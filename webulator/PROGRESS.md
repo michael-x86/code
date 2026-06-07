@@ -777,33 +777,98 @@ Total:  149
 
 ---
 
+## Session: 2026-06-07 (Part 4) — Remaining Stub Functions & Hardware Devices
+
+### Completed
+
+1. **Implemented I/O string instructions (0x6C-0x6F)** ✅
+   - 0x6C (INSB), 0x6D (INSW/INSD): Read from port DX into [EDI], advance EDI
+   - 0x6E (OUTSB), 0x6F (OUTSW/OUTSD): Write [ESI] to port DX, advance ESI
+   - Both support REP prefix with DF direction and operand-size prefix (0x66)
+
+2. **Implemented extended opcodes 0x0F 0x00 (Group 6/7)** ✅
+   - SLDT/STR: Store 0 (no LDT/task switching used in flat mode)
+   - LLDT/LTR: No-ops
+   - VERR/VERW: Always succeed (set ZF=1)
+
+3. **Implemented extended opcode 0x0F 0x08 (INVD)** ✅
+   - Cache invalidation — no-op in emulation (cache not modeled)
+
+4. **Fixed CPU port I/O bridge** ✅
+   - `handleIn()`/`handleOut()` now delegate to `machine.cpuPortRead()`/`cpuPortWrite()` when `this.machine` is set
+   - Previously CPU port handlers were standalone stubs that never reached device emulation
+
+5. **Fixed PIC (8259A) ICW/OCW handling** ✅
+   - Proper ICW1→ICW2→ICW3→ICW4 initialization sequence
+   - OCW3 read register selection (IRR vs ISR via `readMode`)
+   - Specific EOI, rotate modes, special mask
+   - `readMaster()`/`readSlave()` now return correct register based on `readMode`
+
+6. **Implemented PS/2 keyboard port writes** ✅
+   - Data port (0x60): Reset, echo, identify, set scancode set, enable/disable scanning, set LEDs
+   - Controller port (0x64): Self-test, read/write config byte, keyboard/mouse enable/disable, output port
+   - Expected argument consumption for multi-byte commands
+
+7. **Implemented ATA PIO data transfer** ✅
+   - `readSectors()`: Copies disk sectors into PIO buffer, sets DRQ flag
+   - `readPrimary(0x1F0)`: Returns next word from PIO buffer
+   - `writeSectors()`: Sets up PIO buffer to accept write data
+   - `writePrimary(0x1F0)`: Accumulates write data into PIO buffer
+   - `flushPioBuffer()`: Writes accumulated PIO data to disk
+   - `identifyDevice()`: Returns full ATA identify data structure (256 words)
+
+### Code Changes
+
+**`hardemu/x86cpu.js`:**
+- Added `this.machine = null` in constructor
+- `handleIn()`/`handleOut()` now delegate to machine when available
+- Added `handleStringIO()` for opcodes 0x6C-0x6F (INS/OUTS)
+- Added `handleGroup6_7()` for 0x0F 0x00 (SLDT/STR/LLDT/LTR/VERR/VERW)
+- Added case 0x08 in `executeExtendedInstruction()` for INVD
+
+**`hardemu/machine_x86.js`:**
+- Set `this.cpu.machine = this` after CPU creation
+- PIC: Added `readMode`, `icw4Needed`, `single`, `interval4`, `specialMask`, `priority` to state; rewrote `handleCommand()`, `handleData()`, `readMaster()`, `readSlave()`
+- PS/2 keyboard: Added `handleKeyboardCommand()`, `handleControllerCommand()`, expected arg handling; full command set
+- ATA: Added PIO buffer (`pioBuffer`, `pioOffset`, `pioCount`, `pioWriteMode`); implemented `readSectors()`, `writeSectors()`, `flushPioBuffer()`, `identifyDevice()`; updated `readPrimary()`/`writePrimary()` for PIO data register
+
+### Test Results
+
+```
+Passed: 149
+Failed: 0
+Total:  149
+```
+
+---
+
 ## Current Status (End of Session)
 
 ### ✅ COMPLETED:
-- **149 tests, 0 failures** (up from 137)
-- **All known CPU opcodes implemented** — no more unhandled opcode errors
-- **Interrupt chain is functional**: PIT generates IRQ0 → PIC delivers to CPU → CPU wakes from HLT → handler executes → IRET returns correctly
-- **Boot sector critical opcodes added**: far jump (0xEA), segment register PUSH/POP, JCXZ, SAHF/LAHF
-- **MMIO string-vs-number bug fixed** in both read8/write8
-- **Post-HLT bug resolved**: HLT advances EIP, handleInt clears halted, PIC delivers interrupts properly
+- **149 tests, 0 failures**
+- **All known CPU opcodes implemented** — every opcode the kernel uses is handled
+- **All hardware device stubs replaced** — PIC, keyboard, ATA have functional implementations
+- **PIO ATA data transfer** — sectors can be read/written via PIO data register
+- **PS/2 keyboard** — accepts all standard commands (reset, echo, identify, set LEDs, etc.)
+- **PIC** — proper ICW initialization, OCW register selection, EOI handling
+- **Port I/O bridge** — CPU IN/OUT instructions route through machine device handlers
 
 ### 🚧 REMAINING:
-- Extended opcodes: 0x0F 0x00 (Group 6/7: SLDT/STR/LLDT/LTR/VERR/VERW), 0x0F 0x08 (INVD)
-- I/O string instructions: 0x6C-0x6F (INSB/INSD/OUTSB/OUTSD)
-- Implement keyboard IRQ delivery from PS/2 controller
+- Implement keyboard IRQ delivery from PS/2 controller (scancode mechanism works, but IRQ1 → PIC → CPU chain needs full testing)
 - Port test tool to also run in-browser for live component validation
+- Keyboard input integration with UI
 
 ---
 
 ## Session Learnings
 
-### 2026-06-07 (Part 3) — Interrupt Chain
-- **`for...in` on plain objects yields string keys**: Always use `Number()` or `parseInt()` when doing arithmetic with property keys from `for...in` iteration
-- **Interrupt delivery has 3 stages**: PIT (timer) → PIC (controller) → CPU (handler), each must be correctly wired
-- **HLT semantics**: HLT saves EIP of the NEXT instruction (increment before halting), not HLT itself
-- **PIC checkInterrupts is atomic**: It clears IRR and sets ISR in the same call — you can't observe IRR after delivery
-- **Machine state vs CPU state**: The machine's `halted` flag and the CPU's `halted` flag can differ — prefer checking `cpu.halted` for consistent behavior
-- **IDT entry parsing**: The x86 IDT packs offset[15:0] in bytes 0-1 and offset[31:16] in bytes 6-7 of the 8-byte entry; little-endian read puts them at opposite ends of the two dwords
+### 2026-06-07 (Part 4) — Stubs & Hardware
+- **PIO mode ATA**: Data transfers through port 0x1F0 one word at a time, using sectorCount to determine iterations. The status register must show DRQ while data is available.
+- **PIC ICW sequence**: ICW1→ICW2→(ICW3 in cascade)→(ICW4 if needed) must be followed exactly. Each ICW changes the meaning of subsequent data writes.
+- **PIC OCW3 read register selection**: Bit 0 selects between IRR and ISR for reads from the command port (0x20/0xA0)
+- **PS/2 dual-command scheme**: Port 0x64 is for controller commands (self-test, enable/disable), port 0x60 is for keyboard device commands (reset, echo, scancode set). Some controller commands expect subsequent data via 0x60.
+- **ATA identify data**: Contains 256 words of capability/geometry/serial data. Even with a null disk, most fields are static and valid.
+- **Port I/O delegation**: The CPU's IN/OUT handlers should call the machine's port routing, not handle ports directly. The bridge was missing and caused all IN/OUT to silently return 0.
 
 ---
 
