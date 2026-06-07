@@ -75,7 +75,7 @@ class X86Memory {
         }
         
         // Check BIOS (top 64KB)
-        if (physAddr >= this.size - this.biosSize) {
+        if (physAddr >= this.size - this.biosSize && physAddr < this.size) {
             const biosOffset = physAddr - (this.size - this.biosSize);
             return this.bios8[biosOffset];
         }
@@ -102,7 +102,7 @@ class X86Memory {
         const b1 = this.read8(physAddr + 1);
         const b2 = this.read8(physAddr + 2);
         const b3 = this.read8(physAddr + 3);
-        return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
+        return ((b3 << 24) | (b2 << 16) | (b1 << 8) | b0) >>> 0;
     }
     
     // Write 8-bit value to physical address

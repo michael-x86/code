@@ -53,6 +53,9 @@ class X86CPU {
         // Halted state
         this.halted = false;
         
+        // EIP of the faulting instruction (for exception frame)
+        this.faultEip = 0;
+        
         // T-state tracking (for cycle-accurate emulation)
         this.tstates = 0;
         
@@ -274,11 +277,18 @@ class X86CPU {
             return vaddr;  // Paging disabled
         }
         
-        // Track paging debug - only trace first ~10 walks
+        // Track paging debug - trace first walks + always trace faults
         if (this._pagingDebugCount === undefined) this._pagingDebugCount = 0;
-        const doDebug = this._pagingDebugCount < 15;
+        const doTrace = this._pagingDebugCount < 25;
         
-        if (doDebug) {
+        // Always dump full state for suspicious addresses
+        if ((vaddr >>> 22) >= 0x3F0) {
+            console.log(`[PG] translateAddress(0x${vaddr.toString(16)}) EIP=0x${this.regs.eip.toString(16)}`);
+            console.log(`[PG]   EAX=0x${(this.regs.eax>>>0).toString(16)} ECX=0x${(this.regs.ecx>>>0).toString(16)} EDX=0x${(this.regs.edx>>>0).toString(16)} EBX=0x${(this.regs.ebx>>>0).toString(16)}`);
+            console.log(`[PG]   ESP=0x${(this.regs.esp>>>0).toString(16)} EBP=0x${(this.regs.ebp>>>0).toString(16)} ESI=0x${(this.regs.esi>>>0).toString(16)} EDI=0x${(this.regs.edi>>>0).toString(16)}`);
+        }
+        
+        if (doTrace) {
             console.log(`[PG] translateAddress: vaddr=0x${vaddr.toString(16)} EIP=0x${this.regs.eip.toString(16)}`);
         }
         
@@ -290,7 +300,7 @@ class X86CPU {
         const pdeAddr = pdBase + (pdIndex * 4);
         const pde = this.mem.read32(pdeAddr);
         
-        if (doDebug) {
+        if (doTrace) {
             console.log(`[PG]   PD[${pdIndex}] at 0x${pdeAddr.toString(16)} = 0x${pde.toString(16)}`);
         }
         
@@ -298,7 +308,9 @@ class X86CPU {
         
         if (!(pde & 1)) {
             // Page not present - page fault
-            console.log(`[PG]   PDE not present! Triggering #PF for vaddr=0x${vaddr.toString(16)}`);
+            console.log(`[PG]   PDE not present! #PF vaddr=0x${vaddr.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
+            console.log(`[PG]   Regs: EAX=0x${(this.regs.eax >>> 0).toString(16)} ECX=0x${(this.regs.ecx >>> 0).toString(16)} EDX=0x${(this.regs.edx >>> 0).toString(16)} EBX=0x${(this.regs.ebx >>> 0).toString(16)}`);
+            console.log(`[PG]   Regs: ESP=0x${(this.regs.esp >>> 0).toString(16)} EBP=0x${(this.regs.ebp >>> 0).toString(16)} ESI=0x${(this.regs.esi >>> 0).toString(16)} EDI=0x${(this.regs.edi >>> 0).toString(16)}`);
             this.cregs.cr2 = vaddr;
             this.triggerException(14, 0);  // #PF
             return 0;
@@ -308,13 +320,13 @@ class X86CPU {
         const pteAddr = ptBase + (ptIndex * 4);
         const pte = this.mem.read32(pteAddr);
         
-        if (doDebug) {
+        if (doTrace) {
             console.log(`[PG]   PT[${ptIndex}] at 0x${pteAddr.toString(16)} = 0x${pte.toString(16)}`);
         }
         
         if (!(pte & 1)) {
             // Page not present - page fault
-            console.log(`[PG]   PTE not present! Triggering #PF for vaddr=0x${vaddr.toString(16)}`);
+            console.log(`[PG]   PTE not present! Triggering #PF for vaddr=0x${vaddr.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
             this.cregs.cr2 = vaddr;
             this.triggerException(14, 0);  // #PF
             return 0;
@@ -323,7 +335,7 @@ class X86CPU {
         const physBase = pte & 0xFFFFF000;
         const physAddr = physBase + offset;
         
-        if (doDebug) {
+        if (doTrace) {
             console.log(`[PG]   → phys=0x${physAddr.toString(16)} (PDE=0x${pde.toString(16)}, PTE=0x${pte.toString(16)})`);
         }
         
@@ -349,12 +361,15 @@ class X86CPU {
         // Byte 4: Zero (reserved)
         // Byte 5: Type/Attributes
         // Bytes 6-7: Offset[31:16]
+        // NOTE: idtBase is a virtual address (translated via page tables when paging is on)
         const idtEntryAddr = this.idtBase + (exceptionNum * 8);
-        const low = this.mem.read32(idtEntryAddr);        // bytes 0-3: offset[15:0], selector
-        const high = this.mem.read32(idtEntryAddr + 4);   // bytes 4-7: zero, type_attr, offset[31:16]
+        let low = this.readMem(idtEntryAddr, 4);
+        let high = this.readMem(idtEntryAddr + 4, 4);
+        low = low >>> 0;
+        high = high >>> 0;
         
         // Offset[15:0] from low[15:0], Offset[31:16] from high[31:16]
-        const offset = ((high >> 16) << 16) | (low & 0xFFFF);
+        const offset = (((high >> 16) << 16) | (low & 0xFFFF)) >>> 0;
         // Selector from low[31:16]
         const selector = (low >> 16) & 0xFFFF;
         // Type/Attributes from high[15:8] (byte 5)
@@ -367,15 +382,39 @@ class X86CPU {
             return;
         }
         
-        // Push error code (if any) and jump to handler
-        // For now, simplified: just set EIP to handler
-        this.regs.eip = offset;
+        // Push exception frame onto stack and jump to handler
+        // Frame format (from top of stack downward):
+        //   [ESP]   = error code (if applicable)
+        //   [ESP+4] = EFLAGS
+        //   [ESP+8] = CS
+        //   [ESP+12] = EIP (return address)
         
-        // In real implementation, we'd:
-        // 1. Switch to handler's code segment
-        // 2. Push EFLAGS, CS, EIP
-        // 3. If error code, push it
-        // 4. Set CS and EIP to handler
+        // Exceptions that push error codes: #DF(8), #TS(10), #NP(11), #SS(12), #GP(13), #PF(14)
+        const hasErrorCode = (exceptionNum === 8 || exceptionNum === 10 || 
+                              exceptionNum === 11 || exceptionNum === 12 || 
+                              exceptionNum === 13 || exceptionNum === 14);
+        
+        // Push EFLAGS
+        this.regs.esp -= 4;
+        this.writeMem(this.regs.esp, this.eflags, 4);
+        
+        // Push CS (use current CS from segment registers)
+        this.regs.esp -= 4;
+        this.writeMem(this.regs.esp, this.segregs.cs, 4);
+        
+        // Push return EIP (address of the faulting instruction)
+        this.regs.esp -= 4;
+        this.writeMem(this.regs.esp, this.faultEip, 4);
+        
+        // Push error code if applicable
+        if (hasErrorCode) {
+            this.regs.esp -= 4;
+            this.writeMem(this.regs.esp, errorCode || 0, 4);
+        }
+        
+        // Jump to handler
+        this.segregs.cs = selector;
+        this.regs.eip = offset;
     }
     
     // Execute one instruction
@@ -396,7 +435,7 @@ class X86CPU {
         // Decode and execute
         try {
             const opcode = this.readMem(this.regs.eip, 1);
-            const startEip = this.regs.eip;
+            this.faultEip = this.regs.eip;
             
             if (this.debug) {
                 console.log(`EIP=0x${this.regs.eip.toString(16)}, Opcode=0x${opcode.toString(16)}`);
@@ -426,7 +465,7 @@ class X86CPU {
             // Check if instruction halted the CPU (e.g., HLT)
             // Don't treat this as an error
             if (cycles === 0 && !this.halted) {
-                console.error(`Unhandled opcode: 0x${opcode.toString(16)} at EIP=0x${startEip.toString(16)}`);
+                console.error(`Unhandled opcode: 0x${opcode.toString(16)} at EIP=0x${this.faultEip.toString(16)}`);
                 this.halted = true;
                 return 0;
             }
@@ -564,11 +603,12 @@ class X86CPU {
                 return 4;
             }
             case 0xC2: {
+                this.regs.eip++;
+                const imm16 = this.readMem(this.regs.eip, 2);
+                this.regs.eip += 2;
                 const retAddr = this.readMem(this.regs.esp, 4);
                 this.regs.esp += 4;
                 this.regs.eip = retAddr;
-                const imm16 = this.readMem(this.regs.eip, 2);
-                this.regs.eip += 2;
                 this.regs.esp += imm16;
                 return 4;
             }
@@ -589,9 +629,19 @@ class X86CPU {
                 return 3;  // JMP rel8 = 3 cycles
             }
                 
-            // Jcc (0x74 = JE, 0x75 = JNE, etc.)
+            // Jcc (0x70-0x7F conditional jumps)
+            case 0x70: return this.handleJcc(0x70);  // JO
+            case 0x71: return this.handleJcc(0x71);  // JNO
+            case 0x72: return this.handleJcc(0x72);  // JB/JC
+            case 0x73: return this.handleJcc(0x73);  // JNB/JNC
             case 0x74: return this.handleJcc(0x74);  // JE/JZ
             case 0x75: return this.handleJcc(0x75);  // JNE/JNZ
+            case 0x76: return this.handleJcc(0x76);  // JBE
+            case 0x77: return this.handleJcc(0x77);  // JA
+            case 0x78: return this.handleJcc(0x78);  // JS
+            case 0x79: return this.handleJcc(0x79);  // JNS
+            case 0x7A: return this.handleJcc(0x7A);  // JP/JPE
+            case 0x7B: return this.handleJcc(0x7B);  // JNP/JPO
             case 0x7C: return this.handleJcc(0x7C);  // JL/JNGE
             case 0x7D: return this.handleJcc(0x7D);  // JGE/JNL
             case 0x7E: return this.handleJcc(0x7E);  // JLE/JNG
@@ -714,10 +764,28 @@ class X86CPU {
             case 0x31: case 0x33: {
                 return this.handleXorRegMem(opcode);
             }
-                
+            
+            // ADD r/m8, r8 (0x00) and ADD r8, r/m8 (0x02)
+            case 0x00: case 0x02: {
+                return this.handleAddRegMem8(opcode);
+            }
+            
             // ADD r/m32, r32 (0x01) and ADD r32, r/m32 (0x03)
             case 0x01: case 0x03: {
                 return this.handleAddRegMem(opcode);
+            }
+            
+            // ADD AL, imm8 (0x04) - short form for AL
+            case 0x04: {
+                this.regs.eip++;
+                const imm8 = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                const oldAl = this.regs.eax & 0xFF;
+                const result = (oldAl + imm8) & 0xFF;
+                this.regs.eax = (this.regs.eax & 0xFFFFFF00) | result;
+                this.setFlag('CF', (oldAl + imm8) > 0xFF);
+                this.updateArithmeticFlags(result, oldAl, imm8, false, true);
+                return 2;
             }
             
             // ADD EAX, imm32 (0x05) - short form for EAX
@@ -729,6 +797,17 @@ class X86CPU {
                 this.regs.eax = (this.regs.eax + imm32) >>> 0;
                 this.setFlag('CF', (oldEax >>> 0) + (imm32 >>> 0) > 0xFFFFFFFF);
                 this.updateArithmeticFlags(this.regs.eax, oldEax, imm32, false, false);
+                return 2;
+            }
+            
+            // OR AL, imm8 (0x0C) - short form for AL
+            case 0x0C: {
+                this.regs.eip++;
+                const imm8 = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                const result = ((this.regs.eax & 0xFF) | imm8) & 0xFF;
+                this.regs.eax = (this.regs.eax & 0xFFFFFF00) | result;
+                this.updateArithmeticFlags(result, 0, 0, 0, true);
                 return 2;
             }
             
@@ -793,6 +872,17 @@ class X86CPU {
             // ADC r/m8, r8 (0x10) and ADC r8, r/m8 (0x12) - 8-bit
             case 0x10: case 0x12: {
                 return this.handleAdcRegMem8(opcode);
+            }
+            
+            // OR r/m8, r8 (0x08), OR r/m32, r32 (0x09)
+            // OR r8, r/m8 (0x0A), OR r32, r/m32 (0x0B)
+            case 0x08: case 0x09: case 0x0A: case 0x0B: {
+                return this.handleOrRegMem(opcode);
+            }
+            
+            // SUB r/m8, r8 (0x28) and SUB r8, r/m8 (0x2A)
+            case 0x28: case 0x2A: {
+                return this.handleSubRegMem8(opcode);
             }
             
             // SUB r/m32, r32 (0x29) and SUB r32, r/m32 (0x2B)
@@ -870,20 +960,20 @@ class X86CPU {
             // PUSHAD (0x60) and POPAD (0x61)
             case 0x60: {
                 // Push all 32-bit general-purpose registers
-                // Order: EAX, ECX, EDX, EBX, ESP (original), EBP, ESI, EDI
-                const origEsp = this.regs.esp - 32;  // Leave room for all 8 registers
+                // x86 order: EAX, ECX, EDX, EBX, ESP (original), EBP, ESI, EDI
+                // Stack layout (low to high): EDI, ESI, EBP, old_ESP, EBX, EDX, ECX, EAX
+                const origEsp = this.regs.esp - 32;
                 this.regs.esp = origEsp;
-                this.writeMem(this.regs.esp, this.regs.eax, 4); this.regs.esp += 4;
-                this.writeMem(this.regs.esp, this.regs.ecx, 4); this.regs.esp += 4;
-                this.writeMem(this.regs.esp, this.regs.edx, 4); this.regs.esp += 4;
-                this.writeMem(this.regs.esp, this.regs.ebx, 4); this.regs.esp += 4;
-                this.writeMem(this.regs.esp, origEsp + 32, 4); this.regs.esp += 4;  // Original ESP
-                this.writeMem(this.regs.esp, this.regs.ebp, 4); this.regs.esp += 4;
-                this.writeMem(this.regs.esp, this.regs.esi, 4); this.regs.esp += 4;
-                this.writeMem(this.regs.esp, this.regs.edi, 4); this.regs.esp += 4;
-                this.regs.esp = origEsp;  // Reset ESP to start of pushed data
+                this.writeMem(origEsp + 28, this.regs.eax, 4);
+                this.writeMem(origEsp + 24, this.regs.ecx, 4);
+                this.writeMem(origEsp + 20, this.regs.edx, 4);
+                this.writeMem(origEsp + 16, this.regs.ebx, 4);
+                this.writeMem(origEsp + 12, origEsp + 32, 4);
+                this.writeMem(origEsp + 8, this.regs.ebp, 4);
+                this.writeMem(origEsp + 4, this.regs.esi, 4);
+                this.writeMem(origEsp + 0, this.regs.edi, 4);
                 this.regs.eip++;
-                return 5;  // PUSHAD = 5 cycles
+                return 5;
             }
             case 0x61: {
                 // Pop all 32-bit general-purpose registers (reverse order)
@@ -1113,12 +1203,38 @@ class X86CPU {
                 return 2;
             }
             
+            // MOV r8, imm8 (0xB0-0xB7) and MOV r32, imm32 (0xB8-0xBF)
+            case 0xB0: case 0xB1: case 0xB2: case 0xB3:
+            case 0xB4: case 0xB5: case 0xB6: case 0xB7: {
+                this.regs.eip++;
+                const imm8 = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                const reg8Names = ['al','cl','dl','bl','ah','ch','dh','bh'];
+                this.setReg8(reg8Names[opcode & 7], imm8);
+                return 2;
+            }
+            case 0xB8: case 0xB9: case 0xBA: case 0xBB:
+            case 0xBC: case 0xBD: case 0xBE: case 0xBF: {
+                const operandSize = this.prefixes.operandSize ? 2 : 4;
+                this.regs.eip++;
+                const imm = this.readMem(this.regs.eip, operandSize);
+                this.regs.eip += operandSize;
+                const rmNames = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'];
+                this.setReg32(rmNames[opcode & 7], imm);
+                return 2;
+            }
+            
             // Shift/Rotate instructions (0xC0, 0xC1, 0xD0, 0xD1, 0xD2, 0xD3)
             // 0xC0/C1: GRP2 r/m8/r/m32, imm8
             // 0xD0/D1: GRP2 r/m8/r/m32, 1
             // 0xD2/D3: GRP2 r/m8/r/m32, CL
             case 0xC0: case 0xC1: case 0xD0: case 0xD1: case 0xD2: case 0xD3: {
                 return this.handleShiftRotate(opcode);
+            }
+            
+            // MOV r/m8, imm8 (0xC6) and MOV r/m32, imm32 (0xC7)
+            case 0xC6: case 0xC7: {
+                return this.handleMovImm(opcode);
             }
             
             // MUL r/m8 (0xF6 /4) and MUL r/m32 (0xF7 /4)
@@ -1877,6 +1993,218 @@ class X86CPU {
         }
     }
     
+    // Handle ADD r/m8, r8 (0x00) and ADD r8, r/m8 (0x02)
+    handleAddRegMem8(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+        
+        const reg8Names = ['al','cl','dl','bl','ah','ch','dh','bh'];
+        const regName = reg8Names[reg];
+        const regValue = this.getReg8(regName);
+        
+        if (mod === 3) {
+            const rmName = reg8Names[rm];
+            if (opcode === 0x00) {
+                const origRm = this.getReg8(rmName);
+                const result = (origRm + regValue) & 0xFF;
+                this.setReg8(rmName, result);
+                this.updateArithmeticFlags(result, origRm, regValue, result < origRm, true);
+            } else {
+                const origRm = this.getReg8(rmName);
+                const result = (regValue + origRm) & 0xFF;
+                this.setReg8(regName, result);
+                this.updateArithmeticFlags(result, regValue, origRm, result < regValue, true);
+            }
+            return 2;
+        } else {
+            const addr = this.calculateAddress(modrm);
+            if (opcode === 0x00) {
+                const memValue = this.readMem(addr, 1);
+                const result = (memValue + regValue) & 0xFF;
+                this.writeMem(addr, result, 1);
+                this.updateArithmeticFlags(result, memValue, regValue, result < memValue, true);
+            } else {
+                const memValue = this.readMem(addr, 1);
+                const result = (regValue + memValue) & 0xFF;
+                this.setReg8(regName, result);
+                this.updateArithmeticFlags(result, regValue, memValue, result < regValue, true);
+            }
+            return 4;
+        }
+    }
+    
+    // Handle OR r/m8, r8 (0x08), OR r/m32, r32 (0x09)
+    // OR r8, r/m8 (0x0A), OR r32, r/m32 (0x0B)
+    handleOrRegMem(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+        
+        const isByteOp = (opcode === 0x08 || opcode === 0x0A);
+        
+        if (isByteOp) {
+            const reg8Names = ['al','cl','dl','bl','ah','ch','dh','bh'];
+            const regName = reg8Names[reg];
+            const regValue = this.getReg8(regName);
+            
+            if (mod === 3) {
+                const rmName = reg8Names[rm];
+                if (opcode === 0x08) {
+                    const result = (this.getReg8(rmName) | regValue) & 0xFF;
+                    this.setReg8(rmName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, true);
+                } else {
+                    const result = (regValue | this.getReg8(rmName)) & 0xFF;
+                    this.setReg8(regName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, true);
+                }
+                return 2;
+            } else {
+                const addr = this.calculateAddress(modrm);
+                if (opcode === 0x08) {
+                    const memValue = this.readMem(addr, 1);
+                    const result = (memValue | regValue) & 0xFF;
+                    this.writeMem(addr, result, 1);
+                    this.updateArithmeticFlags(result, 0, 0, 0, true);
+                } else {
+                    const memValue = this.readMem(addr, 1);
+                    const result = (regValue | memValue) & 0xFF;
+                    this.setReg8(regName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, true);
+                }
+                return 4;
+            }
+        } else {
+            const regName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
+            const regValue = this.getReg32(regName);
+            
+            if (mod === 3) {
+                const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                if (opcode === 0x09) {
+                    const result = (this.getReg32(rmName) | regValue) >>> 0;
+                    this.setReg32(rmName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, false);
+                } else {
+                    const result = (regValue | this.getReg32(rmName)) >>> 0;
+                    this.setReg32(regName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, false);
+                }
+                return 2;
+            } else {
+                const addr = this.calculateAddress(modrm);
+                if (opcode === 0x09) {
+                    const memValue = this.readMem(addr, 4);
+                    const result = (memValue | regValue) >>> 0;
+                    this.writeMem(addr, result, 4);
+                    this.updateArithmeticFlags(result, 0, 0, 0, false);
+                } else {
+                    const memValue = this.readMem(addr, 4);
+                    const result = (regValue | memValue) >>> 0;
+                    this.setReg32(regName, result);
+                    this.updateArithmeticFlags(result, 0, 0, 0, false);
+                }
+                return 4;
+            }
+        }
+    }
+    
+    // Handle SUB r/m8, r8 (0x28) and SUB r8, r/m8 (0x2A)
+    handleSubRegMem8(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+        
+        const reg8Names = ['al','cl','dl','bl','ah','ch','dh','bh'];
+        const regName = reg8Names[reg];
+        const regValue = this.getReg8(regName);
+        
+        if (mod === 3) {
+            const rmName = reg8Names[rm];
+            if (opcode === 0x28) {
+                const rmValue = this.getReg8(rmName);
+                const result = (rmValue - regValue) & 0xFF;
+                this.setReg8(rmName, result);
+                this.updateArithmeticFlags(result, rmValue, regValue, rmValue < regValue, true);
+            } else {
+                const result = (regValue - this.getReg8(rmName)) & 0xFF;
+                this.setReg8(regName, result);
+                this.updateArithmeticFlags(result, regValue, this.getReg8(rmName), regValue < this.getReg8(rmName), true);
+            }
+            return 2;
+        } else {
+            const addr = this.calculateAddress(modrm);
+            if (opcode === 0x28) {
+                const memValue = this.readMem(addr, 1);
+                const result = (memValue - regValue) & 0xFF;
+                this.writeMem(addr, result, 1);
+                this.updateArithmeticFlags(result, memValue, regValue, memValue < regValue, true);
+            } else {
+                const memValue = this.readMem(addr, 1);
+                const result = (regValue - memValue) & 0xFF;
+                this.setReg8(regName, result);
+                this.updateArithmeticFlags(result, regValue, memValue, regValue < memValue, true);
+            }
+            return 4;
+        }
+    }
+    
+    // Handle MOV r/m8, imm8 (0xC6) and MOV r/m32, imm32 (0xC7)
+    handleMovImm(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const rm = modrm & 7;
+        const isByteOp = (opcode === 0xC6);
+        
+        if (isByteOp) {
+            if (mod === 3) {
+                const imm8 = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                const reg8Names = ['al','cl','dl','bl','ah','ch','dh','bh'];
+                this.setReg8(reg8Names[rm], imm8);
+                return 2;
+            } else {
+                // Calculate address FIRST (consumes displacement bytes), then read imm8
+                const addr = this.calculateAddress(modrm);
+                const imm8 = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                this.writeMem(addr, imm8, 1);
+                return 4;
+            }
+        } else {
+            const operandSize = this.prefixes.operandSize ? 2 : 4;
+            if (mod === 3) {
+                const imm = this.readMem(this.regs.eip, operandSize);
+                this.regs.eip += operandSize;
+                const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                this.setReg32(rmName, imm);
+                return 2;
+            } else {
+                // Calculate address FIRST (consumes displacement bytes), then read immediate
+                const addr = this.calculateAddress(modrm);
+                const imm = this.readMem(this.regs.eip, operandSize);
+                this.regs.eip += operandSize;
+                this.writeMem(addr, imm, operandSize);
+                return 4;
+            }
+        }
+    }
+    
     // Calculate address from ModR/M byte
     calculateAddress(modrm) {
         const mod = (modrm >> 6) & 3;
@@ -1963,8 +2291,18 @@ class X86CPU {
         
         let takeJump = false;
         switch (opcode) {
+            case 0x70: takeJump = this.getFlag('OF') === 1; break;  // JO
+            case 0x71: takeJump = this.getFlag('OF') === 0; break;  // JNO
+            case 0x72: takeJump = this.getFlag('CF') === 1; break;  // JB/JC
+            case 0x73: takeJump = this.getFlag('CF') === 0; break;  // JNB/JNC
             case 0x74: takeJump = this.getFlag('ZF') === 1; break;  // JE/JZ
             case 0x75: takeJump = this.getFlag('ZF') === 0; break;  // JNE/JNZ
+            case 0x76: takeJump = this.getFlag('CF') === 1 || this.getFlag('ZF') === 1; break;  // JBE
+            case 0x77: takeJump = this.getFlag('CF') === 0 && this.getFlag('ZF') === 0; break;  // JA
+            case 0x78: takeJump = this.getFlag('SF') === 1; break;  // JS
+            case 0x79: takeJump = this.getFlag('SF') === 0; break;  // JNS
+            case 0x7A: takeJump = this.getFlag('PF') === 1; break;  // JP/JPE
+            case 0x7B: takeJump = this.getFlag('PF') === 0; break;  // JNP/JPO
             case 0x7C: takeJump = (this.getFlag('SF') ^ this.getFlag('OF')) === 1; break;  // JL
             case 0x7D: takeJump = (this.getFlag('SF') ^ this.getFlag('OF')) === 0; break;  // JGE
             case 0x7E: takeJump = (this.getFlag('ZF') === 1) || (this.getFlag('SF') ^ this.getFlag('OF')) === 1; break;  // JLE
@@ -1978,19 +2316,187 @@ class X86CPU {
         return 3;  // Jcc not taken = 3 cycles
     }
     
+    // Handle extended Jcc rel32 (0x0F 0x80-0x8F)
+    // Same condition codes as short Jcc but with 32-bit displacement
+    handleJccNear(opcode2) {
+        const rel32 = this.readMem(this.regs.eip, 4);
+        this.regs.eip += 4;
+        
+        // Map 0x80-0x8F to 0x70-0x7F condition codes
+        const jccOpcode = opcode2 - 0x10;
+        
+        let takeJump = false;
+        switch (jccOpcode) {
+            case 0x70: takeJump = this.getFlag('OF') === 1; break;
+            case 0x71: takeJump = this.getFlag('OF') === 0; break;
+            case 0x72: takeJump = this.getFlag('CF') === 1; break;
+            case 0x73: takeJump = this.getFlag('CF') === 0; break;
+            case 0x74: takeJump = this.getFlag('ZF') === 1; break;
+            case 0x75: takeJump = this.getFlag('ZF') === 0; break;
+            case 0x76: takeJump = this.getFlag('CF') === 1 || this.getFlag('ZF') === 1; break;
+            case 0x77: takeJump = this.getFlag('CF') === 0 && this.getFlag('ZF') === 0; break;
+            case 0x78: takeJump = this.getFlag('SF') === 1; break;
+            case 0x79: takeJump = this.getFlag('SF') === 0; break;
+            case 0x7A: takeJump = this.getFlag('PF') === 1; break;
+            case 0x7B: takeJump = this.getFlag('PF') === 0; break;
+            case 0x7C: takeJump = (this.getFlag('SF') ^ this.getFlag('OF')) === 1; break;
+            case 0x7D: takeJump = (this.getFlag('SF') ^ this.getFlag('OF')) === 0; break;
+            case 0x7E: takeJump = (this.getFlag('ZF') === 1) || (this.getFlag('SF') ^ this.getFlag('OF')) === 1; break;
+            case 0x7F: takeJump = (this.getFlag('ZF') === 0) && (this.getFlag('SF') ^ this.getFlag('OF')) === 0; break;
+        }
+        
+        if (takeJump) {
+            const signExtend = (rel32 & 0x80000000) ? (rel32 | 0xFFFFFFFF80000000) : rel32;
+            this.regs.eip = (this.regs.eip + signExtend) >>> 0;
+            return 7;  // Jcc near taken = 7 cycles
+        }
+        return 3;  // Jcc near not taken = 3 cycles
+    }
+    
+    // MOVZX r32, r/m8 (0x0F 0xB6) and MOVZX r32, r/m16 (0x0F 0xB7)
+    handleMovzx(opcode2) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+        
+        const regName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
+        const isByte = (opcode2 === 0xB6);
+        
+        let srcValue;
+        if (mod === 3) {
+            const rm8Names = ['al','cl','dl','bl','ah','ch','dh','bh'];
+            const rm32Names = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'];
+            srcValue = isByte ? this.getReg8(rm8Names[rm]) : (this.getReg32(rm32Names[rm]) & 0xFFFF);
+        } else {
+            const addr = this.calculateAddress(modrm);
+            srcValue = this.readMem(addr, isByte ? 1 : 2);
+        }
+        
+        this.setReg32(regName, srcValue >>> 0);
+        return 2;
+    }
+    
+    // MOVSX r32, r/m8 (0x0F 0xBE) and MOVSX r32, r/m16 (0x0F 0xBF)
+    handleMovsx(opcode2) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+        
+        const regName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
+        const isByte = (opcode2 === 0xBE);
+        
+        let srcValue;
+        if (mod === 3) {
+            const rm8Names = ['al','cl','dl','bl','ah','ch','dh','bh'];
+            const rm32Names = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'];
+            srcValue = isByte ? this.getReg8(rm8Names[rm]) : (this.getReg32(rm32Names[rm]) & 0xFFFF);
+        } else {
+            const addr = this.calculateAddress(modrm);
+            srcValue = this.readMem(addr, isByte ? 1 : 2);
+        }
+        
+        // Sign extend
+        if (isByte) {
+            this.setReg32(regName, (srcValue & 0x80) ? (srcValue | 0xFFFFFF00) : srcValue);
+        } else {
+            this.setReg32(regName, (srcValue & 0x8000) ? (srcValue | 0xFFFF0000) : srcValue);
+        }
+        return 2;
+    }
+    
+    // BT (0x0F 0xA3), BTS (0x0F 0xAB), BTR (0x0F 0xB3)
+    handleBitTest(opcode2) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+        
+        const bitRegName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
+        const bitPos = this.getReg32(bitRegName);
+        
+        if (mod === 3) {
+            const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+            const destValue = this.getReg32(rmName);
+            const maskedBit = bitPos & 0x1F;
+            const bitValue = (destValue >> maskedBit) & 1;
+            this.setFlag('CF', bitValue);
+            
+            if (opcode2 === 0xAB) {
+                // BTS: set the bit
+                this.setReg32(rmName, destValue | (1 << maskedBit));
+            } else if (opcode2 === 0xB3) {
+                // BTR: reset the bit
+                this.setReg32(rmName, destValue & ~(1 << maskedBit));
+            }
+            return 2;
+        } else {
+            const addr = this.calculateAddress(modrm);
+            // For memory operand, bit index can be > 31
+            const byteOffset = (bitPos >> 3) & 0xFFF;
+            const bitInByte = bitPos & 7;
+            const actualAddr = (addr + byteOffset) >>> 0;
+            const byteValue = this.readMem(actualAddr, 1);
+            const bitValue = (byteValue >> bitInByte) & 1;
+            this.setFlag('CF', bitValue);
+            
+            if (opcode2 === 0xAB) {
+                // BTS: set the bit
+                this.writeMem(actualAddr, byteValue | (1 << bitInByte), 1);
+            } else if (opcode2 === 0xB3) {
+                // BTR: reset the bit
+                this.writeMem(actualAddr, byteValue & ~(1 << bitInByte), 1);
+            }
+            return 4;
+        }
+    }
+    
     // Execute extended instructions (0x0F prefix)
     // Returns: cycles consumed (0 on error)
     executeExtendedInstruction(opcode2) {
         switch (opcode2) {
             // LGDT (0x01 /2) and LIDT (0x01 /3)
+            // EIP already points to ModRM byte when we get here
             case 0x01: {
-                this.regs.eip--;  // Go back to re-read ModR/M
                 return this.handleLgdtLidt();
             }
                 
             // MOV to CRx (0x22) and MOV from CRx (0x20)
             case 0x20: case 0x22: {
                 return this.handleMovCR(opcode2);
+            }
+                
+            // MOVZX r32, r/m8 (0xB6) and MOVZX r32, r/m16 (0xB7)
+            case 0xB6: case 0xB7: {
+                return this.handleMovzx(opcode2);
+            }
+                
+            // MOVSX r32, r/m8 (0xBE) and MOVSX r32, r/m16 (0xBF)
+            case 0xBE: case 0xBF: {
+                return this.handleMovsx(opcode2);
+            }
+                
+            // BT (0xA3), BTS (0xAB), BTR (0xB3)
+            case 0xA3: case 0xAB: case 0xB3: {
+                return this.handleBitTest(opcode2);
+            }
+                
+            // Extended Jcc rel32 (0x80-0x8F)
+            case 0x80: case 0x81: case 0x82: case 0x83:
+            case 0x84: case 0x85: case 0x86: case 0x87:
+            case 0x88: case 0x89: case 0x8A: case 0x8B:
+            case 0x8C: case 0x8D: case 0x8E: case 0x8F: {
+                return this.handleJccNear(opcode2);
             }
                 
             default:
