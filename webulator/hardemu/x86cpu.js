@@ -1279,36 +1279,11 @@ class X86CPU {
                 const modrm = this.readMem(this.regs.eip, 1);
                 this.regs.eip++;
                 
-                const mod = (modrm >> 6) & 3;
                 const reg = (modrm >> 3) & 7;   // Destination register
-                const rm = modrm & 7;            // Source operand
-                
                 const regName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
                 
-                // Calculate address but don't dereference - that's the point of LEA
-                let addr = 0;
-                if (mod === 0) {
-                    if (rm === 5) {
-                        // [disp32]
-                        addr = this.readMem(this.regs.eip, 4);
-                        this.regs.eip += 4;
-                    } else {
-                        const baseReg = ['eax','ecx','edx','ebx','','ebp','esi','edi'][rm];
-                        if (baseReg) {
-                            addr = this.getReg32(baseReg);
-                        }
-                    }
-                } else if (mod === 1) {
-                    const disp8 = this.readMem(this.regs.eip, 1);
-                    this.regs.eip++;
-                    const baseReg = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
-                    addr = (this.getReg32(baseReg) + (disp8 & 0x80 ? disp8 - 256 : disp8)) >>> 0;
-                } else if (mod === 2) {
-                    const disp32 = this.readMem(this.regs.eip, 4);
-                    this.regs.eip += 4;
-                    const baseReg = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
-                    addr = (this.getReg32(baseReg) + disp32) >>> 0;
-                }
+                // Delegate to calculateAddress which handles all ModRM+SIB modes
+                const addr = this.calculateAddress(modrm);
                 
                 this.setReg32(regName, addr);
                 return 2;
@@ -1485,6 +1460,7 @@ class X86CPU {
     }
     
     // Handle MOV r/m32, r32 (0x89) and MOV r32, r/m32 (0x8B)
+    // With 0x66 prefix: 16-bit operands
     // Returns: cycles consumed
     handleMovRegMem(opcode) {
         this.regs.eip++;
@@ -1494,33 +1470,42 @@ class X86CPU {
         const mod = (modrm >> 6) & 3;
         const reg = (modrm >> 3) & 7;   // Register index
         const rm = modrm & 7;            // R/M index
+        const size = this.prefixes.operandSize ? 2 : 4;
         
         const regName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
         const regValue = this.getReg32(regName);
         
-        // Get effective address
-        let addr = 0;
         if (mod === 3) {
             // Register to register
             const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
             if (opcode === 0x89) {
-                // MOV r/m32, r32
-                this.setReg32(rmName, regValue);
+                if (size === 2) {
+                    this.regs[rmName] = (this.regs[rmName] & 0xFFFF0000) | (regValue & 0xFFFF);
+                } else {
+                    this.setReg32(rmName, regValue);
+                }
             } else {
-                // MOV r32, r/m32
-                this.setReg32(regName, this.getReg32(rmName));
+                if (size === 2) {
+                    this.regs[regName] = (this.regs[regName] & 0xFFFF0000) | (this.regs[rmName] & 0xFFFF);
+                } else {
+                    this.setReg32(regName, this.getReg32(rmName));
+                }
             }
-            return 2;  // Register-register MOV = 2 cycles
+            return 2;
         } else {
             // Memory operand
-            addr = this.calculateAddress(modrm);
+            const addr = this.calculateAddress(modrm);
             if (opcode === 0x89) {
-                this.writeMem(addr, regValue, 4);
+                this.writeMem(addr, regValue, size);
             } else {
-                const memValue = this.readMem(addr, 4);
-                this.setReg32(regName, memValue);
+                const memValue = this.readMem(addr, size);
+                if (size === 2) {
+                    this.regs[regName] = (this.regs[regName] & 0xFFFF0000) | (memValue & 0xFFFF);
+                } else {
+                    this.setReg32(regName, memValue);
+                }
             }
-            return 4;  // Register-memory MOV = 4 cycles
+            return size === 2 ? 2 : 4;
         }
     }
     
