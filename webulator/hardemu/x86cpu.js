@@ -27,7 +27,7 @@ class X86CPU {
             cr3: 0   // Page directory base (top 20 bits)
         };
         
-        // Debug registers (stub)
+        // Debug registers (DR0-DR7)
         this.dregs = { dr0: 0, dr1: 0, dr2: 0, dr3: 0, dr6: 0, dr7: 0 };
         
         // EFLAGS register
@@ -1471,10 +1471,8 @@ class X86CPU {
             }
                 
             default:
-                if (this.debug) {
-                    console.log(`Unhandled opcode: 0x${opcode.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
-                }
-                return 0;  // Error - unhandled opcode
+                this.triggerException(6, 0);  // #UD — Undefined opcode
+                return 10;
         }
     }
     
@@ -2586,6 +2584,11 @@ class X86CPU {
                 return this.handleMovCR(opcode2);
             }
                 
+            // MOV to DRx (0x23) and MOV from DRx (0x21)
+            case 0x21: case 0x23: {
+                return this.handleMovDR(opcode2);
+            }
+                
             // MOVZX r32, r/m8 (0xB6) and MOVZX r32, r/m16 (0xB7)
             case 0xB6: case 0xB7: {
                 return this.handleMovzx(opcode2);
@@ -2614,6 +2617,46 @@ class X86CPU {
                 return this.handleGroup6_7();
             }
                 
+            // RDTSC (0x31) — Read Time-Stamp Counter
+            case 0x31: {
+                // Return a pseudo-TSC value (just incrementing counter)
+                if (this._tsc === undefined) this._tsc = 0n;
+                const tsc = this._tsc++;
+                this.regs.eax = Number(tsc & 0xFFFFFFFFn);
+                this.regs.edx = Number((tsc >> 32n) & 0xFFFFFFFFn);
+                return 12;
+            }
+                
+            // CPUID (0xA2) — CPU Identification
+            case 0xA2: {
+                // Return basic CPU identification info
+                switch (this.regs.eax) {
+                    case 0: {
+                        // Maximum input value and vendor string
+                        this.regs.eax = 1;
+                        this.regs.ebx = 0x756E6547;  // "Genu"
+                        this.regs.ecx = 0x6C65746E;  // "ntel"
+                        this.regs.edx = 0x49656E69;  // "ineI"
+                        return 10;
+                    }
+                    case 1: {
+                        // Processor info and feature bits
+                        this.regs.eax = 0x00000600;  // Stepping=0, Model=6, Family=6
+                        this.regs.ebx = 0x00000000;
+                        this.regs.ecx = 0x00000000;  // No SSE3, no monitor
+                        this.regs.edx = 0x0603FBFF;  // FPU, VME, DE, PSE, TSC, MSR, PAE, MCE, CX8, APIC, SEP, MTRR, PGE, MCA, CMOV, PAT, PSE36, MMX, FXSR
+                        return 10;
+                    }
+                    default: {
+                        this.regs.eax = 0;
+                        this.regs.ebx = 0;
+                        this.regs.ecx = 0;
+                        this.regs.edx = 0;
+                        return 10;
+                    }
+                }
+            }
+                
             // INVD (0x08) — Invalidate cache, no-op in emulation
             case 0x08: {
                 // Privileged instruction — invalidates internal cache
@@ -2624,10 +2667,8 @@ class X86CPU {
             }
                 
             default:
-                if (this.debug) {
-                    console.log(`Unhandled extended opcode: 0x0F 0x${opcode2.toString(16)}`);
-                }
-                return 0;  // Error - unhandled
+                this.triggerException(6, 0);  // #UD — Undefined opcode
+                return 10;
         }
     }
     
@@ -2700,7 +2741,43 @@ class X86CPU {
             this.setReg32(rmName, value);
             return 4;  // MOV from CR = 4 cycles
         }
-        return 0;
+        this.triggerException(6, 0);  // #UD — Invalid CR register
+        return 10;
+    }
+    
+    // Handle MOV to/from Debug Registers (0x0F 0x21/0x23)
+    handleMovDR(opcode2) {
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const reg = (modrm >> 3) & 7;  // Debug register number
+        const rm = modrm & 7;           // General-purpose register
+        const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+        
+        if (opcode2 === 0x23) {
+            // MOV r32, DRx — move to debug register
+            const value = this.getReg32(rmName);
+            if (reg <= 3) {
+                this.dregs['dr' + reg] = value;
+            } else if (reg === 6) {
+                this.dregs.dr6 = (value & 0xFFFF0FF0) | 0xF;
+            } else if (reg === 7) {
+                this.dregs.dr7 = value;
+            }
+            return 4;
+        } else {
+            // MOV DRx, r32 — move from debug register
+            let value = 0;
+            if (reg <= 3) {
+                value = this.dregs['dr' + reg];
+            } else if (reg === 6) {
+                value = this.dregs.dr6;
+            } else if (reg === 7) {
+                value = this.dregs.dr7;
+            }
+            this.setReg32(rmName, value);
+            return 4;
+        }
     }
     
     // Handle Shift/Rotate instructions
@@ -3020,7 +3097,8 @@ class X86CPU {
             }
         }
         
-        return 0;  // Error - unhandled
+        this.triggerException(6, 0);  // #UD — Invalid reg field for MUL/DIV
+        return 10;
     }
     
     // Handle INT (software interrupt)
@@ -3327,7 +3405,8 @@ class X86CPU {
                 return 3;
             }
             default:
-                return 0;  // Invalid or unimplemented
+                this.triggerException(6, 0);  // #UD — Undefined group 6/7 instruction
+                return 10;
         }
     }
     
@@ -3344,7 +3423,10 @@ class X86CPU {
         const rm = modrm & 7;
         
         const segNames = ['es', 'cs', 'ss', 'ds', 'fs', 'gs'];
-        if (reg > 5) return 0;  // Invalid segment register
+        if (reg > 5) {
+            this.triggerException(6, 0);  // #UD — Invalid segment register
+            return 10;
+        }
         const segName = segNames[reg];
         
         if (opcode === 0x8C) {

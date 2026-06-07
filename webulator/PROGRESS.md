@@ -872,6 +872,84 @@ Total:  149
 
 ---
 
+## Session: 2026-06-07 (Part 5) — PIT Timer Fix, Stub Implementation, Start Script
+
+### Completed
+
+1. **Replaced all unhandled opcode defaults with #UD exceptions** ✅
+   - `executeInstruction()` default: `return 0` → `triggerException(6, 0)` (#UD)
+   - `executeExtendedInstruction()` default: `return 0` → `triggerException(6, 0)` (#UD)
+   - `handleMovCR()`: `return 0` → `triggerException(6, 0)` (#UD) for invalid CR register
+   - `handleMulDiv()`: `return 0` → `triggerException(6, 0)` (#UD) for invalid reg field
+   - `handleGroup6_7()`: `return 0` → `triggerException(6, 0)` (#UD) for invalid group 6/7
+   - `handleMovSegReg()`: `return 0` → `triggerException(6, 0)` (#UD) for invalid segment register
+
+2. **Implemented debug register MOV (0x0F 0x21/0x23)** ✅
+   - `handleMovDR()`: Full read/write support for DR0-DR3, DR6, DR7
+   - Removed `(stub)` comment from `this.dregs` initialization
+
+3. **Added missing extended opcodes** ✅
+   - **RDTSC** (0x0F 0x31): Pseudo time-stamp counter via BigInt
+   - **CPUID** (0x0F 0xA2): Returns "GenuineIntel" vendor, feature bits (FPU, TSC, PAE, PSE, MTRR, CMOV, MMX, FXSR)
+
+4. **Fixed serial port COM1 status** ✅
+   - Added port 0x3FD (Line Status Register) returning 0x60 (THR empty + transmitter empty)
+
+5. **Fixed PIT 8254 timer — root cause of frozen kernel** ✅
+   - **Port 0x43 (control register) was completely ignored**: Kernel couldn't configure PIT mode/channel/access
+   - **16-bit counter writes broken**: LSB+MSB two-write sequence was treated as two separate single-byte writes, corrupting the reload value
+   - **tick() returned early when count=0**: Never fired IRQ0, never reloaded
+   - **Complete PIT rewrite**: Proper control word decoding, 16-bit access state machine (idle → wait LSB → wait MSB), mode/access tracking per channel
+
+6. **Fixed execution loop — halted CPU stopped PIT ticks** ✅
+   - When CPU executed HLT, loop broke and `pit.tick()` was never called again
+   - Timer could never fire to wake the CPU
+   - Fix: Loop continues ticking PIT while CPU halted, checks `cpu.halted` to skip `step()`
+
+7. **Fixed PIC requestIRQ — lost interrupts when masked** ✅
+   - IRR was only set if IRQ was unmasked, so interrupts arriving while masked were silently dropped
+   - If kernel programmed PIT before unmasking PIC, the first timer tick was lost forever
+   - Fix: Always set IRR regardless of IMR; masking is enforced only at delivery time in `checkInterrupts()`
+
+8. **Created `start.sh`** ✅
+   - Convenience script: `./start.sh` (browser dev server), `./start.sh electron`, `./start.sh test`
+
+### Test Results
+
+Interrupt chain verified end-to-end:
+```
+PIT reload: 11932  →  PIC requestIRQ(0)  →  checkInterrupts  →  triggerInterrupt(0x20)  →  handleInt(0x20)
+IRQs delivered: 1  EIP: 0xdead0020  ESP: 0x7ff4
+```
+
+### Code Changes
+
+**`hardemu/x86cpu.js`** (+108 / -42 lines):
+- `dregs`: Removed "(stub)" comment (line 30)
+- `debug` case → `triggerException(6,0)`: 6 unhandled opcode defaults replaced
+- `handleMovDR()`: New method for MOV to/from debug registers (0x0F 0x21/0x23)
+- `executeExtendedInstruction()`: Added 0x21, 0x23 (DRx), 0x31 (RDTSC), 0xA2 (CPUID)
+- `RDTSC`: BigInt-based pseudo time-stamp counter
+- `CPUID`: Returns vendor string + feature bits for EAX=0,1
+
+**`hardemu/machine_x86.js`** (+126 / -36 lines):
+- `PIT8254`: Full rewrite — control register (0x43) decoding, 16-bit access state machine (LSB→MSB), mode tracking, proper tick with reload
+- `executionLoop()`: Continues ticking PIT when CPU is halted (checks `cpu.halted`)
+- `PIC8259A.requestIRQ()`: Always sets IRR regardless of IMR
+- `cpuPortRead()`: Added COM1 line status register (port 0x3FD) → 0x60
+
+**`start.sh`** (NEW):
+- Convenience start script with browser/electron/test modes
+
+### 🔍 DISCOVERED THIS SESSION:
+- **PIT control register (0x43) is essential**: The kernel writes 0x36 to select channel 0, LSB/MSB access, mode 3. Without handling this register, the PIT never starts.
+- **16-bit counter loading**: PIT counters use two writes (LSB then MSB). A single-byte write corrupts the counter.
+- **Halted CPU + PIT interaction**: When the CPU halts, the execution loop must keep ticking the PIT so it can fire IRQ0 to wake the CPU.
+- **IRR latching**: In real PIC hardware, IRR is set regardless of IMR. Masking only gates delivery. Not latching masked IRQs loses interrupts permanently.
+- **handleInt uses IDT when idtLimit > 0**: Already implemented — automatically switches between real mode IVT and protected mode IDT based on `idtLimit`.
+
+---
+
 ## Long-term Goals
 
 - Get kernel to fully execute without unimplemented opcodes ✅ (NO MORE UNHANDLED OPCODES!)

@@ -162,15 +162,16 @@ class X86Machine {
             // Always tick PIT even when CPU is halted (may wake CPU via IRQ)
             this.pit.tick();
             
-            const cycles = this.cpu.step();
-            if (cycles === 0) {
-                // CPU halted or error
-                this.halted = this.cpu.halted;
-                if (this.halted) break;
-                // CPU woke up (interrupt delivered), continue executing
+            if (this.cpu.halted) {
+                // CPU is halted — keep ticking PIT so it can wake the CPU via IRQ
+                this.tstates++;
                 continue;
             }
-            this.tstates += cycles;  // Add actual cycles from CPU
+            
+            const cycles = this.cpu.step();
+            if (cycles > 0) {
+                this.tstates += cycles;
+            }
         }
         
         // Render VGA if dirty
@@ -306,8 +307,11 @@ class X86Machine {
         } else if (port >= 0x1F0 && port <= 0x1F7) {
             return this.ata.readPrimary(port);
         } else if (port === 0x3F8) {
-            // Serial port - always return 0 for now
+            // Serial port data register
             return 0;
+        } else if (port === 0x3FD) {
+            // Serial port line status register: THR empty + line ready
+            return 0x60;
         } else {
             if (this.debug) {
                 console.log(`Unhandled port read: 0x${port.toString(16)}`);
@@ -554,20 +558,14 @@ class PIC8259A {
     // Request IRQ (called by devices)
     requestIRQ(irqNum) {
         if (irqNum < 8) {
-            // Master PIC
-            if (!(this.master.imr & (1 << irqNum))) {
-                this.master.irr |= (1 << irqNum);
-                this.checkInterrupts();
-            }
+            this.master.irr |= (1 << irqNum);
+            this.checkInterrupts();
         } else {
             // Slave PIC (IRQ 8-15)
             irqNum -= 8;
-            if (!(this.slave.imr & (1 << irqNum))) {
-                this.slave.irr |= (1 << irqNum);
-                // Cascade to master IR2
-                this.master.irr |= (1 << 2);
-                this.checkInterrupts();
-            }
+            this.slave.irr |= (1 << irqNum);
+            this.master.irr |= (1 << 2);
+            this.checkInterrupts();
         }
     }
     
@@ -597,30 +595,40 @@ class PIC8259A {
 }
 
 // ============================================================
-// PIT 8254 Emulation (simplified)
+// PIT 8254 Emulation
 // ============================================================
 
 class PIT8254 {
     constructor(machine) {
         this.machine = machine;
         
-        // PIT channels
+        // PIT channels: ch0 (IRQ0), ch1, ch2
         this.channels = [
-            { mode: 3, count: 0, reload: 0, ticking: false },  // Channel 0 (IRQ0)
-            { mode: 3, count: 0, reload: 0, ticking: false },  // Channel 1
-            { mode: 3, count: 0, reload: 0, ticking: false },  // Channel 2
+            { mode: 3, count: 0, reload: 0, ticking: false },
+            { mode: 3, count: 0, reload: 0, ticking: false },
+            { mode: 3, count: 0, reload: 0, ticking: false },
+        ];
+        
+        // LSB/MSB access state for 16-bit counter writes
+        this.access = [
+            { state: 0, lsb: 0 },  // 0 = idle, 1 = wait for MSB
+            { state: 0, lsb: 0 },
+            { state: 0, lsb: 0 },
         ];
         
         this.init();
     }
     
     init() {
-        // Reset PIT state
         for (let ch of this.channels) {
             ch.mode = 3;
             ch.count = 0;
             ch.reload = 0;
             ch.ticking = false;
+        }
+        for (let a of this.access) {
+            a.state = 0;
+            a.lsb = 0;
         }
     }
     
@@ -629,19 +637,73 @@ class PIT8254 {
     }
     
     write(port, value) {
-        const channel = port - 0x40;
-        if (channel < 3) {
+        if (port === 0x43) {
+            // PIT control register
+            const channel = (value >> 6) & 3;
+            const access = (value >> 4) & 3;
+            const mode = (value >> 1) & 7;
+            
+            if (channel === 3) return;  // Read-back command, ignore
+            
             const ch = this.channels[channel];
-            ch.count = value;
+            ch.mode = mode;
+            
+            // Configure 16-bit access state based on access mode
+            const a = this.access[channel];
+            if (access === 0) {
+                // Latch count (for reading) — just reset access state
+                a.state = 0;
+            } else if (access === 1) {
+                // LSB only
+                a.state = 2;  // complete after single byte
+            } else if (access === 2) {
+                // MSB only
+                a.state = 2;  // complete after single byte
+            } else {
+                // LSB then MSB
+                a.state = 0;  // 0 = waiting for LSB
+            }
+            return;
+        }
+        
+        const channel = port - 0x40;
+        if (channel < 0 || channel > 2) return;
+        
+        const ch = this.channels[channel];
+        const a = this.access[channel];
+        
+        if (a.state === 2) {
+            // Single-byte access (LSB only or MSB only) — just store
             ch.reload = value;
+            ch.count = value;
             ch.ticking = true;
+            return;
+        }
+        
+        if (a.state === 0) {
+            // Waiting for LSB
+            a.lsb = value;
+            a.state = 1;
+        } else {
+            // Waiting for MSB
+            const reload = (value << 8) | a.lsb;
+            if (reload === 0) {
+                // 0 means 65536 in PIT counting (max period)
+                ch.reload = 65536;
+            } else {
+                ch.reload = reload;
+            }
+            ch.count = ch.reload;
+            ch.ticking = true;
+            a.state = 0;
         }
     }
     
     read(port) {
+        if (port === 0x43) return 0;
         const channel = port - 0x40;
-        if (channel < 3) {
-            return this.channels[channel].count;
+        if (channel >= 0 && channel <= 2) {
+            return this.channels[channel].count & 0xFF;
         }
         return 0;
     }
@@ -649,9 +711,9 @@ class PIT8254 {
     // Tick PIT (called every instruction)
     tick() {
         const ch = this.channels[0];
-        if (!ch.ticking || ch.count === 0) return;
+        if (!ch.ticking || ch.reload === 0) return;
         ch.count--;
-        if (ch.count === 0) {
+        if (ch.count <= 0) {
             this.machine.triggerIRQ(0);
             ch.count = ch.reload;
         }
