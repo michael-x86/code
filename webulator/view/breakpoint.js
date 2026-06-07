@@ -5,7 +5,6 @@
  */
 
 var breakpoints = [];
-var breakpointOnVBlank = false;
 
 $("#bps").on("click", "li", function() {
     /* Get the breakpoint address */
@@ -35,13 +34,14 @@ function newBreakpoint(value) {
     var result = 0;
     if (isValidHexadecimal(value)) {
         result = parseInt(value, 16);
-    } else {
-        /* Could be a label, let's check this */
+    } else if (disassembler && disassembler.labelAddress) {
         const addr = disassembler.labelAddress(value);
         if (addr === null) {
             return;
         }
         result = addr;
+    } else {
+        return;
     }
     /* Only add the breakpoint if not in the list */
     if (!getBreakpoint(result)) {
@@ -71,14 +71,17 @@ function addBreakpoint(options) {
         /* This may be possible if the former breakpoint was "hidden" (auto-delete)
          * If it was clicked by the user, it will become a regular breakpoint, else, it won't change */
         bkrobj.autodelete = autodelete;
-    } else if (address <= 0xFFFF) {
+    } else {
         bkrobj = { address, enabled, autodelete };
         breakpoints.push(bkrobj);
+        if (machine && machine.addBreakpoint) {
+            machine.addBreakpoint(address);
+        }
     }
 
     /* Only add the breakpoint to the list if it was manually added by the user, not if step over was clicked */
     if (! bkrobj?.autodelete) {
-        $li = $(`<li data-addr="${address}">${hex(address)}</li>`);
+        $li = $(`<li data-addr="${address}">0x${hex32(address)}</li>`);
         if(!enabled) {
             $li.addClass('disabled');
         }
@@ -101,21 +104,25 @@ function toggleBreakpoint(brkaddr) {
     $(`#bps li[data-addr='${brkaddr}']`).toggleClass("disabled");
     $(`.dumpline[data-addr='${brkaddr}']`).toggleClass("brk");
 
-    /* Toggle enabled field in the breakpoint */
     if (bkrobj != undefined) {
         bkrobj.enabled ^= true;
+        if (machine && machine.toggleBreakpoint) {
+            machine.toggleBreakpoint(brkaddr);
+        }
     }
     localStorage.setItem('breakpoints', JSON.stringify(breakpoints));
 }
 
 function deleteBreakpoint(brkaddr) {
-    /* Find the breakpoint object in the breakpoint list */
     const index = breakpoints.findIndex(element => element.address == brkaddr);
 
     if(index >= 0) {
         breakpoints.splice(index, 1);
         $(`#bps li[data-addr='${brkaddr}']`).remove();
         $(`.dumpline[data-addr='${brkaddr}']`).toggleClass("brk");
+        if (machine && machine.removeBreakpoint) {
+            machine.removeBreakpoint(brkaddr);
+        }
     }
     localStorage.setItem('breakpoints', JSON.stringify(breakpoints));
 }
@@ -126,27 +133,6 @@ function getBreakpoint(addr) {
     return (bkrobj != undefined && !bkrobj.autodelete) ? bkrobj : null;
 }
 
-
-/**
- * @brief Function called when a breakpoint is triggered
- */
-function triggeredBreakpoint(bkrobj) {
-    if (bkrobj?.autodelete) {
-        breakpoints = breakpoints.filter(element => element.address !== bkrobj.address);
-    }
-}
-
-function enableBreakpoint(bkrobj) {
-    bkrobj.enabled = true;
-}
-
-function enableBreakOnVBlank(doBreak) {
-    breakpointOnVBlank = doBreak;
-}
-
-$('#breakpoint-vblank').on('change', function(e) {
-    enableBreakOnVBlank($(this).prop('checked'));
-});
 
 jQuery(() => {
     const storage = localStorage.getItem('breakpoints');

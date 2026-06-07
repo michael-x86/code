@@ -186,10 +186,8 @@ hr {
     display: block;
     margin-inline: auto;
     background-color: black;
-    /* transform-origin: top; */
     width: 640px;
-    aspect-ratio: 4/3;
-    /* height: 480px; */
+    aspect-ratio: 8/5;
     image-rendering: pixelated;
     &.no-pixels {
         image-rendering: auto;

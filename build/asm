@@ -125,6 +125,15 @@ echo "  Boot: $BOOT_IMG (bootloader + kernel)"
 echo "  FS:   $FS_IMG (filesystem, separate disk)"
 echo "  OS:   $IMG (combined, $(stat -c%s "$IMG") bytes)"
 echo ""
+
+# Copy binaries for webulator (x86 web emulator)
+WEBULATOR_DIR="${PROJECT_DIR}/webulator/kernel-bin"
+mkdir -p "$WEBULATOR_DIR"
+cp "${BUILD_DIR}/kernel.bin" "${BUILD_DIR}/bootloader.bin" "$WEBULATOR_DIR/"
+# The webulator expects a combined disk image for ATA emulation
+cp "$IMG" "$WEBULATOR_DIR/os.img"
+echo "[webulator] Copied kernel.bin, bootloader.bin, os.img → $WEBULATOR_DIR"
+
 rm -f "${BUILD_DIR}/kernel.bin" "${BUILD_DIR}/bootloader.bin"
 rm -f "${BUILD_DIR}/fs.bin"
 

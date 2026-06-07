@@ -1,61 +1,65 @@
-/**
- * SPDX-FileCopyrightText: 2022-2023 Zeal 8-bit Computer <contact@zeal8bit.com>
- *
- * SPDX-License-Identifier: Apache-2.0
- */
-
 function setRegView() {
-    const tstates = zealcom.getTstates();
-    let regs = zealcom.getCPUState();
-    $("#rega").text(hex8(regs.a));
-    $("#regb").text(hex8(regs.b));
-    $("#regc").text(hex8(regs.c));
-    $("#regd").text(hex8(regs.d));
-    $("#rege").text(hex8(regs.e));
-    $("#regh").text(hex8(regs.h));
-    $("#regl").text(hex8(regs.l));
-    $("#regix").text(hex(regs.ix));
-    $("#regiy").text(hex(regs.iy));
-    $("#regbc").text(hex16(regs.b, regs.c));
-    $("#regde").text(hex16(regs.d, regs.e));
-    $("#reghl").text(hex16(regs.h, regs.l));
-    $("#regpc").text(hex(regs.pc));
-    $("#regsp").text(hex(regs.sp));
-    $("#tstates").text(tstates);
-    /* Special treatment for the flags */
-    var flags = (regs.flags.S == 1 ? "S" : "") +
-                (regs.flags.Z == 1 ? "Z" : "") +
-                (regs.flags.Y == 1 ? "Y" : "") +
-                (regs.flags.H == 1 ? "H" : "") +
-                (regs.flags.X == 1 ? "X" : "") +
-                (regs.flags.P == 1 ? "P" : "") +
-                (regs.flags.N == 1 ? "N" : "") +
-                (regs.flags.C == 1 ? "C" : "");
+    if (!machine || !machine.cpu) return;
+    const cpu = machine.cpu;
+    const state = machine.getCPUState();
 
-    $("#flags").text(flags);
+    $("#reg_eax").text('0x' + hex32(cpu.regs.eax));
+    $("#reg_ebx").text('0x' + hex32(cpu.regs.ebx));
+    $("#reg_ecx").text('0x' + hex32(cpu.regs.ecx));
+    $("#reg_edx").text('0x' + hex32(cpu.regs.edx));
+    $("#reg_esi").text('0x' + hex32(cpu.regs.esi));
+    $("#reg_edi").text('0x' + hex32(cpu.regs.edi));
+    $("#reg_ebp").text('0x' + hex32(cpu.regs.ebp));
+    $("#reg_esp").text('0x' + hex32(cpu.regs.esp));
+    $("#reg_eip").text('0x' + hex32(cpu.regs.eip));
 
-    /* Disassemble the current code and show the instructions */
+    const eflags = cpu.eflags;
+    var flags = "";
+    flags += (eflags & (1 << 0))  ? "CF " : "";
+    flags += (eflags & (1 << 2))  ? "PF " : "";
+    flags += (eflags & (1 << 4))  ? "AF " : "";
+    flags += (eflags & (1 << 6))  ? "ZF " : "";
+    flags += (eflags & (1 << 7))  ? "SF " : "";
+    flags += (eflags & (1 << 8))  ? "TF " : "";
+    flags += (eflags & (1 << 9))  ? "IF " : "";
+    flags += (eflags & (1 << 10)) ? "DF " : "";
+    flags += (eflags & (1 << 11)) ? "OF " : "";
+    if (flags === "") flags = "----";
+    $("#reg_eflags").text(flags);
+
+    $("#reg_cs").text(hex16(cpu.segregs.cs));
+    $("#reg_ds").text(hex16(cpu.segregs.ds));
+    $("#reg_es").text(hex16(cpu.segregs.es));
+    $("#reg_fs").text(hex16(cpu.segregs.fs));
+    $("#reg_gs").text(hex16(cpu.segregs.gs));
+    $("#reg_ss").text(hex16(cpu.segregs.ss));
+
+    $("#reg_cr0").text(hex32(cpu.cregs.cr0));
+    $("#reg_cr3").text(hex32(cpu.cregs.cr3));
+
+    $("#tstates").text(state.tstates);
+
     disassembleAndShow();
 }
 
-
 function clearRegView() {
-    const views = ["#rega", "#regb", "#regc", "#regd", "#rege",
-                   "#regh", "#regl", "#regix", "#regiy", "#regbc",
-                   "#regde", "#reghl", "#regpc", "#regsp", "#tstates", "#flags"];
-    const length = views.length;
-    for (var i = 0; i < length; i++) {
-        const reg = views[i];
-        $(reg).text("");
-    }
+    const ids = ["#reg_eax", "#reg_ebx", "#reg_ecx", "#reg_edx",
+                 "#reg_esi", "#reg_edi", "#reg_ebp", "#reg_esp",
+                 "#reg_eip", "#reg_eflags",
+                 "#reg_cs", "#reg_ds", "#reg_es", "#reg_fs", "#reg_gs", "#reg_ss",
+                 "#reg_cr0", "#reg_cr3",
+                 "#tstates"];
+    ids.forEach(id => $(id).text(""));
 }
 
-
 $(".regaddr").click(function() {
-    const virtaddr = parseInt($(this).text(), 16);
-    if (virtaddr || virtaddr == 0) {
-        const size = 256;
-        setRAMView(virtaddr, size);
-        $("#memory-tab").click();
+    const text = $(this).text();
+    if (text.startsWith('0x')) {
+        const virtaddr = parseInt(text, 16);
+        if (!isNaN(virtaddr)) {
+            const size = 256;
+            setRAMView(virtaddr, size);
+            $("#memory-tab").click();
+        }
     }
 });
