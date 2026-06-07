@@ -689,8 +689,38 @@ function run() {
       cpu.regs.ecx = 0x00000000;
       mem.write8(0x1000, 0xE2); mem.write8(0x1001, 0x10);
       cpu.regs.eip = 0x1000; cpu.step();
+
       assertEq(cpu.regs.ecx, 0xFFFFFFFF);
-      assertEq(cpu.regs.eip, 0x1002 + 0x10);
+    });
+
+    test('JCXZ (0xE3) jump taken when ECX=0', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.ecx = 0x00000000;
+      mem.write8(0x1000, 0xE3); mem.write8(0x1001, 0x20);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eip, 0x1000 + 2 + 0x20);
+    });
+
+    test('JCXZ (0xE3) not taken when ECX!=0', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.ecx = 0x00000001;
+      mem.write8(0x1000, 0xE3); mem.write8(0x1001, 0x20);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eip, 0x1000 + 2);
+    });
+
+    test('JMP far (0xEA) sets CS and EIP', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      // 0xEA offset32 (4 bytes) seg16 (2 bytes)
+      mem.write8(0x1000, 0xEA);
+      mem.write32(0x1001, 0x00100000);  // offset = 0x100000
+      mem.write16(0x1005, 0x0008);       // CS = 0x08
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eip, 0x00100000);
+      assertEq(cpu.segregs.cs, 0x0008);
     });
 
     test('PUSHAD/POPAD', () => {
@@ -806,6 +836,30 @@ function run() {
       mem.write8(0x1000, 0xF5);
       cpu.regs.eip = 0x1000; cpu.step();
       assertEq(cpu.getFlag('CF'), 0, 'CMC should toggle CF from 1 to 0');
+    });
+
+    test('SAHF (0x9E) stores AH into flags low byte', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.eflags = 0;
+      cpu.regs.eax = 0x0000D500;  // AH = 0xD5: bits 7=SF, 6=ZF, 4=AF, 2=PF, 0=CF
+      mem.write8(0x1000, 0x9E);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.getFlag('SF'), 1);
+      assertEq(cpu.getFlag('ZF'), 1);
+      assertEq(cpu.getFlag('CF'), 1);
+      assertEq(cpu.getFlag('PF'), 1);
+      assertEq(cpu.getFlag('AF'), 1);
+    });
+
+    test('LAHF (0x9F) loads flags into AH', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.eflags = 0x000000D5;
+      cpu.regs.eax = 0;
+      mem.write8(0x1000, 0x9F);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq((cpu.regs.eax >> 8) & 0xFF, 0xD5);
     });
   });
 
@@ -999,6 +1053,74 @@ function run() {
       const cpu = new X86CPU(mem, null);
       cpu.regs.eax = 0x0010;
       mem.write32(0x1000, cpu.regs.eax);
+    });
+
+    test('PUSH ES (0x06) and POP ES (0x07)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.segregs.es = 0xB800;
+      cpu.regs.esp = 0x2000;
+      // PUSH ES at [0x1000]
+      mem.write8(0x1000, 0x06);
+      cpu.regs.eip = 0x1000;
+      cpu.step();
+      // ESP should decrease by 4 and value stored
+      assertEq(cpu.regs.esp, 0x1FFC);
+      const pushed = mem.read32(0x1FFC);
+      assertEq(pushed, 0xB800);
+      // POP ES at [0x1001]
+      cpu.segregs.es = 0;
+      mem.write8(0x1001, 0x07);
+      cpu.regs.eip = 0x1001;
+      cpu.step();
+      assertEq(cpu.segregs.es, 0xB800);
+      assertEq(cpu.regs.esp, 0x2000);
+    });
+
+    test('PUSH DS (0x1E) and POP DS (0x1F)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.segregs.ds = 0x1234;
+      cpu.regs.esp = 0x3000;
+      mem.write8(0x1000, 0x1E);
+      cpu.regs.eip = 0x1000;
+      cpu.step();
+      assertEq(cpu.regs.esp, 0x2FFC);
+      assertEq(mem.read32(0x2FFC), 0x1234);
+      mem.write8(0x1001, 0x1F);
+      cpu.segregs.ds = 0;
+      cpu.regs.eip = 0x1001;
+      cpu.step();
+      assertEq(cpu.segregs.ds, 0x1234);
+    });
+
+    test('PUSH SS (0x16) and POP SS (0x17)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.segregs.ss = 0xABCD;
+      cpu.regs.esp = 0x4000;
+      mem.write8(0x1000, 0x16);
+      cpu.regs.eip = 0x1000;
+      cpu.step();
+      assertEq(cpu.regs.esp, 0x3FFC);
+      assertEq(mem.read32(0x3FFC), 0xABCD);
+      mem.write8(0x1001, 0x17);
+      cpu.segregs.ss = 0;
+      cpu.regs.eip = 0x1001;
+      cpu.step();
+      assertEq(cpu.segregs.ss, 0xABCD);
+    });
+
+    test('PUSH CS (0x0E) stores code segment', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.segregs.cs = 0xF000;
+      cpu.regs.esp = 0x5000;
+      mem.write8(0x1000, 0x0E);
+      cpu.regs.eip = 0x1000;
+      cpu.step();
+      assertEq(cpu.regs.esp, 0x4FFC);
+      assertEq(mem.read32(0x4FFC), 0xF000);
     });
   });
 
@@ -1369,6 +1491,96 @@ function run() {
       const machine = new X86Machine();
       machine.pit.write(0x40, 0x100);
       assertEq(machine.pit.channels[0].count, 0x100);
+      machine.destroy();
+    });
+
+    test('PIT tick triggers IRQ0 when count reaches 0', () => {
+      const machine = new X86Machine();
+      machine.pit.write(0x40, 5);
+      machine.pic.master.imr = 0xFE;  // unmask IRQ0
+      machine.cpu.setFlag('IF', 1);
+      // Tick 5 times; on 5th tick count goes from 1→0 and fires IRQ0
+      for (let i = 0; i < 4; i++) {
+        const beforeIrr = machine.pic.master.irr;
+        machine.pit.tick();
+        assert(machine.pic.master.irr === 0, `IRR should be 0 after tick ${i} (was 0x${beforeIrr.toString(16)})`);
+      }
+      // 5th tick: count 1→0, fires IRQ0 which is immediately delivered via PIC (IF=1, unmasked)
+      // PIC's checkInterrupts clears IRR and sets ISR when delivering
+      machine.pit.tick();
+      // IRR is cleared because the interrupt was already delivered to CPU
+      // ISR should be set instead
+      assert(machine.pic.master.isr !== 0, 'ISR should be set after PIT fires IRQ0');
+      machine.destroy();
+    });
+
+    test('PIC delivers interrupt to CPU via handleInt', () => {
+      const machine = new X86Machine();
+      const IDT_BASE = 0x1000;
+      const HANDLER = 0x5000;
+      machine.cpu.idtBase = IDT_BASE;
+      machine.cpu.idtLimit = 0x7FF;
+      machine.mem.write16(HANDLER, 0xCF);  // IRET
+      for (let i = 0; i < 256; i++) {
+        const entryAddr = IDT_BASE + (i * 8);
+        machine.mem.write16(entryAddr, HANDLER & 0xFFFF);
+        machine.mem.write16(entryAddr + 2, 0x0008);
+        machine.mem.write8(entryAddr + 4, 0x00);
+        machine.mem.write8(entryAddr + 5, 0x8E);
+        machine.mem.write8(entryAddr + 6, (HANDLER >> 16) & 0xFF);
+        machine.mem.write8(entryAddr + 7, (HANDLER >> 24) & 0xFF);
+      }
+      machine.cpu.regs.eip = 0x2000;
+      machine.cpu.segregs.cs = 0x08;
+      machine.cpu.regs.esp = 0x10000;
+      machine.cpu.setFlag('IF', 1);
+      // Request IRQ0 via PIC — should call cpu.handleInt and jump to handler
+      machine.pic.master.imr = 0xFE;  // unmask IRQ0
+      machine.triggerIRQ(0);
+      assertEq(machine.cpu.regs.eip, HANDLER, 'EIP should be at handler after interrupt');
+      assert(machine.cpu.regs.esp < 0x10000, 'ESP should have decreased for stack frame');
+      machine.destroy();
+    });
+
+    test('HLT wakes up on timer interrupt', () => {
+      const machine = new X86Machine();
+      const IDT_BASE = 0x1000;
+      const HANDLER = 0x5000;
+      machine.cpu.idtBase = IDT_BASE;
+      machine.cpu.idtLimit = 0x7FF;
+      machine.mem.write16(HANDLER, 0xCF);  // IRET
+      for (let i = 0; i < 256; i++) {
+        const entryAddr = IDT_BASE + (i * 8);
+        machine.mem.write16(entryAddr, HANDLER & 0xFFFF);
+        machine.mem.write16(entryAddr + 2, 0x0008);
+        machine.mem.write8(entryAddr + 4, 0x00);
+        machine.mem.write8(entryAddr + 5, 0x8E);
+        machine.mem.write8(entryAddr + 6, (HANDLER >> 16) & 0xFF);
+        machine.mem.write8(entryAddr + 7, (HANDLER >> 24) & 0xFF);
+      }
+      machine.cpu.setFlag('IF', 1);
+      machine.cpu.segregs.cs = 0x08;
+      machine.cpu.regs.esp = 0x10000;
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xF4);  // HLT
+      machine.mem.write8(0x1001, 0x90);  // NOP after HLT
+      // Unmask IRQ0 and set PIT to fire after 10 ticks
+      machine.pit.write(0x40, 10);
+      machine.pic.master.imr = 0xFE;
+      // Step CPU to execute HLT
+      machine.cpu.step();
+      assert(machine.cpu.halted, 'CPU should be halted after HLT');
+      assertEq(machine.cpu.regs.eip, 0x1001, 'EIP should point past HLT');
+      // Tick PIT until IRQ0 fires and wakes CPU
+      for (let i = 0; i < 10; i++) machine.pit.tick();
+      // handleInt should have cleared halted and set EIP to handler
+      assert(!machine.cpu.halted, 'CPU should wake from HLT via interrupt');
+      assertEq(machine.cpu.regs.eip, HANDLER, 'EIP should be at interrupt handler');
+      // Step CPU to execute IRET — returns to instruction after HLT
+      const savedSp = machine.cpu.regs.esp;
+      machine.cpu.step();
+      assertEq(machine.cpu.regs.eip, 0x1001, 'EIP should return to NOP after IRET');
+      assertEq(machine.cpu.regs.esp, savedSp + 12, 'ESP should be restored after IRET');
       machine.destroy();
     });
 

@@ -662,6 +662,151 @@ Total:  137
 
 ---
 
+---
+
+## Session: 2026-06-07 (Part 3) — Interrupt Chain Fix + Missing Opcodes
+
+### Completed
+
+1. **Implemented 0xEA (far jump) — critical for boot sectors** ✅
+   - `JMP far ptr16:32` — loads EIP from 4-byte offset and CS from 2-byte selector
+   - This is the standard instruction used after setting CR0.PE=1 to load CS with a GDT selector when entering protected mode
+   - Without it, any boot sector or real-mode → protected-mode transition would fail
+
+2. **Implemented PUSH/POP segment registers** ✅
+   - 0x06 (PUSH ES), 0x0E (PUSH CS), 0x16 (PUSH SS), 0x1E (PUSH DS)
+   - 0x07 (POP ES), 0x17 (POP SS), 0x1F (POP DS)
+   - These real-mode segment register instructions are commonly used in boot code
+
+3. **Implemented JCXZ/JECXZ (0xE3)** ✅
+   - Conditional jump: jumps if ECX=0
+   - Complements the existing LOOP family (0xE0-0xE2)
+
+4. **Implemented SAHF (0x9E) and LAHF (0x9F)** ✅
+   - SAHF: Stores AH register into EFLAGS low byte (SF:ZF:0:AF:0:PF:1:CF)
+   - LAHF: Loads EFLAGS low byte into AH register
+   - Used by some kernel and library code
+
+5. **Fixed HLT EIP advancement** ✅
+   - Bug: HLT returned without advancing EIP, so `handleInt` (triggered by an interrupt) saved EIP pointing to HLT itself
+   - After IRET, CPU would re-execute HLT, creating an infinite loop
+   - Fix: HLT now does `this.regs.eip++` before halting, so interrupt save returns to instruction-after-HLT
+
+6. **Fixed handleInt IDT offset calculation** ✅
+   - Bug: `(high << 16)` shifted the low 16 bits of `high` into position, but the IDT entry stores offset high bits in BYTES 6-7 (which are in the UPPER 16 bits of the little-endian read)
+   - Fix: `(high & 0xFFFF0000)` correctly masks the offset high bits from their existing position
+   - The `loadIDTEntry` method already had the correct formula `((high >> 16) << 16)` — `handleInt` was inconsistent
+
+7. **Fixed handleInt to clear halted flag** ✅
+   - When an external interrupt (via PIC → `triggerInterrupt`) calls `handleInt`, it must clear the CPU's halted state
+   - Without this, `step()` returns immediately when the CPU is halted, even though an interrupt was just delivered
+   - Fix: Added `this.halted = false` at the top of `handleInt()`
+
+8. **Fixed CPU step() to check pending IRQs** ✅
+   - Added `checkInterrupts()` method that calls `pic.checkInterrupts()` when IF=1
+   - Called at the start of each `step()` (after handling halt wake-up)
+   - When halted, checks `pic.master.irr` directly and wakes up if an unmasked IRQ is pending
+   - This implements the x86 behavior of taking interrupts at instruction boundaries
+
+9. **Fixed PIT to actually generate IRQ0** ✅
+   - Bug: `tick()` was a complete stub — did nothing
+   - Fix: Channel 0 now counts down on each tick and calls `machine.triggerIRQ(0)` when count reaches 0
+   - Counter reloads from the written value after firing
+   - Typical kernel setup writes count to PIT channel 0, then HLTs; PIT IRQ0 wakes the CPU
+
+10. **Fixed PIC.triggerInterrupt to call CPU.handleInt** ✅
+    - Bug: Was a TODO stub — just logged the vector but never delivered the interrupt
+    - Fix: Now calls `this.machine.cpu.handleInt(vector)` directly when IF=1
+    - The PIC's `checkInterrupts()` → `triggerInterrupt()` → `cpu.handleInt()` chain is now functional
+
+11. **Fixed machine execution loop to handle halted CPU** ✅
+    - Bug: When CPU halted (from HLT), the machine stopped calling BOTH `cpu.step()` AND `pit.tick()`
+    - This meant the PIT could never fire an IRQ to wake the CPU
+    - Fix: `pit.tick()` is called BEFORE `cpu.step()` in the loop, and the loop continues running while the CPU is halted, checking `cpu.halted` to determine whether to break
+    - When PIT fires and CPU wakes up (via `handleInt` clearing `halted`), execution resumes normally
+
+12. **Fixed MMIO address string-vs-number bug in memory.js** ✅
+    - Bug: `for (let deviceAddr in this.mmioDevices)` yields string keys, so `deviceAddr + device.size` performed string concatenation (e.g. `"753664" + 4000 = "7536644000"`)
+    - The numeric comparison `physAddr < "7536644000"` then compared against a wildly inflated value (7.5 billion instead of 757,664)
+    - This caused out-of-range memory writes (e.g. stack pushes at 0xFFFFFFFC) to match the VGA MMIO device
+    - The MMIO callback then called `this.vga.write()` which didn't exist, crashing with "not a function"
+    - Fix: Added `const addr = Number(deviceAddr)` and used numeric `addr` for all comparisons and arithmetic
+    - Applied to both `read8()` and `write8()` — the same bug existed in both
+
+### Test Results
+
+```
+Passed: 149
+Failed: 0
+Total:  149
+```
+
+- 12 new tests added (JCXZ x2, far jump, PUSH/POP seg regs x4, SAHF, LAHF, PIT→IRQ0, PIC→CPU interrupt, HLT wake-up)
+- Up from 137 in previous session
+
+### Code Changes
+
+**`hardemu/x86cpu.js`:**
+- Added 0xEA (far jump), 0xE3 (JCXZ), 0x9E (SAHF), 0x9F (LAHF)
+- Added PUSH seg regs (0x06, 0x0E, 0x16, 0x1E) and POP seg regs (0x07, 0x17, 0x1F)
+- HLT: added `this.regs.eip++` before halting
+- handleInt: added `this.halted = false` to wake CPU from HLT
+- handleInt: fixed IDT offset: `(high << 16)` → `(high & 0xFFFF0000)`
+- step(): added `checkInterrupts()` call before instruction decode
+- step(): halted check now checks PIC directly for pending IRQs
+
+**`hardemu/memory.js`:**
+- read8(): Convert `deviceAddr` to `Number()` before comparison and arithmetic
+- write8(): Convert `deviceAddr` to `Number()` before comparison and arithmetic
+
+**`hardemu/machine_x86.js`:**
+- PIT.tick(): Channel 0 counts down and fires `machine.triggerIRQ(0)` at zero
+- PIC.triggerInterrupt(): Actually calls `cpu.handleInt(vector)` instead of being a stub
+- executionLoop(): Ticks PIT before CPU step, continues running while CPU is halted (checks `cpu.halted`)
+
+**`webulator/test.js`:**
+- Added 12 new tests across CPU Control Flow, CPU Flags, CPU Segment Registers, Machine Integration
+- Fixed PIT tick test to check ISR instead of IRR (IRR is cleared on delivery)
+
+### 🔍 DISCOVERED THIS SESSION:
+- **MMIO deviceAddr is a string**: `for (let deviceAddr in this.mmioDevices)` from a plain object gives string keys, causing `+ device.size` to do string concatenation
+- **PIC.triggerInterrupt was a stub**: The entire interrupt delivery chain from PIT→PIC→CPU was non-functional
+- **HLT must advance EIP**: Unlike most instructions, HLT halts without advancing — but the saved EIP on interrupt should point to the NEXT instruction, not HLT itself
+- **handleInt and loadIDTEntry used different formulas** for the same IDT offset calculation
+- **ESLint-type bugs in JS**: String-vs-number mixup in object iteration is hard to spot
+
+---
+
+## Current Status (End of Session)
+
+### ✅ COMPLETED:
+- **149 tests, 0 failures** (up from 137)
+- **All known CPU opcodes implemented** — no more unhandled opcode errors
+- **Interrupt chain is functional**: PIT generates IRQ0 → PIC delivers to CPU → CPU wakes from HLT → handler executes → IRET returns correctly
+- **Boot sector critical opcodes added**: far jump (0xEA), segment register PUSH/POP, JCXZ, SAHF/LAHF
+- **MMIO string-vs-number bug fixed** in both read8/write8
+- **Post-HLT bug resolved**: HLT advances EIP, handleInt clears halted, PIC delivers interrupts properly
+
+### 🚧 REMAINING:
+- Extended opcodes: 0x0F 0x00 (Group 6/7: SLDT/STR/LLDT/LTR/VERR/VERW), 0x0F 0x08 (INVD)
+- I/O string instructions: 0x6C-0x6F (INSB/INSD/OUTSB/OUTSD)
+- Implement keyboard IRQ delivery from PS/2 controller
+- Port test tool to also run in-browser for live component validation
+
+---
+
+## Session Learnings
+
+### 2026-06-07 (Part 3) — Interrupt Chain
+- **`for...in` on plain objects yields string keys**: Always use `Number()` or `parseInt()` when doing arithmetic with property keys from `for...in` iteration
+- **Interrupt delivery has 3 stages**: PIT (timer) → PIC (controller) → CPU (handler), each must be correctly wired
+- **HLT semantics**: HLT saves EIP of the NEXT instruction (increment before halting), not HLT itself
+- **PIC checkInterrupts is atomic**: It clears IRR and sets ISR in the same call — you can't observe IRR after delivery
+- **Machine state vs CPU state**: The machine's `halted` flag and the CPU's `halted` flag can differ — prefer checking `cpu.halted` for consistent behavior
+- **IDT entry parsing**: The x86 IDT packs offset[15:0] in bytes 0-1 and offset[31:16] in bytes 6-7 of the 8-byte entry; little-endian read puts them at opposite ends of the two dwords
+
+---
+
 ## Long-term Goals
 
 - Get kernel to fully execute without unimplemented opcodes ✅ (NO MORE UNHANDLED OPCODES!)

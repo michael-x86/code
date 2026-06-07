@@ -417,11 +417,26 @@ class X86CPU {
         this.regs.eip = offset;
     }
     
+    // Check PIC for pending interrupts; take one if IF=1
+    checkInterrupts() {
+        if (this.pic && this.getFlag('IF')) {
+            this.pic.checkInterrupts();
+        }
+    }
+
     // Execute one instruction
     // Returns: cycles consumed (0 on error/halt)
     step() {
+        // When halted, check for pending IRQs to wake up
         if (this.halted) {
-            return 0;
+            if (this.pic) {
+                const pending = this.pic.master.irr & ~this.pic.master.imr & ~this.pic.master.isr;
+                if (pending) {
+                    this.halted = false;
+                    this.checkInterrupts();
+                }
+            }
+            if (this.halted) return 0;
         }
         
         let cycles = 0;
@@ -431,6 +446,9 @@ class X86CPU {
             console.log(`Breakpoint hit at 0x${this.regs.eip.toString(16)}`);
             return 0;
         }
+        
+        // Check pending interrupts before executing each instruction
+        this.checkInterrupts();
         
         // Decode and execute
         try {
@@ -504,6 +522,7 @@ class X86CPU {
         // SPECIAL HANDLING FOR HLT (0xF4) - before switch to ensure it's caught
         if (opcode === 0xF4) {
             console.log('HLT: Halting CPU');
+            this.regs.eip++;  // Advance past HLT so interrupt save returns to next instruction
             this.halted = true;
             return 0;
         }
@@ -621,6 +640,18 @@ class X86CPU {
                 this.regs.eip += (rel32 & 0x80000000) ? (rel32 | 0xFFFFFFFF80000000) : rel32;
                 return 7;  // JMP rel32 = 7 cycles
             }
+            case 0xEA: {
+                // JMP far ptr16:32 (direct far jump)
+                // opcode 0xEA, offset (32-bit), selector (16-bit)
+                this.regs.eip++;
+                const offset32 = this.readMem(this.regs.eip, 4);
+                this.regs.eip += 4;
+                const seg16 = this.readMem(this.regs.eip, 2);
+                this.regs.eip += 2;
+                this.regs.eip = offset32 >>> 0;
+                this.segregs.cs = seg16 & 0xFFFF;
+                return 10;  // JMP far = 10 cycles
+            }
             case 0xEB: {
                 this.regs.eip++;
                 const rel8 = this.readMem(this.regs.eip, 1);
@@ -676,6 +707,16 @@ class X86CPU {
                 this.regs.eip++;  // Skip rel8 (will be adjusted if jump taken)
                 this.regs.ecx = (this.regs.ecx - 1) >>> 0;
                 if (this.regs.ecx !== 0) {
+                    const offset = (rel8 & 0x80) ? (rel8 - 256) : rel8;
+                    this.regs.eip = (this.regs.eip + offset) >>> 0;
+                }
+                return 5;
+            }
+            case 0xE3: {  // JCXZ/JECXZ (jump if ECX=0)
+                this.regs.eip++;
+                const rel8 = this.readMem(this.regs.eip, 1);
+                this.regs.eip++;
+                if (this.regs.ecx === 0) {
                     const offset = (rel8 & 0x80) ? (rel8 - 256) : rel8;
                     this.regs.eip = (this.regs.eip + offset) >>> 0;
                 }
@@ -806,9 +847,31 @@ class X86CPU {
                 this.regs.eip += 4;
                 const oldEax = this.regs.eax;
                 this.regs.eax = (this.regs.eax + imm32) >>> 0;
-                this.setFlag('CF', (oldEax >>> 0) + (imm32 >>> 0) > 0xFFFFFFFF);
+                this.setFlag('CF', (oldEax >>> 0) > (0xFFFFFFFF - (imm32 >>> 0)));
                 this.updateArithmeticFlags(this.regs.eax, oldEax, imm32, undefined, false);
                 return 2;
+            }
+                
+            // PUSH ES (0x06), PUSH SS (0x16), PUSH DS (0x1E), PUSH CS (0x0E)
+            case 0x06: case 0x0E: case 0x16: case 0x1E: {
+                const segMap = { 0x06: 'es', 0x0E: 'cs', 0x16: 'ss', 0x1E: 'ds' };
+                const segName = segMap[opcode];
+                const segValue = this.segregs[segName] & 0xFFFF;
+                this.regs.esp -= 4;
+                this.writeMem(this.regs.esp, segValue, 4);
+                this.regs.eip++;
+                return 2;
+            }
+                
+            // POP ES (0x07), POP SS (0x17), POP DS (0x1F)
+            case 0x07: case 0x17: case 0x1F: {
+                const segMap = { 0x07: 'es', 0x17: 'ss', 0x1F: 'ds' };
+                const segName = segMap[opcode];
+                const value = this.readMem(this.regs.esp, 4) & 0xFFFF;
+                this.regs.esp += 4;
+                this.segregs[segName] = value;
+                this.regs.eip++;
+                return 4;
             }
             
             // OR AL, imm8 (0x0C) - short form for AL
@@ -1018,6 +1081,21 @@ class X86CPU {
                 this.regs.esp += 4;
                 this.regs.eip++;
                 return 3;
+            }
+            case 0x9E: {
+                // SAHF - Store AH into FLAGS (low 8 bits of EFLAGS)
+                const ah = (this.regs.eax >> 8) & 0xFF;
+                const oldEflags = this.eflags;
+                this.eflags = (this.eflags & 0xFFFFFF00) | (ah & 0xD5) | 0x02;
+                this.regs.eip++;
+                return 2;
+            }
+            case 0x9F: {
+                // LAHF - Load FLAGS into AH (low 8 bits of EFLAGS)
+                const flagsLow = this.eflags & 0xFF;
+                this.regs.eax = (this.regs.eax & 0xFFFF00FF) | ((flagsLow & 0xD5) << 8);
+                this.regs.eip++;
+                return 2;
             }
             
             // INT 3 (0xCC) - Breakpoint interrupt (3 cycles)
@@ -2923,6 +3001,9 @@ class X86CPU {
     
     // Handle INT (software interrupt)
     handleInt(intNum) {
+        // Wake CPU from HLT when interrupt arrives
+        this.halted = false;
+        
         if (this.debug) {
             console.log(`INT 0x${intNum.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
         }
@@ -2956,7 +3037,7 @@ class X86CPU {
             const low = this.readMem(idtEntryAddr, 4);
             const high = this.readMem(idtEntryAddr + 4, 4);
             
-            const offset = (high << 16) | (low & 0xFFFF);
+            const offset = ((high & 0xFFFF0000) | (low & 0xFFFF)) >>> 0;
             const selector = (low >> 16) & 0xFFFF;
             
             this.segregs.cs = selector;

@@ -152,22 +152,24 @@ class X86Machine {
     
     // Execution loop (called every 16ms)
     executionLoop() {
-        if (!this.running || this.halted) return;
+        if (!this.running) return;
         
         const startTstates = this.tstates;
         
         // Execute instructions until we've used our T-state budget
         while (this.tstates - startTstates < this.tstatesPerInterval) {
+            // Always tick PIT even when CPU is halted (may wake CPU via IRQ)
+            this.pit.tick();
+            
             const cycles = this.cpu.step();
             if (cycles === 0) {
                 // CPU halted or error
-                this.halted = true;
-                break;
+                this.halted = this.cpu.halted;
+                if (this.halted) break;
+                // CPU woke up (interrupt delivered), continue executing
+                continue;
             }
             this.tstates += cycles;  // Add actual cycles from CPU
-            
-            // Handle PIT timer (decrement counters)
-            this.pit.tick();
         }
         
         // Render VGA if dirty
@@ -178,7 +180,7 @@ class X86Machine {
     
     // Step one instruction
     step() {
-        if (this.halted) return;
+        this.halted = false;
         const cycles = this.cpu.step();
         if (cycles > 0) {
             this.tstates += cycles;
@@ -516,12 +518,8 @@ class PIC8259A {
     }
     
     triggerInterrupt(vector) {
-        // TODO: Actually trigger interrupt on CPU
-        // This requires calling CPU's interrupt handler
         if (this.machine.cpu && this.machine.cpu.getFlag('IF')) {
-            // Interrupts enabled
-            // TODO: Push EFLAGS, CS, EIP; load IDT entry
-            console.log(`IRQ triggered: vector 0x${vector.toString(16)}`);
+            this.machine.cpu.handleInt(vector);
         }
     }
 }
@@ -536,9 +534,9 @@ class PIT8254 {
         
         // PIT channels
         this.channels = [
-            { mode: 3, count: 0, output: false },  // Channel 0 (IRQ0)
-            { mode: 3, count: 0, output: false },  // Channel 1
-            { mode: 3, count: 0, output: false },  // Channel 2
+            { mode: 3, count: 0, reload: 0, ticking: false },  // Channel 0 (IRQ0)
+            { mode: 3, count: 0, reload: 0, ticking: false },  // Channel 1
+            { mode: 3, count: 0, reload: 0, ticking: false },  // Channel 2
         ];
         
         this.init();
@@ -549,7 +547,8 @@ class PIT8254 {
         for (let ch of this.channels) {
             ch.mode = 3;
             ch.count = 0;
-            ch.output = false;
+            ch.reload = 0;
+            ch.ticking = false;
         }
     }
     
@@ -560,16 +559,16 @@ class PIT8254 {
     write(port, value) {
         const channel = port - 0x40;
         if (channel < 3) {
-            // Write count value
-            this.channels[channel].count = value;
-            // TODO: Start counting, trigger IRQ0 on overflow
+            const ch = this.channels[channel];
+            ch.count = value;
+            ch.reload = value;
+            ch.ticking = true;
         }
     }
     
     read(port) {
         const channel = port - 0x40;
         if (channel < 3) {
-            // Read current count (simplified)
             return this.channels[channel].count;
         }
         return 0;
@@ -577,9 +576,13 @@ class PIT8254 {
     
     // Tick PIT (called every instruction)
     tick() {
-        // Simplified: Just trigger IRQ0 periodically
-        // In real PIT, this would count down based on clock frequency
-        // For now, we'll rely on the machine's timing
+        const ch = this.channels[0];
+        if (!ch.ticking || ch.count === 0) return;
+        ch.count--;
+        if (ch.count === 0) {
+            this.machine.triggerIRQ(0);
+            ch.count = ch.reload;
+        }
     }
 }
 

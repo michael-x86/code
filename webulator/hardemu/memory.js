@@ -69,8 +69,9 @@ class X86Memory {
         // Check MMIO
         for (let deviceAddr in this.mmioDevices) {
             const device = this.mmioDevices[deviceAddr];
-            if (physAddr >= deviceAddr && physAddr < deviceAddr + device.size) {
-                return device.read(physAddr - deviceAddr, 1);
+            const addr = Number(deviceAddr);
+            if (physAddr >= addr && physAddr < addr + device.size) {
+                return device.read(physAddr - addr, 1);
             }
         }
         
@@ -125,8 +126,9 @@ class X86Memory {
         // Check MMIO
         for (let deviceAddr in this.mmioDevices) {
             const device = this.mmioDevices[deviceAddr];
-            if (physAddr >= deviceAddr && physAddr < deviceAddr + device.size) {
-                device.write(physAddr - deviceAddr, value, 1);
+            const addr = Number(deviceAddr);
+            if (physAddr >= addr && physAddr < addr + device.size) {
+                device.write(physAddr - addr, value, 1);
                 return;
             }
         }
