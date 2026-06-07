@@ -22,6 +22,17 @@ $('#uart-cols').val(UART_SIZE.cols);
 $('#uart-rows').val(UART_SIZE.rows);
 terminal.open(document.getElementById('terminal'));
 
+// Forward terminal input to emulator's PS/2 keyboard
+terminal.onData((data) => {
+    if (!machine || !machine.keyboard) return;
+    for (const ch of data) {
+        const key = ch === '\r' ? 'Enter' : ch === '\x7f' ? 'Backspace' : ch;
+        machine.keyboard.handleKeyEvent(key, true);
+        machine.keyboard.handleKeyEvent(key, false);
+    }
+    $('#screen').focus();
+});
+
 document.addEventListener('keydown', function(event) {
     var handled = false;
     const binding = {
