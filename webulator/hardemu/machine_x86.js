@@ -164,8 +164,13 @@ class X86Machine {
             this.pit.tick();
             
             if (this.cpu.halted) {
-                // CPU is halted — keep ticking PIT so it can wake the CPU via IRQ
-                this.tstates++;
+                // CPU is halted — let step() check for pending IRQs that may wake it
+                const cycles = this.cpu.step();
+                if (cycles > 0) {
+                    this.tstates += cycles;
+                } else {
+                    this.tstates++;
+                }
                 continue;
             }
             
