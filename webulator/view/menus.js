@@ -8,10 +8,11 @@ $("#clean").on("click",    () => {
 });
 
 $("#speed-slider").on("input", function() {
-    const val = parseInt($(this).val());
-    $("#speed-label").text(val + 'x');
+    const div = parseInt($(this).val());
+    const freq = (10000000 / div) / 1000000;
+    $("#speed-label").text(freq.toFixed(div >= 20 ? 0 : 1) + ' MHz');
     if (machine) {
-        machine.speedDivider = val;
+        machine.speedDivider = div;
         if (machine.running) {
             machine.stop();
             machine.start();
@@ -111,6 +112,7 @@ $('#container .close').on('click', () => {
 jQuery(() => {
     $('#continue').hide();
     $('#pause').show();
+    $('#speed-slider').trigger('input');
 
     let menus = JSON.parse(localStorage.getItem('menus')) ?? {};
     Object.entries(menus).map((entry) => {
