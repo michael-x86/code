@@ -2981,6 +2981,16 @@ class X86CPU {
             operand = this.readMem(operandAddr, isByteOp ? 1 : 4);
         }
         
+        // TEST (reg=0 or reg=1) — r/m AND imm, flags only, no store
+        if (reg === 0 || reg === 1) {
+            const imm = this.readMem(this.regs.eip, isByteOp ? 1 : 4);
+            this.regs.eip += isByteOp ? 1 : 4;
+            const mask = isByteOp ? 0xFF : 0xFFFFFFFF;
+            const result = (operand & imm) & mask;
+            this.updateArithmeticFlags(result, 0, 0, 0, isByteOp);
+            return isByteOp ? 4 : 2;
+        }
+        
         // NOT (reg=2) and NEG (reg=3) — work for both 8 and 32-bit
         if (reg === 2) {
             // NOT r/m — bitwise complement, no flags affected
