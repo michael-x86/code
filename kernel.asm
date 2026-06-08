@@ -1061,28 +1061,6 @@ free_pages:
     ret
 
 
-; --------------------
-; in:               
-;   esi -> string   
-; out:              
-;   edx integer     
-; --------------------
-sys_asc2int:      
-    xor edx, edx
-.loop:
-    movzx eax,byte[esi]
-    test al,al
-    jz .done
-    cmp al,' '
-    je .done
-    sub eax,'0'
-    imul edx,edx,10
-    add edx,eax
-    inc esi
-    jmp .loop
-.done:
-    ret
-
 ; -------------------
 ; in:             
 ;   esi: -> string
@@ -1133,35 +1111,28 @@ sys_hex2int:
 .done_hex:
     ret
 
-
-;-------------------
-; in:
-;    esi -> string     
-; out: 
-;    eax = integer
-;-------------------
-sys_atoi:
-    push ebx           
-    push ecx      
-    xor eax,eax       
-    xor ecx,ecx      
-.next_char:
-    mov cl,[esi]     ; Load the current byte 
-    inc esi          
-    test cl,cl       ; null terminator 
-    jz .done         
-    sub cl,'0'       ; Subtract 48 
-    jl .done        
-    cmp cl, 9         
-    jg .done
-               ; eax=(eax*10)+ecx
-    imul eax,eax,10   ; eax=eax*10
-    add eax,ecx       ; eax=eax+digit
-    jmp .next_char    ; next 
+   
+; --------------------
+; in:            
+;   esi -> string 
+; out:            
+;   edx integer          
+; --------------------   
+sys_asc2int:             
+    xor edx, edx
+.loop: 
+    movzx eax,byte[esi]
+    test al,al
+    jz .done
+    cmp al,' '
+    je .done
+    sub eax,'0'
+    imul edx,edx,10
+    add edx,eax      
+    inc esi
+    jmp .loop
 .done:
-    pop ecx             
-    pop ebx         
-    ret      
+    ret
 
 ;----------------------------
 ; in:
@@ -2861,13 +2832,16 @@ sys_plot:
     cmp eax,3      
     jl .usage
     mov esi,[argv+4]
-    call sys_atoi
-    mov edx,eax
-    cmp edx,80
+    call sys_asc2int  
+    mov ecx,edx
+    cmp eax,80
     jge .usage
 
     mov esi,[argv+8]
-    call sys_atoi
+    call sys_asc2int
+
+    mov eax,edx
+    mov edx,ecx
     mov ecx,eax
 
     imul ecx,80         
@@ -3477,8 +3451,8 @@ freq_cmd:
     jl .usi
     mov esi,[argv+4]
     call sys_asc2int              ; EDX = frequency
-    cmp edx,1000
-    jl .usi
+    cmp edx,20
+    jg .usi
     mov edx,50
 .usi:
     mov edi,edx
@@ -3611,7 +3585,7 @@ syscall_table:
     dd sys_mkdir         ; 20: esi = path  
     dd sys_rmdir         ; 21: esi = path 
     dd sys_ps_info       ; 22: ebx = dst ptr 
-    dd sys_stack_dump    ; 23: 
+    dd sys_stack_dump    ; 23: print top of stack
     dd sys_alloc         ; 24: in = <bytes> -> page ptr 
     dd sys_dealloc       ; 25: in = <page ptr> 
     dd sys_peek          ; 26: in = <address> 
@@ -3620,13 +3594,12 @@ syscall_table:
     dd sys_banner        ; 29: print banner
     dd sys_bounce        ; 30: funtime
     dd sys_bin2hex       ; 31: in = /bin/file out=hex
-    dd sys_mem_dump      ; 32: in: esi -> address. out: print 64 bytes 
+    dd sys_mem_dump      ; 32: in = esi -> address. out: print 64 bytes 
     dd sys_hex_byte      ; 33: print hex byte
-    dd sys_asc2int       ; 34: in: esi -> string. out: edx integer
+    dd sys_asc2int       ; 34: in = esi->string out=edx
     dd sys_hertz         ; 35: print current hertz
     dd sys_tick          ; 36: print heartbeats
-    dd sys_plot          ; 37: 'plot' block at ecx edx 
-    dd sys_atoi          ; 38: ascii to integer 
+    dd sys_plot          ; 37: set block at ecx edx 
 SYSCALL_COUNT equ ($-syscall_table)/4
 
 ;---- Keycode -> ASCII Convertion ----
