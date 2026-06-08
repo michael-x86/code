@@ -5,7 +5,7 @@
 ; michael@nordstedt.eu
 
 ; Constants for memory management and segments
-KERNEL_SECTORS  equ 0x71
+KERNEL_SECTORS  equ 0x7F
 KERNEL_LOAD_SEG   equ 0x1000     
 KERNEL_LOAD_ADDR  equ 0x00100000  ; 1 MB (safe, below 4 MB)
 CODE_SEG          equ 0x08        ; Offset - code segment in GDT

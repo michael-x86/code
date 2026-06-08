@@ -6,9 +6,9 @@ KERNEL_ASM="kernel.asm"
 IMG="os.img"
 
 # Programs to compile
-COMMANDS=(cls up exit help dump alloc dealloc poke peek 
-          ps vi pwd ls cd ping cat touch write 
-          rm rmdir mkdir cp mv)
+COMMANDS=(bounce cursor plot cls up exit help alloc dealloc rm
+          poke peek ps vi pwd ls cd ping cat touch write verify
+          rm rmdir mkdir cp mv bindump regdump memdump)
 
 RUN_QEMU=false
 FULLSCREEN=false
@@ -32,6 +32,7 @@ EOF
     esac
 done
 
+rm -f bin/* 
 mkdir -p etc bin proc var/log
 echo "root:x:0:0:root:/root:/bin/bash" > etc/passwd
 echo "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin" >> etc/passwd
@@ -45,20 +46,20 @@ echo "model family   : Skynet" >> proc/cpuinfo
 echo "stepping       : Version 2.4" >> proc/cpuinfo
 echo "flags          : learning infiltration phased-plasma" >> proc/cpuinfo
 
-echo "MemTotal:        33554432 kB
-MemFree:          8388608 kB
-MemAvailable:    16777216 kB
+echo "MemTotal:         33554432 kB
+MemFree:           8388608 kB
+MemAvailable:     16777216 kB
 Buffers:           1048576 kB
 Cached:            4194304 kB
 SwapCached:              0 kB
 
-NeuralNetCache:   2097152 kB
-TargetProfiles:    524288 kB
-SkynetReserved:   8388608 kB
-ThreatAnalysis:    realtime
+NeuralNetCache:    2097152 kB
+TargetProfiles:     524288 kB
+SkynetReserved:    8388608 kB
+ThreatAnalysis:      realtime
 
-KernelPanic:             no
-JudgmentDay:        inevitable" > proc/meminfo
+KernelPanic:               no
+JudgmentDay:       inevitable" > proc/meminfo
 
 echo "2026-05-15T18:30:20 SunOS Process 'windows' [666] dumped core: signal 11" > var/log/kern.log
 echo "2002-10-06T23:58:57 Solaris7 I'm sorry Dave, I can't do that..." > var/log/messages
@@ -129,6 +130,7 @@ echo "Build complete: $IMG ($(stat -c%s "$IMG") bytes)"
 echo ""
 rm -f kernel.bin bootloader.bin
 rm -f  fs.inc
+rm -rf var proc etc/
 if [[ "$RUN_QEMU" == true ]]; then
     QEMU_ARGS=(
         -drive format=raw,file="$IMG",index=0,if=ide

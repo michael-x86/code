@@ -22,9 +22,8 @@ NAME_LEN  = 56
 CAPACITY  = 1024
 SPARE     = 16   # free slots for runtime-created files
 
-default_dirs = ["/", "/bin", "/proc", "/var", "/var/log", "/usr","/dev","/lib","/etc"]
-scan = [("bin", "exec"), ("proc", "file"), ("var/log", "file"),
-        ("usr","file"), ("dev","file"), ("lib","file"), ("etc","file")]
+default_dirs = ["/", "/bin", "/proc", "/var", "/var/log", "/etc"]
+scan = [("bin", "exec"), ("proc", "file"), ("var/log", "file"), ("etc","file")]
 
 entries = []   # (vpath, kind, host_path|None)
 for d in default_dirs:
