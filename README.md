@@ -107,13 +107,23 @@ Programs are capped at 4 KB. — `resb` will zero-fill in flat-binary mode and i
 | 19 | unlink    | esi = path                 | 0 / -1                           |
 | 20 | mkdir     | esi = path                 | 0 / -1                           |
 | 21 | rmdir     | esi = path                 | 0 / -1                           |
-| 22 | ps        |                            | current processes                |
-| 23 | dump      |                            | stack and regsisters             |
-| 24 | alloc     | esi = path                 | ptrs to allocs                   |
-| 25 | dealloc   | esi = path                 | 0 / -1                           |
-| 26 | peek      | addr                       | dword at [addr]                  |
-| 27 | poke      | addr value                 |                                  |
-| 28 | hex2int   | esi -> string              | integer eax                      | 
+| 22 | ps_info   |                            |                                  |
+| 23 | stack_dump|                            |                                  |
+| 24 | alloc     |                            | <bytes> -> page ptr              |
+| 25 | dealloc   |                            | <page ptr>                       |
+| 26 | peek      |                            | <address>                        |
+| 27 | poke      |                            | <address> <value>                |
+| 28 | hex2int   |                            | esi->string out=eax              |
+| 29 | banner    |                            | print banner                     |
+| 30 | bounce    |                            | C64 oldie                        |
+| 31 | bin2hex   |                            | /bin/file out=hex                |
+| 32 | mem_dump  |                            | esi -> address                   |
+| 33 | hex_byte  |                            | print hexbyte                    |
+| 34 | empty     |                            | not in use                       |
+| 35 | hertz     |                            | print current hertz              |
+| 36 | tick      |                            | print heartbeats                 |
+| 37 | plot      |                            | put a block at ecx edx           |
+| 38 | atoi      |                            | string=esi integer=eax           |
 Syscalls run with interrupts off (interrupt gate), so the PIT cannot preempt them.
 
 ## How persistence "works"
