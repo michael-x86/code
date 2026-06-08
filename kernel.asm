@@ -3454,12 +3454,13 @@ freq_cmd:
     cmp eax,2
     jl .usi
     mov esi,[argv+4]
-    call sys_atoi              ; EDX = frequency
-    cmp eax,1000
-    jl .usi
-    mov edx,50
+    call sys_atoi           
+    cmp eax,50
+    jg .usi
+    mov eax,50
 .usi:
-    mov edi,edx
+    mov edx,eax
+    mov edi,eax
     mov [hz],edx
     mov esi,edx
     xor edx,edx      ; clear dividend
