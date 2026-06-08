@@ -5,13 +5,13 @@ _start:
     call .get_base
 .get_base:
     pop ebp
-    sub ebp, .get_base          ; Calculate runtime delta offset
+    sub ebp, .get_base        
 
-    ; --- SYSCALL 22 (sys_get_ps_info) ---
-    lea ebx,[ebp+ps_buffer]  ; pointer to local scratch buffer
+    ; --- sys_get_ps_info ---
+    lea ebx,[ebp+ps_buffer]  ; local scratch buffer
     mov eax,22             
     int 0x80
-    cmp eax,-1               ; Did the kernel reject it?
+    cmp eax,-1          
     je .done
 
     ; --- System Header ---
@@ -63,7 +63,7 @@ _start:
     ret
 
 print_user_state:
-    mov edx,[ebp+ps_buffer+0] ; Extract current_task index from kernel snapshot
+    mov edx,[ebp+ps_buffer+0] ; Extract from kernel snapshot
     cmp edx,ecx
     je .running
     lea esi,[ebp+sleeping_lbl]
@@ -88,4 +88,4 @@ running_lbl:  db "   RUNNING", 13, 0
 
 section .bss
 alignb 4
-ps_buffer:    resd 4            ; 16 bytes matching the kernel structure payload
+ps_buffer:    resd 4       ; 16 bytes =  kernel struct payload

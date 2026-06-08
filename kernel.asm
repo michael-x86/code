@@ -1,11 +1,7 @@
 [org 0xC0100000]
 
-CODE_SEG equ 0x08   ; Offset - code seg in GDT
-DATA_SEG equ 0x10   ; Offset - data seg in GDT
-
 ; I would be happy if you allowed my contact details to remain.
 ; Best regards,
-; Michael
 ; michael@nordstedt.eu
 
 global start
@@ -14,7 +10,7 @@ bits 32
 
 start:
     cli
-    mov ax,DATA_SEG
+    mov ax,0x10     ; DATA_SEG (GDT)
     mov ds,ax
     mov es,ax
     mov ss,ax
@@ -24,7 +20,7 @@ start:
     call .get_pc
 .get_pc:
     pop ebp            
-    sub ebp,.get_pc   ; nice
+    sub ebp,.get_pc  
 
     ; --- physical stack ---
     lea esp,[stack_top+ebp] 
@@ -220,7 +216,8 @@ kernel_main:
     call set_syscall
     lidt [idt_descriptor]
     call pic_remap
-    call set_freq       ; 100 hz. 
+    call set_freq       
+    call init_bounce 
 
     mov edi,cwd_buf
     mov ecx,128
@@ -230,8 +227,8 @@ kernel_main:
 
     call load_fs_persist
     call cls
-    call banner
-    mov eax,80*4
+    call sys_banner
+    mov eax,80*2
     mov [cursor_pos],eax
     call newline
     call prompt
@@ -269,7 +266,9 @@ task2_entry:
     cmp byte [tick_flag],0
     je .skip
     mov byte [tick_flag],0
-    call print_tick
+    call sys_banner
+    call sys_tick
+    call sys_hertz
 .skip:
     call get_key
     test al,al
@@ -313,6 +312,65 @@ task2_entry:
     hlt
     jmp task2_entry
 
+sys_hertz:
+    push eax
+    push edi
+    mov eax,[hz]
+    mov edi,0xC00B8000+(1*80+59)*2  ;NORD
+    call int2str
+    mov byte [edi],' '
+    add edi,2
+    mov byte [edi],'H'
+    mov byte [edi+1],0x0C
+    add edi,2
+    mov byte [edi],'z'
+    mov byte [edi+1],0x0C
+    add edi,2
+    mov byte [edi],' '
+    mov byte [edi+1],0x00
+    add edi,2
+    mov byte [edi],' '
+    mov byte [edi+1],0x00
+    add edi,2
+
+    pop edi
+    pop eax
+    ret
+    
+int2str:
+    push ebx
+    push ecx
+    push edx
+    push esi
+    mov ebx,10
+    xor ecx,ecx
+    test eax,eax
+    jnz .convert
+    mov byte [edi],'0'
+    add edi,2
+    jmp .done
+.convert:
+.repeat:
+    xor edx,edx
+    div ebx             ; EAX=quotient EDX=remainder
+    add dl,'0'
+    push edx
+    inc ecx
+    test eax,eax
+    jnz .repeat
+.print:
+    pop edx
+    mov [edi],dl
+    add edi,1
+    mov byte [edi],0x0C
+    add edi,1
+    loop .print
+.done:
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
 
 ;---  Parse ARGS  ---
 parse_args:
@@ -466,7 +524,6 @@ clear_cmdline:
 .done:
     popad
     ret
-;--------------------------------------
 
 
 ; -------------------------------------
@@ -540,7 +597,7 @@ delchar:
 putchar:
     push edi
     push edx
-    push eax
+    push eax 
     mov ebx,[cursor_pos]
     mov edx,0xC00B8000
     lea edi,[edx+ebx*2]
@@ -558,8 +615,8 @@ putchar:
     pop edx
     pop edi
     ret
-
-newline:
+    
+newline: 
     push eax
     push ebx
     push edx
@@ -573,8 +630,9 @@ newline:
     cmp eax,80*25
     jb .st
     call scroll
-    mov dword [cursor_pos],80*24
+    mov dword [cursor_pos],80*24  
 .st:
+    
     call cursor
     pop edx
     pop ebx
@@ -586,12 +644,13 @@ prompt:
     call putchar
     mov al,' '
     call putchar
-    mov [prompt_limit],ebx    ; ebx from putch  
+    mov [prompt_limit],ebx   
     ret
 
 cursor:
     push eax
     push edx
+    cmp [cursor_pos],edx
     mov dx,0x3D4
     mov al,0x0F
     out dx,al
@@ -645,10 +704,10 @@ print_cr:
 ; --------------------------------------
 ; Ego boost at boot - look what we built
 ; --------------------------------------
-banner:
+sys_banner:
     mov esi,sys_msg
-    mov edi,0xC00B8000+(2*80+0)*2
-    mov ah,0x02
+    mov edi,0xC00B8000+(0*80+0)
+    mov ah,0x03
 .next:
     lodsb
     test al,al
@@ -664,6 +723,7 @@ cls:
     mov eax,0x07200720     ; green+space
     rep stosd
     xor eax,eax
+    mov eax,80*3
     mov [cursor_pos],eax
     call cursor
     ret
@@ -673,9 +733,9 @@ scroll:
     push edi
     push ecx
     push eax
-    mov esi,0xC00B8000+160  
-    mov edi,0xC00B8000
-    mov ecx,80*24       
+    mov esi,0xC00B8000+(80*4)*2
+    mov edi,0xC00B8000+(80*3)*2
+    mov ecx,80*23
 .lp1:
     mov ax,[esi]
     mov [edi],ax
@@ -683,7 +743,7 @@ scroll:
     add edi,2
     loop .lp1
     mov ecx,80
-    mov ax,0x0720       
+    mov ax,0x0720
 .lp2:
     mov [edi],ax
     add edi,2
@@ -770,10 +830,10 @@ shutdown:
 
 ; --- print 8 hex digits at top-right ----
 ; Counting heartbeats of the system clock
-print_tick:
+sys_tick:
     pushad
     mov eax,[tick_count]
-    mov edi,0xC00B8000+(0*80+72)*2  
+    mov edi,0xC00B8000+(1*80+71)*2  
     mov ecx,8
 .next:
     mov edx,eax
@@ -784,6 +844,8 @@ print_tick:
     jbe .store
     add dl,7
 .store:
+    mov dh,0x07
+    mov dh,0x0C
     mov dh,0x07
     mov [edi],dx
     shl eax,4
@@ -800,7 +862,7 @@ init_tasks:
     sub eax,4
     mov dword [eax],0x202
     sub eax, 4
-    mov dword [eax],0x08
+    mov dword [eax],0x10
     sub eax, 4
     mov dword [eax],task0_entry
     sub eax,32
@@ -851,7 +913,7 @@ init_tasks:
     ret
 
 ;-----------------------------------------------------
-; first-fit scan of [heap_start,heap_end) for a
+; scan of [heap_start,heap_end) for a
 ; contiguous run of pages not overlapping any
 ; alloc_table entry.
 ; in:  
@@ -1005,7 +1067,7 @@ free_pages:
 ; out:              
 ;   edx integer     
 ; --------------------
-asc2int:      
+sys_asc2int:      
     xor edx, edx
 .loop:
     movzx eax,byte[esi]
@@ -1070,6 +1132,36 @@ sys_hex2int:
     jmp .parse
 .done_hex:
     ret
+
+
+;-------------------
+; in:
+;    esi -> string     
+; out: 
+;    eax = integer
+;-------------------
+sys_atoi:
+    push ebx           
+    push ecx      
+    xor eax,eax       
+    xor ecx,ecx      
+.next_char:
+    mov cl,[esi]     ; Load the current byte 
+    inc esi          
+    test cl,cl       ; null terminator 
+    jz .done         
+    sub cl,'0'       ; Subtract 48 
+    jl .done        
+    cmp cl, 9         
+    jg .done
+               ; eax=(eax*10)+ecx
+    imul eax,eax,10   ; eax=eax*10
+    add eax,ecx       ; eax=eax+digit
+    jmp .next_char    ; next 
+.done:
+    pop ecx             
+    pop ebx         
+    ret      
 
 ;----------------------------
 ; in:
@@ -1219,8 +1311,7 @@ map_page:
     pop edx
     ret
 
-
-print_hex_byte:
+sys_hex_byte:   
     push eax
     shr al,4
     and al,0x0F
@@ -1263,6 +1354,47 @@ print_hex_dword:
     pop eax
     ret
 
+sys_bin2hex:
+    push eax
+    push ecx
+    mov ecx,8
+.hloop:
+    rol dword [esp+4],4
+    mov al,byte [esp+4]
+    and al,0x0F
+    cmp al,9
+    jbe .num
+    add al,55
+    jmp .out
+.num:
+    add al,'0'
+.out:
+    call putchar
+    loop .hloop
+    pop ecx
+    pop eax
+    ret
+
+sys_mem_dump:
+    pushad
+    call newline
+    mov ecx,64        ; total bytes
+    mov edx,16        ; bytes per line
+.loop:
+    lodsb             ; esi ready
+    call sys_hex_byte
+    mov al,32  
+    call putchar
+    dec edx
+    jnz .skip_nl
+    call newline
+    mov edx,16
+.skip_nl:
+    loop .loop
+    popad
+    ret
+
+;----------------------------
 ;----------------------------
 ; in:  
 ;  eax=unsigned 32-bit 
@@ -1755,7 +1887,6 @@ tab_complete:
     mov al,[esi]
     test al,al
     jz .add_space
-    ; bounds check: cmd_buf is 64 bytes
     mov ebx,[cmd_len]
     cmp ebx,62
     jae .out
@@ -1937,7 +2068,7 @@ build_idt:
 .fill:
     mov eax,isr_default
     mov [edi],ax             ; low
-    mov word [edi+2],CODE_SEG 
+    mov word [edi+2],0x08    ; CODE_SEG 
     mov byte [edi+4],0
     mov byte [edi+5],10001110b
     shr eax,16
@@ -1958,7 +2089,7 @@ set_idt_entry:
 
     mov edx, eax
     mov word [edi+ebx*8+0],dx        ; offset low
-    mov word [edi+ebx*8+2],CODE_SEG  ; selector
+    mov word [edi+ebx*8+2],0x80  ; selector
     mov byte [edi+ebx*8+4],0
     mov byte [edi+ebx*8+5],10001110b 
     shr edx,16
@@ -1987,7 +2118,7 @@ page_fault_handler:
     call print_hex_dword
     call newline
     
-    mov edx,0x6666       ; outer loop (adjust for time)
+    mov edx,0x3333       ; outer loop (adjust for time)
 .outer:
     mov ecx,0xFFFF        ; inner loop
 .inner:
@@ -2282,7 +2413,7 @@ sys_print_n:                 ; esi=ptr, ecx=count -> eax=0
     xor eax,eax
     ret
 
-sys_get_arg:         ; ebx = index, edi = dst -> eax = 0 or -1
+sys_get_arg:         ; ebx = index out:  esi=dest 
     cmp ebx,[argc]
     jae .nf
     push esi
@@ -2578,7 +2709,7 @@ sys_alloc:
     cmp ecx,2
     jne .usage
     mov esi,[argv+4]
-    call asc2int
+    call sys_asc2int
     mov eax,edx
     test eax,eax
     jz .usage
@@ -2682,7 +2813,7 @@ sys_peek:
     mov ecx,4
 .loop:
     lodsb
-    call print_hex_byte
+    call sys_hex_byte
     mov al,' '
     call putchar
 .cont:
@@ -2724,18 +2855,146 @@ sys_poke:
     pop eax 
     ret
 
+sys_plot:
+    pushad
+    mov eax,[argc]
+    cmp eax,3      
+    jl .usage
+    mov esi,[argv+4]
+    call sys_atoi
+    mov edx,eax
+    cmp edx,80
+    jge .usage
 
-; tab completion stuff
+    mov esi,[argv+8]
+    call sys_atoi
+    mov ecx,eax
 
+    imul ecx,80         
+    add ecx,edx   
+    shl ecx,1            
+    call show_regs  
+    mov edi,0xC00B8000
+    add edi,ecx
+    mov byte [edi],0xDB
+    inc edi
+    mov byte [edi],0x06 
+    popad
+    ret
+.usage:
+    mov esi,plot_msg
+    call print_cr
+    popad
+    ret
+
+; -------------------------------------------
+; All work and no play makes Jack a dull boy
+; -------------------------------------------
+sys_bounce:
+    xor dword [on_off],1
+    ret
+
+init_bounce:
+    pusha
+    mov word [on_off],1
+    mov byte [xpos],40
+    mov byte [ypos],12
+    mov byte [dltx],1
+    mov byte [dlty],1
+    popa
+    ret
+
+bounce_step: 
+    call cls_chr 
+    call update_chr
+    call plot_chr
+    ret
+
+plot_chr:
+    pusha
+    mov al,[xpos]
+    mov ah,[ypos]
+    call calc_offset
+    mov ah,0x04
+    mov al,0x07 
+    mov [edi],ax
+    popa
+    ret
+
+cls_chr:
+    pusha
+    mov al,[xpos]
+    mov ah,[ypos]
+    call calc_offset
+    mov word [edi],0x0720  
+    popa
+    ret
+
+update_chr:
+    pusha
+    mov al,[xpos]
+    add al,[dltx]
+    cmp al,79
+    jg .x_right
+    cmp al,0 
+    jl .x_left
+    jmp .store_x
+.x_right:
+    mov al,79
+    neg byte [dltx]
+    jmp .store_x
+.x_left:
+    mov al,0 
+    neg byte [dltx]
+.store_x:
+    mov [xpos], al
+    mov al,[ypos]
+    add al,[dlty]
+    cmp al,24
+    jg .y_bottom
+    cmp al,0
+    jl .y_top
+    jmp .store_y
+.y_bottom:
+    mov al,24 
+    neg byte [dlty]
+    jmp .store_y
+.y_top:
+    mov al,0
+    neg byte [dlty]
+.store_y:
+    mov [ypos],al
+    popa
+    ret
+
+calc_offset:
+    push ebx
+    movzx ebx,ah        
+    imul ebx,160        ; y*80*2
+    movzx eax,al        
+    shl eax,1           ; x*2
+    add ebx,eax         
+    mov edi,0xC00B8000
+    add edi,ebx         ; gotcha
+    pop ebx
+    ret
+
+on_off: dd 0
+xpos    db 40
+ypos    db 12
+dltx    db 1
+dlty    db 1
+
+;---------------------
+; tab completions
+;---------------------
 basename_if_child:
     push ebx
     push edx
     push esi
     push edi
-    cmp byte [edi+1], 0
+    cmp byte [edi+1],0
     je .cwd_root      
-
-    ; non-root cwd — match as exact prefix
 .mp:
     mov al, [edi]
     test al,al
@@ -2802,9 +3061,12 @@ basename_if_child:
     pop ebx
     ret
 
-; in:  esi=str1 (null-term), edi=str2 (null-term)
-; out: eax = 0 if equal, 1 if not
-; preserves esi, edi
+; ------------------------------
+; in:  
+;    esi edi = stings (0 term.)
+; out: 
+;    eax = 0 if equal, 1 if not
+; ------------------------------
 str_eq:
     push esi
     push edi
@@ -2829,8 +3091,6 @@ str_eq:
     mov eax,1
     ret
 
-; in:  esi = absolute null-terminated path
-; out: eax = ptr to fs_entry, or 0
 fs_lookup:
     push ecx
     push edi
@@ -2860,19 +3120,13 @@ fs_lookup:
     pop ecx
     ret
 
-; in:  esi = path (may be absolute, ".", "..", or single-name relative)
-;      edi = dst buffer (>= 128 bytes)
-; out: writes absolute resolved path to dst (always succeeds syntactically)
-; preserves esi/edi
 fs_resolve:
     push eax
     push ebx
     push esi
     push edi
-
     cmp byte [esi],'/'
     je .abs
-
     cmp byte [esi],'.'
     jne .relative
     cmp byte [esi+1],0
@@ -2883,7 +3137,6 @@ fs_resolve:
     jne .relative
     ; ".."
     jmp .dotdot
-
 .dot:
     mov esi,cwd_buf
 .abs:
@@ -2941,7 +3194,6 @@ fs_resolve:
     stosb
     test al,al
     jnz .cp_name
-
 .done:
     pop edi
     pop esi
@@ -2949,9 +3201,9 @@ fs_resolve:
     pop eax
     ret
 
-; ---------------------------------------------------------
-;  exec_bin — fallback from devops commands
-; ---------------------------------------------------------
+; ------------------------------
+;  fallback from temp commands
+; ------------------------------
 exec_bin: 
     cmp dword [argc], 0
     je .silent
@@ -2963,7 +3215,7 @@ exec_bin:
     stosb
     test al,al
     jnz .cp_pref
-    dec edi                         ; back over null
+    dec edi                  
     mov esi,[argv]
 .cp_cmd:
     lodsb 
@@ -3045,7 +3297,6 @@ exec_bin:
     mov eax,[exec_vbase]
     mov ebx,[exec_pages]
     call register_allocation
-
     ; --- call binary entry point ---
     mov eax, [exec_vbase]
     call eax
@@ -3076,12 +3327,12 @@ exec_bin:
     ret
 
 .oom_mapped:
-    ; partial map: free whatever was mapped, fall through to oom msg
+    ; partial map: free whatever was mapped
     pop ebx
     pop esi
     mov eax,[exec_vbase]
     mov ebx,[exec_pages]
-    sub ebx,ecx                     ; pages successfully mapped
+    sub ebx,ecx          ; pages successfully mapped
     test ebx,ebx
     jz .oom
     call free_pages
@@ -3099,11 +3350,16 @@ exec_bin:
 
 irq0:
     pushad
+    test dword [on_off],1
+    jnz  .paused 
+    call bounce_step
+.paused:
     inc dword [tick_count]
     inc dword [tick_div]
     test dword [tick_div],1
     jnz .no_flag
     mov byte [tick_flag],1
+    
 .no_flag:
     mov eax,[current_task]
     inc eax
@@ -3125,17 +3381,17 @@ irq0:
     mov [task1_esp], esp
 .load:
     mov [current_task], eax
-    cmp eax, 0
+    cmp eax,0
     je .run0
-    cmp eax, 1
+    cmp eax,1
     je .run1
-    mov esp, [task2_esp]    ; main loop
+    mov esp,[task2_esp]    ; found it 
     jmp .done
 .run0:
-    mov esp, [task0_esp]
+    mov esp,[task0_esp]
     jmp .done
 .run1:
-    mov esp, [task1_esp]
+    mov esp,[task1_esp]
 .done:
     mov al, 0x20
     out 0x20, al
@@ -3146,28 +3402,16 @@ irq1:
     pushad
     in al,0x60
     mov bl,al
-    ; -------------------------
-    ; left/right shift press
-    ; -------------------------
     cmp bl,0x2A
     je .shift_on
     cmp bl,0x36
     je .shift_on
-    ; -------------------------
-    ; left/right shift release
-    ; -------------------------
     cmp bl,0xAA
     je .shift_off
     cmp bl,0xB6
     je .shift_off
-    ; -------------------------
-    ; ignore all key releases
-    ; -------------------------
     test bl,0x80
     jnz .done
-    ; -------------------------
-    ; store key press
-    ; -------------------------
     mov eax,[kbd_head]
     mov [kbd_buf+eax],bl
     inc eax
@@ -3193,6 +3437,12 @@ irq1:
 ;  Rewiring the interrupt controller's brain
 ; -------------------------------------------
 pic_remap:            
+    pusha 
+    in  al,0x21          ; enable timer irq
+    push ax
+    in  al,0xA1
+    push ax
+
     mov al,0x11
     out 0x20,al
     out 0xA0,al
@@ -3200,32 +3450,76 @@ pic_remap:
     out 0x21,al
     mov al,0x28          ; slave offset = 0x28
     out 0xA1,al
-    mov al,0x04
+    mov al,0x04          ; slave conndected to IRQ2
     out 0x21,al
-    mov al,0x02
-    out 0xA1,al
+    mov al,0x02          ; slave id
+
+    out 0x21,al
     mov al,0x01
     out 0x21,al
     out 0xA1,al
-    mov al,0b11111100   
-    out 0x21, al
-    mov al,0b11111111    ; disable slave completely
-    out 0xA1, al
+    pop ax
+
+    out 0xA1,al
+    pop ax
+    out 0x21,al
+    popa
+    ret
+
+freq_cmd:
+    push eax 
+    push ecx 
+    push edx 
+    push esi
+    mov edx,50
+    mov eax,[argc]
+    cmp eax,2
+    jl .usi
+    mov esi,[argv+4]
+    call sys_asc2int              ; EDX = frequency
+    cmp edx,1000
+    jl .usi
+    mov edx,50
+.usi:
+    mov edi,edx
+    mov [hz],edx
+    mov esi,edx
+    xor edx,edx      ; clear dividend
+    mov eax,1193182  ; dividend
+    mov ecx,esi      ; divisor
+    div ecx          ; eax = high, edx = low
+
+    mov al,0x36
+    out 0x43,al
+    mov dx,ax            
+    mov al,dl 
+    out 0x40,al          ; low byte
+    mov al,ah
+    out 0x40,al          ; high byte
+
+    pop esi
+    pop edx 
+    pop ecx 
+    pop eax 
     ret
 
 set_freq:
-    ; freq=1193182/divisor
-    ; 100 Hz -> divisor=11932
+    ; 1193182/50=23863 
+    ; 50 Hz 
     mov al,0x36
     out 0x43,al
-    mov ax,11932
+    mov ax,23863
     out 0x40,al          ; low byte
     mov al,ah
     out 0x40,al          ; high byte
     ret
 
-sys_msg   db "*** x86 Operating System (EFBEADDE) ***", 0
-
+sys_msg   db "----------------------------------------"
+          db "----------------------------------------"
+          db " *** x86 Operating System (EFBEADDE) ***"
+          db "       Core timer:                      "
+          db "----------------------------------------"
+          db "----------------------------------------",0
 deadbeef  db 0xDE,0xAD,0xBE,0xEF,0xDE,0xAD,0xBE,0xEF
 
 eax_lbl db "EAX: ",0
@@ -3254,6 +3548,9 @@ alloc_mem db "heap pointer  : 0x",0
 no_arg    db 13,'usage: alloc <bytes>',13,0
 poke_msg  db 13,"usage: poke <hex addr> <hex value>",13,0
 peek_msg  db 13,"usage: peek <hex addr>",13,0
+plot_msg  db 13,"usage: plot x y (0-79 x 0-24)" ,13,0   
+freq_msg  db " Hz."
+hz        dd 50,0
 
 in_bytes        db " bytes free",13,0
 free_usage_msg  db 13,"usage: free <hex addr>",13,0
@@ -3296,7 +3593,7 @@ syscall_table:
     dd sys_print_cr      ; 2 : esi = string ptr (CR aware)
     dd sys_newline       ; 3
     dd sys_cls           ; 4
-    dd sys_print_hex     ; 5 : ebx = value
+    dd sys_print_hex     ; 5 : ebx = value out=dword
     dd sys_print_int     ; 6 : ebx = value
     dd sys_get_key       ; 7 : -> eax = ascii (0 if none)
     dd sys_get_tick      ; 8 : -> eax = tick_count
@@ -3309,7 +3606,7 @@ syscall_table:
     dd sys_stat          ; 15: esi = path,edi = info(12B) 
     dd sys_print_n       ; 16: esi = ptr, ecx = count 
     dd sys_create        ; 17: esi = path 
-    dd sys_write         ; 18: esi = path,ebx = buf,ecx = n
+    dd sys_write         ; 18: esi = path,ebx=buf,ecx=n
     dd sys_unlink        ; 19: esi = path 
     dd sys_mkdir         ; 20: esi = path  
     dd sys_rmdir         ; 21: esi = path 
@@ -3319,7 +3616,17 @@ syscall_table:
     dd sys_dealloc       ; 25: in = <page ptr> 
     dd sys_peek          ; 26: in = <address> 
     dd sys_poke          ; 27: in = <address> <value> 
-    dd sys_hex2int       ; 28: in = edi->string out=eax
+    dd sys_hex2int       ; 28: in = esi->string out=eax
+    dd sys_banner        ; 29: print banner
+    dd sys_bounce        ; 30: funtime
+    dd sys_bin2hex       ; 31: in = /bin/file out=hex
+    dd sys_mem_dump      ; 32: in: esi -> address. out: print 64 bytes 
+    dd sys_hex_byte      ; 33: print hex byte
+    dd sys_asc2int       ; 34: in: esi -> string. out: edx integer
+    dd sys_hertz         ; 35: print current hertz
+    dd sys_tick          ; 36: print heartbeats
+    dd sys_plot          ; 37: 'plot' block at ecx edx 
+    dd sys_atoi          ; 38: ascii to integer 
 SYSCALL_COUNT equ ($-syscall_table)/4
 
 ;---- Keycode -> ASCII Convertion ----
@@ -3366,10 +3673,12 @@ keymap_shift:
 ;         dd address 
 ; final   db 0
 ; --------------------------------------------------
-cmd_table:             ; BBox Cmds
+cmd_table:            
     db "heap",0
     dd heap_cmd
-    db 0          ; end of BuzyBox
+    db "frequency",0
+    dd freq_cmd
+    db 0          ; end of Devops cmds
 
 ;---- in-kernel virtual filesystem ----
 %include "fs.inc"

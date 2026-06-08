@@ -4,7 +4,7 @@
 %define MODE_CMD        0
 %define MODE_INSERT     1
 %define BUF_MAX         1024
-%define VGA_BASE        0xC00B8000
+%define VGA_BASE        0xC00B8000+(80*2)*3
 
 _start:
     ; --- Calculate our Dynamic Base Offset ---
@@ -32,7 +32,7 @@ _start:
     ; Ensure it's a regular file (type == 1)
     lea edx, [ebp + info_buf]
     cmp dword [edx], 1
-    jne .isdir
+    jne .usage
 
     ; --- Load file into text buffer ---
     mov esi, [edx + 4]      ; file data pointer from stat
@@ -50,12 +50,14 @@ _start:
     mov dword [ebp + size_var], 0
 
 .ready:
-    mov dword [ebp + cursor_var], 0
+    mov dword [ebp + cursor_var],0
     mov dword [ebp + mode_var], MODE_CMD
 
 .loop:
     call render
 .poll:
+    mov eax,36
+    int 0x80                ; heartbeats
     mov eax, 7              ; sys_get_key
     int 0x80
     test al, al
@@ -147,11 +149,6 @@ _start:
     jmp .loop
 
 .usage:
-    lea esi, [ebp + usage_msg]
-    mov eax, 2
-    int 0x80
-    ret
-.isdir:
     lea esi, [ebp + usage_msg]
     mov eax, 2
     int 0x80
@@ -329,7 +326,10 @@ render:
     pushad
     mov eax, 4              ; clear screen
     int 0x80
-
+    mov eax,29
+    int 0x80                ; banner
+    mov eax,35
+    int 0x80                ; hertz
     lea esi, [ebp + hdr1]
     mov eax, 1              ; sys_print
     int 0x80
