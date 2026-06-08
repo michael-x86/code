@@ -7,10 +7,10 @@ _start:
     pop ebp           
     sub ebp,.get_base     
 
-    mov eax,26               ; sys_peek
+    mov eax, 7              ; sys_get_key
     int 0x80
-    mov eax,28               ; sys_peek
-    int 0x80
-    mov eax,2              
+    test al,al
+    
+    mov eax,23               ; sys_peek
     int 0x80
     ret

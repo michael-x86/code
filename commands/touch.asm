@@ -3,17 +3,20 @@
 [org 0x00000000]
 
 
-%define arg  0xC0700400
-
 _start:
+    call .get_base
+.get_base:
+    pop ebp
+    sub ebp,.get_base
+
     mov ebx, 1
-    mov edi, arg
+    lea edi,[ebp+arg]
     mov eax, 14              ; sys_get_arg
     int 0x80
     cmp eax, -1
     je .usage
 
-    mov esi, arg
+    lea esi,[ebp+arg]
     mov eax, 17              ; sys_create
     int 0x80
     cmp eax, -1
@@ -21,15 +24,16 @@ _start:
     ret
 
 .usage:
-    mov esi, usage_msg
+    lea esi,[ebp+usage_msg]
     mov eax, 2
     int 0x80
     ret
 .err:
-    mov esi, err_msg
+    lea esi,[ebp+err_msg]
     mov eax, 2
     int 0x80
     ret
 
 usage_msg db "usage: touch <path>", 13, 0
 err_msg   db "touch: cannot create (exists or FS full)", 13, 0
+arg       dd 0,0,0,0,0

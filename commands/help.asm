@@ -13,9 +13,5 @@ _start:
     ret
 
 help_lbl:
-        db 13,"Love is like candy on a shelf ",13
-        db "You want to taste and help yourself ",13
-        db "The sweetest things are there for you ",13
-        db "Help yourself take a few ",13
-        db "That's what I want you to do ",13,13
+        db 13,"There is no help but what we make",13,13
         db 0
