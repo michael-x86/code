@@ -109,11 +109,20 @@ Programs are capped at 4 KB. — `resb` will zero-fill in flat-binary mode and i
 | 21 | rmdir     | esi = path                 | 0 / -1                           |
 | 22 | ps        |                            | current processes                |
 | 23 | dump      |                            | stack and regsisters             |
-| 24 | alloc     | esi = path                 | ptrs to allocs                   |
-| 25 | dealloc   | esi = path                 | 0 / -1                           |
+| 24 | alloc     | allocate <bytes> (+4096)   | ptr -> memory                    |
+| 25 | dealloc   | ptr (alloc/heap)           |                                  |
 | 26 | peek      | addr                       | dword at [addr]                  |
 | 27 | poke      | addr value                 |                                  |
 | 28 | hex2int   | esi -> string              | integer eax                      | 
+| 29 | banner    |                            | print banner                     | 
+| 30 | bounce    |                            | C-64 in memoraim                 | 
+| 31 | bin2hex   | binfile                    | print HEX                        | 
+| 32 | memdump   | addr bytes                 | print MEM                        | 
+| 33 | hexbyte   |                            | print BYTE                       | 
+| 34 | asc2int   | esi -> str  (atoi)         | out = edx                        | 
+| 35 | hertz     |                            | print hertz in banner            | 
+| 36 | tick      |                            | print heartbeats in banner       | 
+| 37 | plot      | x and y                    | 'plot' 80x25 grid (0-79/0-24)    |
 Syscalls run with interrupts off (interrupt gate), so the PIT cannot preempt them.
 
 ## How persistence "works"
