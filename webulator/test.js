@@ -2285,10 +2285,10 @@ function run() {
       cpu.cregs.cr0 = 0x80000001;  // Enable paging + protected mode
 
       // Initialize keyboard map pointers (using PHYSICAL addresses — paging maps
-      // 0xC010xxxx → 0x0010xxxx, so virtual 0xC0104BFF → physical 0x104BFF)
-      // keymap in the built binary starts at offset 0x4BA8 (0x100000 + 0x4BA8 = 0x104BA8)
-      const keymapVirt = 0xC0104BA8;        // virtual address of keymap (lowercase)
-      const keymapShiftVirt = 0xC0104CA8;   // virtual address of keymap_shift (uppercase)
+      // 0xC010xxxx → 0x0010xxxx, so virtual 0xC01043CD → physical 0x1043CD)
+      // keymap in the built binary starts at offset 0x43CD (0x100000 + 0x43CD = 0x1043CD)
+      const keymapVirt = 0xC01043CD;        // virtual address of keymap (lowercase)
+      const keymapShiftVirt = 0xC01044CD;   // virtual address of keymap_shift (uppercase)
       mem.write32(0x104BFF, keymapVirt);    // lowercase table pointer
       mem.write32(0x104C03, keymapShiftVirt); // uppercase table pointer
       mem.write8(0x104BFD, 0);              // shift flag = 0 (unshifted)
@@ -2333,7 +2333,7 @@ function run() {
       const scancode = 0x32;
 
       // 1. Verify keyboard map table is present at the expected physical address
-      const mapPhysAddr = 0x100000 + 0x4BA8;  // keymap physical base
+      const mapPhysAddr = 0x100000 + 0x43CD;  // keymap physical base
       const mapByte = mem.read8(mapPhysAddr + scancode);
       assertEq(mapByte, 0x6D, 'Scancode 0x32 → 0x6D (m) in kernel keyboard map');
 
