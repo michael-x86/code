@@ -53,7 +53,7 @@ higher_half:
     mov [kernel_phys_end_var],eax
 
     call reserve_kernel_pages
-
+    
     popad
     add esp,4             
     mov esp,stack_top
@@ -218,6 +218,7 @@ kernel_main:
     call pic_remap
     call set_freq       
     call init_bounce 
+    call hwclock
 
     mov edi,cwd_buf
     mov ecx,128
@@ -232,7 +233,6 @@ kernel_main:
     mov [cursor_pos],eax
     call newline
     call prompt
-
     call init_tasks
     sti 
     mov [task0_esp],esp
@@ -332,11 +332,92 @@ sys_hertz:
     mov byte [edi],' '
     mov byte [edi+1],0x00
     add edi,2
-
     pop edi
     pop eax
     ret
     
+hwclock:
+wait_cmos:
+    mov al,0x0A
+    out 0x70,al
+    in  al,0x71
+    test al,0x80
+    jnz wait_cmos   
+
+    ; Years since 1970 * 365
+    mov eax,[year]
+    sub eax,1970
+    mov ebx,365
+    mul ebx
+    mov esi,eax
+    
+    ; Leap years since 1970
+    mov eax,[year]
+    sub eax,1969
+    xor edx,edx
+    mov ebx,4
+    div ebx
+    add esi,eax
+    
+    mov eax,[year]
+    sub eax,1901
+    xor edx,edx
+    mov ebx,100
+    div ebx
+    sub esi,eax
+
+    mov eax,[year]
+    sub eax,1601
+    xor edx,edx
+    mov ebx,400
+    div ebx
+    add esi,eax
+    
+    mov ecx,[month]
+    cmp ecx,1
+    jle .months_done
+    dec ecx             
+    mov ebx,month_days     
+.mloop:
+    movzx eax,byte [ebx]   
+    add esi,eax            
+    inc ebx               
+    dec ecx            
+    jnz .mloop      
+
+.months_done:
+    mov eax,[day]
+    dec eax
+    add esi,eax
+    mov eax,esi
+    mov ebx,86400
+    mul ebx
+    mov esi,eax
+    mov eax,[hour]
+    mov ebx,3600
+    mul ebx
+    add esi,eax
+    mov eax,[min]
+    mov ebx,60
+    mul ebx
+    add esi,eax
+    mov eax,[sec]
+    add esi,eax
+    mov [boot_epoch], esi
+    ret
+
+bcd2bin:
+    push ebx
+    mov bl,al
+    shr al,4
+    mov bh,10
+    mul bh             ; AL=tens*10
+    and bl,0x0F        ; BL=ones
+    add al,bl          ; AL=binary result
+    pop ebx
+    ret
+
+; task 0
 int2str:
     push ebx
     push ecx
@@ -352,7 +433,7 @@ int2str:
 .convert:
 .repeat:
     xor edx,edx
-    div ebx             ; EAX=quotient EDX=remainder
+    div ebx        ; EAX=quotient EDX=remainder
     add dl,'0'
     push edx
     inc ecx
@@ -1518,6 +1599,47 @@ heap_cmd:
     pop eax
     ret
 
+epoch_cmd:
+    mov eax,[boot_epoch]   
+    call print_dec
+    mov eax,3
+    int 0x80
+    ret
+
+print_dec:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push edi
+    lea edi,[dec_buf+10]
+    mov byte [edi],0
+    mov ebx,10
+.loop:
+    dec edi
+    xor edx,edx
+    div ebx
+    add dl,'0'
+    mov [edi],dl
+    test eax,eax
+    jnz .loop
+.print:
+    mov al,[edi]
+    test al,al
+    jz .done
+    movzx ebx,al
+    mov eax,0 ; sys_putchar
+    int 0x80
+    inc edi
+    jmp .print
+.done:
+    pop edi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
 ;-----------------------------------------------------
 ; Persistence layout: FS region starts at LBA 256.
 ; Each spare slot occupies SECTORS_PER_SLOT sectors.
@@ -2114,12 +2236,12 @@ set_irq0:
     mov edx,eax
     mov edi,idt_start+0x20*8
     mov word [edi],ax
-    mov word [edi+2],8   
+    mov word [edi+2],8
     mov byte [edi+4],0
     mov byte [edi+5],10001110b
     shr edx,16
     mov word [edi+6],dx
-    ret
+    ret 
 
 set_irq1:
     mov eax,irq1
@@ -2861,6 +2983,10 @@ sys_plot:
     popad
     ret
 
+sys_epoch:
+    mov ebx,[boot_epoch]
+    ret
+ 
 ; -------------------------------------------
 ; All work and no play makes Jack a dull boy
 ; -------------------------------------------
@@ -2876,6 +3002,9 @@ init_bounce:
     mov byte [dltx],1
     mov byte [dlty],1
     popa
+    ret
+
+backagin:
     ret
 
 bounce_step: 
@@ -3321,19 +3450,97 @@ exec_bin:
     ret
 
 ;------------------------------------
-
 irq0:
+    pushad            
+
+    ; --- 1. MASTER TICK UPDATE (Run this immediately) ---
+    inc dword [tick_count]
+
+    ; --- 2. CLOCK MATCH MATH ---
+    mov eax, [tick_count]
+    xor edx, edx
+    mov ebx, 100            ; 100Hz base
+    div ebx
+    test edx, edx           ; Is remainder 0?
+    jnz .skip_epoch
+    inc dword [boot_epoch]  ; Exactly 1 second ticks!
+
+.skip_epoch:
+    test dword [on_off], 1
+    jnz .paused 
+    call bounce_step
+.paused:
+
+    inc dword [tick_div]
+    test dword [tick_div], 1
+    jnz .no_flag
+    mov byte [tick_flag], 1
+.no_flag:
+
+    ; Select next task round-robin
+    mov eax, [current_task]
+    inc eax
+    cmp eax, 3
+    jb .save
+    xor eax, eax
+
+.save:
+    ; Save current ESP into the active slot
+    cmp dword [current_task], 0
+    je .was0
+    cmp dword [current_task], 1
+    je .was1
+    mov [task2_esp], esp
+    jmp .load
+.was0:
+    mov [task0_esp], esp
+    jmp .load
+.was1:
+    mov [task1_esp], esp
+
+.load:
+    mov [current_task], eax
+    cmp eax, 0
+    je .run0
+    cmp eax, 1
+    je .run1
+    mov esp, [task2_esp]   
+    jmp .done
+.run0:
+    mov esp, [task0_esp]
+    jmp .done
+.run1:
+    mov esp, [task1_esp]
+
+.done:
+    ; Send End-Of-Interrupt to the Master PIC
+    mov al, 0x20
+    out 0x20, al
+
+    popad               
+    iretd          
+
+irq330:
     pushad
     test dword [on_off],1
     jnz  .paused 
     call bounce_step
 .paused:
+
+    mov eax,[timer_ticks]
+    xor edx,edx
+    mov ebx,[hz]
+    div ebx
+    test edx,edx
+    jnz .noinc
+    inc dword [boot_epoch] ; Smooth, reliable 1-second ticks!
+.noinc:
+
     inc dword [tick_count]
     inc dword [tick_div]
     test dword [tick_div],1
     jnz .no_flag
     mov byte [tick_flag],1
-    
 .no_flag:
     mov eax,[current_task]
     inc eax
@@ -3412,80 +3619,92 @@ irq1:
 ; -------------------------------------------
 pic_remap:            
     pusha 
-    in  al,0x21          ; enable timer irq
-    push ax
-    in  al,0xA1
-    push ax
 
-    mov al,0x11
-    out 0x20,al
-    out 0xA0,al
-    mov al,0x20          ; master offset= 0x20
-    out 0x21,al
-    mov al,0x28          ; slave offset = 0x28
-    out 0xA1,al
-    mov al,0x04          ; slave conndected to IRQ2
-    out 0x21,al
-    mov al,0x02          ; slave id
+    in  al,0x21       
+    mov ah,al       
+    in  al,0xA1      
+    push ax           
 
-    out 0x21,al
-    mov al,0x01
-    out 0x21,al
-    out 0xA1,al
-    pop ax
+    mov al,0x11      
+    out 0x20,al      
+    out 0xA0,al      
 
-    out 0xA1,al
-    pop ax
+    mov al,0x20      
     out 0x21,al
+    mov al,0x28      
+    out 0xA1,al
+
+    mov al,0x04       
+    out 0x21,al
+    mov al,0x02      
+    out 0xA1,al        
+
+    mov al,0x01         ; 8086/88 (Intel) Mode
+    out 0x21,al
+    out 0xA1,al
+
+    pop ax               ; AL = Slave mask, AH = Master mask
+    out 0xA1,al         ; Restore Slave mask
+    mov al,ah           ; Put Master mask back into AL
+    out 0x21,al         ; Restore Master mask
     popa
     ret
 
 freq_cmd:
-    push eax 
-    push ecx 
-    push edx 
+    push eax
+    push ecx
+    push edx
     push esi
-    mov edx,50
+
+    mov edx,100      
     mov eax,[argc]
     cmp eax,2
-    jl .usi
-    mov esi,[argv+4]
-    call sys_asc2int              ; EDX = frequency
-    cmp edx,20
-    jg .usi
-    mov edx,50
-.usi:
-    mov edi,edx
-    mov [hz],edx
-    mov esi,edx
-    xor edx,edx      ; clear dividend
-    mov eax,1193182  ; dividend
-    mov ecx,esi      ; divisor
-    div ecx          ; eax = high, edx = low
+    jl .set_pit      
 
-    mov al,0x36
+    mov esi,[argv+4]
+    call sys_asc2int     
+
+    cmp edx,10          
+    jl .use_default
+    cmp edx,2000        
+    jg .use_default
+    jmp .set_pit
+
+.use_default:
+    mov edx,100      
+
+.set_pit:
+    mov [hz],edx  
+    mov ecx,edx       
+    xor edx,edx       
+    mov eax,1193182     
+    div ecx         
+    
+    mov ecx,eax            
+    mov al,0x36      
     out 0x43,al
-    mov dx,ax            
-    mov al,dl 
-    out 0x40,al          ; low byte
-    mov al,ah
-    out 0x40,al          ; high byte
+
+    ; --- Send Low Byte ---
+    mov al,cl        
+    out 0x40,al
+
+    ; --- Send High Byte ---
+    mov al,ch         
+    out 0x40,al
 
     pop esi
-    pop edx 
-    pop ecx 
-    pop eax 
+    pop edx
+    pop ecx
+    pop eax
     ret
 
 set_freq:
-    ; 1193182/50=23863 
-    ; 50 Hz 
     mov al,0x36
     out 0x43,al
-    mov ax,23863
-    out 0x40,al          ; low byte
-    mov al,ah
-    out 0x40,al          ; high byte
+    mov ax,11931        ; al=0x9B (LSB),ah=0x2E (MSB)
+    out 0x40,al         
+    mov al,ah         
+    out 0x40,al       
     ret
 
 sys_msg   db "----------------------------------------"
@@ -3505,6 +3724,8 @@ edi_lbl db "EDI: ",0
 ebp_lbl db "EBP: ",0
 esp_lbl db "ESP: ",0
 
+section .data
+
 tick_flag    db 0
 tick_count   dd 0      
 tick_div     dd 0     
@@ -3523,8 +3744,8 @@ no_arg    db 13,'usage: alloc <bytes>',13,0
 poke_msg  db 13,"usage: poke <hex addr> <hex value>",13,0
 peek_msg  db 13,"usage: peek <hex addr>",13,0
 plot_msg  db 13,"usage: plot x y (0-79 x 0-24)" ,13,0   
-freq_msg  db " Hz."
-hz        dd 50,0
+;freq_msg  db " Hz."
+hz        dd 100,0
 
 in_bytes        db " bytes free",13,0
 free_usage_msg  db 13,"usage: free <hex addr>",13,0
@@ -3536,6 +3757,17 @@ pf_addr db "ADDRESS: 0x",0
 
 kernel_phys_start_var: dd 0
 kernel_phys_end_var:   dd 0
+
+boot_epoch dd 0   ; true system baseline clock
+month_days: db 31,28,31,30,31,30,31,31,30,31,30,31
+sec     dd 0
+min     dd 0
+hour    dd 0
+day     dd 0
+month   dd 0
+year    dd 0
+dec_buf times 11 db 0
+sec_lbl db " seconds",0
 
 bin_prefix   db "/bin/",0
 exec_vbase   dd 0
@@ -3600,6 +3832,7 @@ syscall_table:
     dd sys_hertz         ; 35: print current hertz
     dd sys_tick          ; 36: print heartbeats
     dd sys_plot          ; 37: set block at ecx edx 
+    dd sys_epoch         ; 38: out: ebx = seconds 
 SYSCALL_COUNT equ ($-syscall_table)/4
 
 ;---- Keycode -> ASCII Convertion ----
@@ -3651,6 +3884,8 @@ cmd_table:
     dd heap_cmd
     db "frequency",0
     dd freq_cmd
+    db "epoch",0
+    dd epoch_cmd
     db 0          ; end of Devops cmds
 
 ;---- in-kernel virtual filesystem ----
@@ -3667,6 +3902,7 @@ task0_esp    resd 1
 task1_esp    resd 1
 task2_esp    resd 1
 current_task resd 1
+timer_ticks  resd 1
 
 alignb 4
 kbd_buf      resb 256

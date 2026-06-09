@@ -6,9 +6,9 @@ KERNEL_ASM="kernel.asm"
 IMG="os.img"
 
 # Programs to compile
-COMMANDS=(plot up dump dumpmem bin2hex bounce cls exit 
-          poke peek pwd ls cd ping cat touch write help
-          rm rmdir mkdir cp ps vi mv alloc dealloc verify )
+COMMANDS=(plot up dump dumpmem bounce cls exit help ps vi
+          poke peek pwd ls cd cat touch write verify
+          rm rmdir mkdir cp mv bin2hex alloc dealloc)
 
 
 RUN_QEMU=false
