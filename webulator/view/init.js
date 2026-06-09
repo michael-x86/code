@@ -22,31 +22,20 @@ $('#uart-cols').val(UART_SIZE.cols);
 $('#uart-rows').val(UART_SIZE.rows);
 terminal.open(document.getElementById('terminal'));
 
-// Forward terminal input to emulator's PS/2 keyboard, but let
-// xterm.js process the event normally so typed characters appear
-// in the terminal display.
-function captureTerminalInput() {
-    const ta = $('#terminal .xterm-helper-textarea, #terminal textarea');
-    if (ta.length) {
-        ta.off('.termkey').on('keydown.termkey', function(e) {
-            if (!machine || !machine.keyboard) return;
-            let key = e.key;
-            if (key === 'Enter' || key === 'Backspace' || key === 'Tab' || key === 'Escape') {
-                // pass through as-is
-            } else if (key.length === 1) {
-                key = key.toLowerCase();
-            } else {
-                return; // Skip modifier keys, arrows, etc.
-            }
-            machine.keyboard.handleKeyEvent(key, true);
-            machine.keyboard.handleKeyEvent(key, false);
-            // Do NOT preventDefault — let xterm.js display the character
-        });
-    } else {
-        setTimeout(captureTerminalInput, 100);
+// Forward terminal input to both PS/2 keyboard and serial port (COM1)
+terminal.onData((data) => {
+    if (!machine) return;
+    machine.writeSerial(data);
+    for (const ch of data) {
+        let key = ch;
+        if (key === '\r') key = 'Enter';
+        else if (key === '\x7f') key = 'Backspace';
+        else if (key === '\t') key = 'Tab';
+        else if (key === '\x1b') key = 'Escape';
+        machine.keyboard.handleKeyEvent(key, true);
+        machine.keyboard.handleKeyEvent(key, false);
     }
-}
-captureTerminalInput();
+});
 
 document.addEventListener('keydown', function(event) {
     var handled = false;
@@ -68,6 +57,33 @@ document.addEventListener('keydown', function(event) {
 var machine = null;
 var disassembler = null;
 const popout = new Popup();
+var regLog = [];
+
+function formatRegState() {
+    if (!machine) return '';
+    const c = machine.cpu;
+    return `T=${machine.tstates} EIP=${hex32(c.regs.eip)} ` +
+        `EAX=${hex32(c.regs.eax)} EBX=${hex32(c.regs.ebx)} ` +
+        `ECX=${hex32(c.regs.ecx)} EDX=${hex32(c.regs.edx)} ` +
+        `ESI=${hex32(c.regs.esi)} EDI=${hex32(c.regs.edi)} ` +
+        `EBP=${hex32(c.regs.ebp)} ESP=${hex32(c.regs.esp)} ` +
+        `EFL=${hex32(c.eflags)} ` +
+        `CS=${hex16(c.segregs.cs)} DS=${hex16(c.segregs.ds)} ` +
+        `SS=${hex16(c.segregs.ss)} ` +
+        `CR0=${hex32(c.cregs.cr0)} CR3=${hex32(c.cregs.cr3)} ` +
+        ` halted=${c.halted}`;
+}
+
+function downloadRegLog() {
+    if (regLog.length === 0) return;
+    const blob = new Blob([regLog.join('\n')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `reglog-${Date.now()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
 
 const params = parseQueryParams(window.location.search);
 
@@ -84,11 +100,7 @@ function initEmulator() {
     machine.setCanvas(canvas);
 
     machine.onSerialOutput = (char) => {
-        if (char === 0x0A) {
-            terminal.write('\r\n');
-        } else if (char >= 32 && char <= 126) {
-            terminal.write(String.fromCharCode(char));
-        }
+        terminal.write(String.fromCharCode(char));
     };
 
     machine.onVgaUpdate = () => {
@@ -104,9 +116,6 @@ async function loadBuiltBinaries() {
     const base = 'kernel-bin';
     let kernelLoaded = false;
     let diskLoaded = false;
-
-    const IDT_BASE = 0x5000;
-    const HANDLER_ADDR = 0x6000;
 
     try {
         const resp = await fetch(`${base}/kernel.bin`);
@@ -134,20 +143,9 @@ async function loadBuiltBinaries() {
             machine.cpu.regs.ebp = 0x200000;
             machine.cpu.cregs.cr0 = 0x00000001;
 
-            // Set up a minimal IDT so exceptions don't crash
-            machine.mem.write8(HANDLER_ADDR, 0xFA);
-            machine.mem.write8(HANDLER_ADDR + 1, 0xF4);
-            for (let i = 0; i < 256; i++) {
-                const entryAddr = IDT_BASE + (i * 8);
-                machine.mem.write16(entryAddr, HANDLER_ADDR & 0xFFFF);
-                machine.mem.write16(entryAddr + 2, 0x0008);
-                machine.mem.write8(entryAddr + 4, 0x00);
-                machine.mem.write8(entryAddr + 5, 0x8E);
-                machine.mem.write8(entryAddr + 6, (HANDLER_ADDR >> 16) & 0xFF);
-                machine.mem.write8(entryAddr + 7, (HANDLER_ADDR >> 24) & 0xFF);
-            }
-            machine.cpu.idtBase = IDT_BASE;
-            machine.cpu.idtLimit = 0x7FF;
+            // Initial IDT was installed by machine_x86.setupInitialIDT() 
+            // during X86Machine.init() — it survives here because loadBinary
+            // writes at 0x100000+, far from the IDT at 0x5000 and handler at 0x6000.
 
             $("#kernready").addClass("ready");
             kernelLoaded = true;
@@ -176,12 +174,15 @@ async function loadBuiltBinaries() {
     }
 
     if (kernelLoaded) {
-        showPauseView();
+        showContinueView();
         updateRegView();
         machine.onFrame = () => {
             setRegView();
+            if ($('#reg-log-toggle').is(':checked')) {
+                regLog.push(formatRegState());
+                $('#reg-log-count').text(regLog.length + ' lines');
+            }
         };
-        machine.start();
     }
 }
 
@@ -190,6 +191,12 @@ function updateRegView() {
         setRegView();
     }
 }
+
+$('#reg-log-save').on('click', downloadRegLog);
+$('#reg-log-clear').on('click', () => {
+    regLog = [];
+    $('#reg-log-count').text('');
+});
 
 $(initEmulator);
 

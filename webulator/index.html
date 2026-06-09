@@ -105,8 +105,13 @@
           <section class="menu" id="menu-speed">
             <section class="menutitle">Speed</section>
             <section class="menucontent">
-              <input type="range" id="speed-slider" min="1" max="20" value="1" step="1">
-              <span id="speed-label">10 MHz</span>
+              <input type="range" id="speed-slider" min="1" max="1000" value="100" step="1">
+              <span id="speed-label">100 KHz</span>
+              <label>Div: <input type="number" id="speed-div" value="100" min="1" style="width:7ch" /></label>
+              <label><input type="checkbox" id="reg-log-toggle" /> Log regs</label>
+              <button id="reg-log-save">Save</button>
+              <button id="reg-log-clear">Clear</button>
+              <span id="reg-log-count" style="font-size:10px;color:#888"></span>
             </section>
           </section>
           <section class="menu" id="menu-breakpoints">
@@ -206,6 +211,7 @@
     <script src="hardemu/memory.js"></script>
     <script src="hardemu/x86cpu.js"></script>
     <script src="hardemu/vga.js"></script>
+    <script src="hardemu/bios.js"></script>
     <script src="hardemu/machine_x86.js"></script>
     <script src="view/popup.js"></script>
     <script src="view/utils.js"></script>

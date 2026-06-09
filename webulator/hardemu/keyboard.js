@@ -7,7 +7,7 @@
 function Keyboard(Zeal, PIO) {
 
     /* PS/2 Keyboard related */
-    const BREAK_CODE = 0xF0;
+    const BREAK_CODE = 0x80;  // PS/2 Set 1: break = make | 0x80
     const KEYCODE_BACKSPACE = 8;
     const KEYCODE_TAB = 9;
     const KEYCODE_ENTER = 13;
@@ -120,106 +120,106 @@ function Keyboard(Zeal, PIO) {
     const js_to_ps2 = {}
 
     function init_js_to_ps2() {
-        js_to_ps2[KEYCODE_BACKSPACE] = [0x66];
-        js_to_ps2[KEYCODE_TAB] = [0x0D];
-        js_to_ps2[KEYCODE_ENTER] = [0x5A];
-        js_to_ps2[KEYCODE_SHIFT] = [0x59];
-        js_to_ps2[KEYCODE_CTRL] = [0xE0, 0x14];
-        js_to_ps2[KEYCODE_ALT] = [0x11];
-        js_to_ps2[KEYCODE_RIGHTALT] = [0xE0, 0x11];
-        js_to_ps2[KEYCODE_PAUSE] = [0xE1, 0x14, 0x77, 0xE1, 0xF0, 0x14, 0xE0, 0x77];
-        js_to_ps2[KEYCODE_CAPSLOCK] = [0x58];
-        js_to_ps2[KEYCODE_ESCAPE] = [0x76];
-        js_to_ps2[KEYCODE_PAGEUP] = [0xE0, 0x7D];
-        js_to_ps2[KEYCODE_SPACE] = [0x29];
-        js_to_ps2[KEYCODE_PAGEDOWN] = [0xE0, 0x7A];
-        js_to_ps2[KEYCODE_END] = [0xE0, 0x69];
-        js_to_ps2[KEYCODE_HOME] = [0xE0, 0x6C];
-        js_to_ps2[KEYCODE_ARROWLEFT] = [0xE0, 0x6B];
-        js_to_ps2[KEYCODE_ARROWUP] = [0xE0, 0x75];
-        js_to_ps2[KEYCODE_ARROWRIGHT] = [0xE0, 0x74];
-        js_to_ps2[KEYCODE_ARROWDOWN] = [0xE0, 0x72];
-        js_to_ps2[KEYCODE_PRINTSCREEN] = [0xE0, 0x12, 0xE0, 0x7C];
-        js_to_ps2[KEYCODE_INSERT] = [0xE0, 0x70];
-        js_to_ps2[KEYCODE_DELETE] = [0xE0, 0x71];
-        js_to_ps2[KEYCODE_0] = [0x45];
-        js_to_ps2[KEYCODE_1] = [0x16];
-        js_to_ps2[KEYCODE_2] = [0x1E];
-        js_to_ps2[KEYCODE_3] = [0x26];
-        js_to_ps2[KEYCODE_4] = [0x25];
-        js_to_ps2[KEYCODE_5] = [0x2E];
-        js_to_ps2[KEYCODE_6] = [0x36];
-        js_to_ps2[KEYCODE_7] = [0x3D];
-        js_to_ps2[KEYCODE_8] = [0x3E];
-        js_to_ps2[KEYCODE_9] = [0x46];
-        js_to_ps2[KEYCODE_A] = [0x1C];
-        js_to_ps2[KEYCODE_B] = [0x32];
-        js_to_ps2[KEYCODE_C] = [0x21];
-        js_to_ps2[KEYCODE_D] = [0x23];
-        js_to_ps2[KEYCODE_E] = [0x24];
-        js_to_ps2[KEYCODE_F] = [0x2B];
-        js_to_ps2[KEYCODE_G] = [0x34];
-        js_to_ps2[KEYCODE_H] = [0x33];
-        js_to_ps2[KEYCODE_I] = [0x43];
-        js_to_ps2[KEYCODE_J] = [0x3B];
-        js_to_ps2[KEYCODE_K] = [0x42];
-        js_to_ps2[KEYCODE_L] = [0x4B];
-        js_to_ps2[KEYCODE_M] = [0x3A];
+        js_to_ps2[KEYCODE_BACKSPACE] = [0x0E];
+        js_to_ps2[KEYCODE_TAB] = [0x0F];
+        js_to_ps2[KEYCODE_ENTER] = [0x1C];
+        js_to_ps2[KEYCODE_SHIFT] = [0x2A];
+        js_to_ps2[KEYCODE_CTRL] = [0x1D];
+        js_to_ps2[KEYCODE_ALT] = [0x38];
+        js_to_ps2[KEYCODE_RIGHTALT] = [0xE0, 0x38];
+        js_to_ps2[KEYCODE_PAUSE] = [0xE1, 0x1D, 0x45, 0xE1, 0x9D, 0xC5];
+        js_to_ps2[KEYCODE_CAPSLOCK] = [0x3A];
+        js_to_ps2[KEYCODE_ESCAPE] = [0x01];
+        js_to_ps2[KEYCODE_PAGEUP] = [0xE0, 0x49];
+        js_to_ps2[KEYCODE_SPACE] = [0x39];
+        js_to_ps2[KEYCODE_PAGEDOWN] = [0xE0, 0x51];
+        js_to_ps2[KEYCODE_END] = [0xE0, 0x4F];
+        js_to_ps2[KEYCODE_HOME] = [0xE0, 0x47];
+        js_to_ps2[KEYCODE_ARROWLEFT] = [0xE0, 0x4B];
+        js_to_ps2[KEYCODE_ARROWUP] = [0xE0, 0x48];
+        js_to_ps2[KEYCODE_ARROWRIGHT] = [0xE0, 0x4D];
+        js_to_ps2[KEYCODE_ARROWDOWN] = [0xE0, 0x50];
+        js_to_ps2[KEYCODE_PRINTSCREEN] = [0xE0, 0x2A, 0xE0, 0x37];
+        js_to_ps2[KEYCODE_INSERT] = [0xE0, 0x52];
+        js_to_ps2[KEYCODE_DELETE] = [0xE0, 0x53];
+        js_to_ps2[KEYCODE_0] = [0x0B];
+        js_to_ps2[KEYCODE_1] = [0x02];
+        js_to_ps2[KEYCODE_2] = [0x03];
+        js_to_ps2[KEYCODE_3] = [0x04];
+        js_to_ps2[KEYCODE_4] = [0x05];
+        js_to_ps2[KEYCODE_5] = [0x06];
+        js_to_ps2[KEYCODE_6] = [0x07];
+        js_to_ps2[KEYCODE_7] = [0x08];
+        js_to_ps2[KEYCODE_8] = [0x09];
+        js_to_ps2[KEYCODE_9] = [0x0A];
+        js_to_ps2[KEYCODE_A] = [0x1E];
+        js_to_ps2[KEYCODE_B] = [0x30];
+        js_to_ps2[KEYCODE_C] = [0x2E];
+        js_to_ps2[KEYCODE_D] = [0x20];
+        js_to_ps2[KEYCODE_E] = [0x12];
+        js_to_ps2[KEYCODE_F] = [0x21];
+        js_to_ps2[KEYCODE_G] = [0x22];
+        js_to_ps2[KEYCODE_H] = [0x23];
+        js_to_ps2[KEYCODE_I] = [0x17];
+        js_to_ps2[KEYCODE_J] = [0x24];
+        js_to_ps2[KEYCODE_K] = [0x25];
+        js_to_ps2[KEYCODE_L] = [0x26];
+        js_to_ps2[KEYCODE_M] = [0x32];
         js_to_ps2[KEYCODE_N] = [0x31];
-        js_to_ps2[KEYCODE_O] = [0x44];
-        js_to_ps2[KEYCODE_P] = [0x4D];
-        js_to_ps2[KEYCODE_Q] = [0x15];
-        js_to_ps2[KEYCODE_R] = [0x2D];
-        js_to_ps2[KEYCODE_S] = [0x1B];
-        js_to_ps2[KEYCODE_T] = [0x2C];
-        js_to_ps2[KEYCODE_U] = [0x3C];
-        js_to_ps2[KEYCODE_V] = [0x2A];
-        js_to_ps2[KEYCODE_W] = [0x1D];
-        js_to_ps2[KEYCODE_X] = [0x22];
-        js_to_ps2[KEYCODE_Y] = [0x35];
-        js_to_ps2[KEYCODE_Z] = [0x1A];
-        js_to_ps2[KEYCODE_LEFTWINDOWKEY] = [0xE0, 0x1F];
-        js_to_ps2[KEYCODE_RIGHTWINDOWKEY] = [0xE0, 0x27];
-        js_to_ps2[KEYCODE_NUMPAD0] = [0x70];
-        js_to_ps2[KEYCODE_NUMPAD1] = [0x69];
-        js_to_ps2[KEYCODE_NUMPAD2] = [0x72];
-        js_to_ps2[KEYCODE_NUMPAD3] = [0x7A];
-        js_to_ps2[KEYCODE_NUMPAD4] = [0x6B];
-        js_to_ps2[KEYCODE_NUMPAD5] = [0x73];
-        js_to_ps2[KEYCODE_NUMPAD6] = [0x74];
-        js_to_ps2[KEYCODE_NUMPAD7] = [0x6C];
-        js_to_ps2[KEYCODE_NUMPAD8] = [0x75];
-        js_to_ps2[KEYCODE_NUMPAD9] = [0x7D];
-        js_to_ps2[KEYCODE_MULTIPLY] = [0x7C];
-        js_to_ps2[KEYCODE_ADD] = [0x79];
-        js_to_ps2[KEYCODE_SUBTRACT] = [0x7B];
-        js_to_ps2[KEYCODE_DECIMALPOINT] = [0x71];
-        js_to_ps2[KEYCODE_DIVIDE] = [0xE0, 0x4A];
-        js_to_ps2[KEYCODE_F1] = [0x05];
-        js_to_ps2[KEYCODE_F2] = [0x06];
-        js_to_ps2[KEYCODE_F3] = [0x04];
-        js_to_ps2[KEYCODE_F4] = [0x0C];
-        js_to_ps2[KEYCODE_F5] = [0x03];
-        js_to_ps2[KEYCODE_F6] = [0x0B];
-        js_to_ps2[KEYCODE_F7] = [0x83];
-        js_to_ps2[KEYCODE_F8] = [0x0A];
-        js_to_ps2[KEYCODE_F9] = [0x01];
-        js_to_ps2[KEYCODE_F10] = [0x09];
-        js_to_ps2[KEYCODE_F11] = [0x78];
-        js_to_ps2[KEYCODE_F12] = [0x07];
-        js_to_ps2[KEYCODE_NUMLOCK] = [0x77];
-        js_to_ps2[KEYCODE_SCROLLLOCK] = [0x7E];
-        js_to_ps2[KEYCODE_SEMI_COLON] = [0x4C];
-        js_to_ps2[KEYCODE_EQUALSIGN] = [0x55];
-        js_to_ps2[KEYCODE_COMMA] = [0x41];
-        js_to_ps2[KEYCODE_DASH] = [0x4E];
-        js_to_ps2[KEYCODE_PERIOD] = [0x49];
-        js_to_ps2[KEYCODE_FORWARDSLASH] = [0x4A];
-        js_to_ps2[KEYCODE_OPENBRACKET] = [0x54];
-        js_to_ps2[KEYCODE_BACKSLASH] = [0x5D];
-        js_to_ps2[KEYCODE_CLOSEBRAKET] = [0x5B];
-        js_to_ps2[KEYCODE_SINGLEQUOTE] = [0x52];
-        js_to_ps2[KEYCODE_BACKQUOTE] = [0x0E];
+        js_to_ps2[KEYCODE_O] = [0x18];
+        js_to_ps2[KEYCODE_P] = [0x19];
+        js_to_ps2[KEYCODE_Q] = [0x10];
+        js_to_ps2[KEYCODE_R] = [0x13];
+        js_to_ps2[KEYCODE_S] = [0x1F];
+        js_to_ps2[KEYCODE_T] = [0x14];
+        js_to_ps2[KEYCODE_U] = [0x16];
+        js_to_ps2[KEYCODE_V] = [0x2F];
+        js_to_ps2[KEYCODE_W] = [0x11];
+        js_to_ps2[KEYCODE_X] = [0x2D];
+        js_to_ps2[KEYCODE_Y] = [0x15];
+        js_to_ps2[KEYCODE_Z] = [0x2C];
+        js_to_ps2[KEYCODE_LEFTWINDOWKEY] = [0xE0, 0x5B];
+        js_to_ps2[KEYCODE_RIGHTWINDOWKEY] = [0xE0, 0x5C];
+        js_to_ps2[KEYCODE_NUMPAD0] = [0x52];
+        js_to_ps2[KEYCODE_NUMPAD1] = [0x4F];
+        js_to_ps2[KEYCODE_NUMPAD2] = [0x50];
+        js_to_ps2[KEYCODE_NUMPAD3] = [0x51];
+        js_to_ps2[KEYCODE_NUMPAD4] = [0x4B];
+        js_to_ps2[KEYCODE_NUMPAD5] = [0x4C];
+        js_to_ps2[KEYCODE_NUMPAD6] = [0x4D];
+        js_to_ps2[KEYCODE_NUMPAD7] = [0x47];
+        js_to_ps2[KEYCODE_NUMPAD8] = [0x48];
+        js_to_ps2[KEYCODE_NUMPAD9] = [0x49];
+        js_to_ps2[KEYCODE_MULTIPLY] = [0x37];
+        js_to_ps2[KEYCODE_ADD] = [0x4E];
+        js_to_ps2[KEYCODE_SUBTRACT] = [0x4A];
+        js_to_ps2[KEYCODE_DECIMALPOINT] = [0x53];
+        js_to_ps2[KEYCODE_DIVIDE] = [0xE0, 0x35];
+        js_to_ps2[KEYCODE_F1] = [0x3B];
+        js_to_ps2[KEYCODE_F2] = [0x3C];
+        js_to_ps2[KEYCODE_F3] = [0x3D];
+        js_to_ps2[KEYCODE_F4] = [0x3E];
+        js_to_ps2[KEYCODE_F5] = [0x3F];
+        js_to_ps2[KEYCODE_F6] = [0x40];
+        js_to_ps2[KEYCODE_F7] = [0x41];
+        js_to_ps2[KEYCODE_F8] = [0x42];
+        js_to_ps2[KEYCODE_F9] = [0x43];
+        js_to_ps2[KEYCODE_F10] = [0x44];
+        js_to_ps2[KEYCODE_F11] = [0x57];
+        js_to_ps2[KEYCODE_F12] = [0x58];
+        js_to_ps2[KEYCODE_NUMLOCK] = [0x45];
+        js_to_ps2[KEYCODE_SCROLLLOCK] = [0x46];
+        js_to_ps2[KEYCODE_SEMI_COLON] = [0x27];
+        js_to_ps2[KEYCODE_EQUALSIGN] = [0x0D];
+        js_to_ps2[KEYCODE_COMMA] = [0x33];
+        js_to_ps2[KEYCODE_DASH] = [0x0C];
+        js_to_ps2[KEYCODE_PERIOD] = [0x34];
+        js_to_ps2[KEYCODE_FORWARDSLASH] = [0x35];
+        js_to_ps2[KEYCODE_OPENBRACKET] = [0x1A];
+        js_to_ps2[KEYCODE_BACKSLASH] = [0x2B];
+        js_to_ps2[KEYCODE_CLOSEBRAKET] = [0x1B];
+        js_to_ps2[KEYCODE_SINGLEQUOTE] = [0x28];
+        js_to_ps2[KEYCODE_BACKQUOTE] = [0x29];
 
         /* Add Firefox key codes, make sure there is no conflict */
         console.assert(!js_to_ps2[FIREFOX_KEYCODE_SEMI_COLON]);
@@ -294,16 +294,17 @@ function Keyboard(Zeal, PIO) {
         /* Create a list where we add the BREAK scan code */
         /* PAUSE has no break code */
         if (keycode != KEYCODE_PAUSE) {
-            var list_break = list;
-            /* If the list starts with 0xE0, the break character shall be right after */
-            if (list_break[0] == 0xE0) {
-                /* Insert another 0xE0 in the front */
-                list_break.unshift(0xE0);
-                /* Modify the original 0xE0 */
-                list_break[1] = BREAK_CODE;
-            } else {
-                /* Insert it at the beginning else */
-                list_break.unshift(BREAK_CODE);
+            var list_break = [...list];  // copy array
+            /* Set 1 break codes: set bit 7 on the last byte of the make code */
+            if (list_break.length > 0) {
+                if (list_break[0] == 0xE0) {
+                    /* E0-prefixed: break inserts E0 before the code with bit 7 set */
+                    list_break[list_break.length - 1] |= BREAK_CODE;
+                    list_break = [0xE0, ...list_break.slice(1)];
+                } else {
+                    /* Single-byte code: set bit 7 */
+                    list_break[list_break.length - 1] |= BREAK_CODE;
+                }
             }
 
             /* Send the bytes on the PS/2 bus with a delay */

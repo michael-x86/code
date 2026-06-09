@@ -78,7 +78,7 @@ class X86CPU {
     
     // Reset CPU to initial state
     reset() {
-        // Reset registers
+        // Reset general-purpose registers
         for (let reg in this.regs) {
             this.regs[reg] = 0;
         }
@@ -92,15 +92,40 @@ class X86CPU {
         
         // Reset control registers
         this.cregs.cr0 = 0;  // Real mode, no paging
+        this.cregs.cr2 = 0;
         this.cregs.cr3 = 0;
+        
+        // Reset debug registers
+        this.dregs.dr0 = 0;
+        this.dregs.dr1 = 0;
+        this.dregs.dr2 = 0;
+        this.dregs.dr3 = 0;
+        this.dregs.dr6 = 0;
+        this.dregs.dr7 = 0;
         
         // Reset EFLAGS
         this.eflags = 0x00000002;
+        
+        // Reset IDT / GDT (kernel must reload via LIDT/LGDT)
+        this.idtBase = 0;
+        this.idtLimit = 0;
+        this.gdtBase = 0;
+        this.gdtLimit = 0;
         
         // Reset state
         this.halted = false;
         this.cpl = 0;
         this.tstates = 0;
+        this.faultEip = 0;
+        this._tsc = undefined;
+        this._pagingDebugCount = undefined;
+        this.prefixes = {
+            segOverride: null,
+            operandSize: false,
+            addressSize: false,
+            lock: false,
+            rep: 0,
+        };
     }
     
     // Set/get 32-bit register by name
@@ -347,13 +372,25 @@ class X86CPU {
     
     // Trigger an exception
     triggerException(exceptionNum, errorCode) {
-        if (this.debug || exceptionNum === 14) {
-            console.log(`[EXC] Exception ${exceptionNum} (#${exceptionNum === 14 ? 'PF' : exceptionNum}) at EIP=0x${this.regs.eip.toString(16)} CR2=0x${this.cregs.cr2.toString(16)}`);
-        }
+        const names = {
+            0: '#DE', 1: '#DB', 2: '#NMI', 3: '#BP', 4: '#OF', 5: '#BR',
+            6: '#UD', 7: '#NM', 8: '#DF', 10: '#TS', 11: '#NP', 12: '#SS',
+            13: '#GP', 14: '#PF', 16: '#MF', 17: '#AC', 18: '#MC', 19: '#XM',
+        };
+        const name = names[exceptionNum] || `#${exceptionNum}`;
+        
+        console.log(
+            `[EXC] ${name} vec=${exceptionNum} ` +
+            `EIP=0x${this.regs.eip.toString(16)} ` +
+            `EAX=0x${(this.regs.eax>>>0).toString(16)} EBX=0x${(this.regs.ebx>>>0).toString(16)} ` +
+            `ECX=0x${(this.regs.ecx>>>0).toString(16)} EDX=0x${(this.regs.edx>>>0).toString(16)} ` +
+            `ESP=0x${(this.regs.esp>>>0).toString(16)} ` +
+            `CR2=0x${(this.cregs.cr2>>>0).toString(16)}${errorCode !== undefined ? ' ERR=0x' + errorCode.toString(16) : ''}`
+        );
         
         // Check if IDT is set up
         if (this.idtLimit === 0) {
-            console.error(`Exception ${exceptionNum} but IDT not set up! EIP=0x${this.regs.eip.toString(16)}, CR2=0x${this.cregs.cr2 ? this.cregs.cr2.toString(16) : 'undefined'}`);
+            console.error(`Exception ${exceptionNum} but IDT not set up!`);
             this.halted = true;
             return;
         }
@@ -380,7 +417,7 @@ class X86CPU {
         
         // Check if handler is present (bit 7 of typeAttr)
         if (!(typeAttr & 0x80)) {
-            console.error(`Exception ${exceptionNum} handler not present! typeAttr=0x${typeAttr.toString(16)}`);
+            console.error(`[EXC] ${name} handler not present at IDT[${exceptionNum}]! typeAttr=0x${typeAttr.toString(16)} EIP=0x${this.regs.eip.toString(16)}`);
             this.halted = true;
             return;
         }
@@ -430,9 +467,9 @@ class X86CPU {
     // Execute one instruction
     // Returns: cycles consumed (0 on error/halt)
     step() {
-        // When halted, check for pending IRQs to wake up
+        // When halted, only wake on pending maskable IRQs if IF=1
         if (this.halted) {
-            if (this.pic) {
+            if (this.pic && this.getFlag('IF')) {
                 const pending = this.pic.master.irr & ~this.pic.master.imr & ~this.pic.master.isr;
                 if (pending) {
                     this.halted = false;
@@ -615,6 +652,11 @@ class X86CPU {
                 this.regs.esp -= 4;
                 this.writeMem(this.regs.esp, imm32, 4);
                 return 2;
+            }
+                
+            // IMUL r32, r/m32, imm32 (0x69) and IMUL r32, r/m32, imm8 (0x6B)
+            case 0x69: case 0x6B: {
+                return this.handleImulRegMem(opcode);
             }
                 
             // I/O string instructions (0x6C-0x6F)
@@ -811,6 +853,11 @@ class X86CPU {
                 return 2;
             }
                 
+            // XOR r/m8, r8 (0x30) and XOR r8, r/m8 (0x32)
+            case 0x30: case 0x32: {
+                return this.handleXorRegMem8(opcode);
+            }
+
             // XOR r/m32, r32 (0x31) and XOR r32, r/m32 (0x33)
             case 0x31: case 0x33: {
                 return this.handleXorRegMem(opcode);
@@ -956,6 +1003,12 @@ class X86CPU {
             // ADC r/m8, r8 (0x10) and ADC r8, r/m8 (0x12) - 8-bit
             case 0x10: case 0x12: {
                 return this.handleAdcRegMem8(opcode);
+            }
+
+            // SBB r/m8, r8 (0x18), SBB r/m32, r32 (0x19)
+            // SBB r8, r/m8 (0x1A), SBB r32, r/m32 (0x1B)
+            case 0x18: case 0x19: case 0x1A: case 0x1B: {
+                return this.handleSbbRegMem(opcode);
             }
             
             // OR r/m8, r8 (0x08), OR r/m32, r32 (0x09)
@@ -1119,6 +1172,11 @@ class X86CPU {
                 this.regs.eip++;  // Skip opcode
                 const intNum = this.readMem(this.regs.eip, 1);
                 this.regs.eip++;  // Skip interrupt number
+                // BIOS trap: handle classic BIOS calls directly in
+                // JavaScript without pushing an interrupt frame.
+                if (this.bios && this.bios.handleInterrupt(intNum)) {
+                    return 5;
+                }
                 this.handleInt(intNum);
                 return 5;
             }
@@ -1557,6 +1615,49 @@ class X86CPU {
         }
     }
     
+    // Handle XOR r/m8, r8 (0x30) and XOR r8, r/m8 (0x32)
+    handleXorRegMem8(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+
+        const reg8Names = ['al','cl','dl','bl','ah','ch','dh','bh'];
+        const regName = reg8Names[reg];
+        const regValue = this.getReg8(regName);
+
+        if (mod === 3) {
+            const rmName = reg8Names[rm];
+            if (opcode === 0x30) {
+                const result = (this.getReg8(rmName) ^ regValue) & 0xFF;
+                this.setReg8(rmName, result);
+                this.updateArithmeticFlags(result, 0, 0, 0, true);
+            } else {
+                const result = (regValue ^ this.getReg8(rmName)) & 0xFF;
+                this.setReg8(regName, result);
+                this.updateArithmeticFlags(result, 0, 0, 0, true);
+            }
+            return 2;
+        } else {
+            const addr = this.calculateAddress(modrm);
+            if (opcode === 0x30) {
+                const memValue = this.readMem(addr, 1);
+                const result = (memValue ^ regValue) & 0xFF;
+                this.writeMem(addr, result, 1);
+                this.updateArithmeticFlags(result, 0, 0, 0, true);
+            } else {
+                const memValue = this.readMem(addr, 1);
+                const result = (regValue ^ memValue) & 0xFF;
+                this.setReg8(regName, result);
+                this.updateArithmeticFlags(result, 0, 0, 0, true);
+            }
+            return 4;
+        }
+    }
+    
     // Handle ADD r/m32, r32 (0x01) and ADD r32, r/m32 (0x03)
     handleAddRegMem(opcode) {
         this.regs.eip++;
@@ -1701,20 +1802,112 @@ class X86CPU {
             const addr = this.calculateAddress(modrm);
             if (opcode === 0x10) {
                 // ADC r/m8, r8
-                const memValue = this.mem.read8(addr);
+                const memValue = this.readMem(addr, 1);
                 const result = (memValue + regValue + oldCF) & 0xFF;
-                this.mem.write8(addr, result);
+                this.writeMem(addr, result, 1);
                 this.setFlag('CF', (memValue + regValue + oldCF) > 0xFF);
                 this.updateArithmeticFlags(result, memValue, regValue + oldCF, undefined, true);
             } else {
                 // ADC r8, r/m8
-                const memValue = this.mem.read8(addr);
+                const memValue = this.readMem(addr, 1);
                 const result = (regValue + memValue + oldCF) & 0xFF;
                 this.setReg8(regName, result);
                 this.setFlag('CF', (regValue + memValue + oldCF) > 0xFF);
                 this.updateArithmeticFlags(result, regValue, memValue + oldCF, undefined, true);
             }
             return 4;
+        }
+    }
+
+    // Handle SBB r/m8, r8 (0x18), SBB r/m32, r32 (0x19)
+    // SBB r8, r/m8 (0x1A), SBB r32, r/m32 (0x1B)
+    handleSbbRegMem(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+        const oldCF = this.getFlag('CF') ? 1 : 0;
+
+        const isByteOp = (opcode === 0x18 || opcode === 0x1A);
+
+        if (isByteOp) {
+            const reg8Names = ['al','cl','dl','bl','ah','ch','dh','bh'];
+            const regName = reg8Names[reg];
+            const regValue = this.getReg8(regName);
+
+            if (mod === 3) {
+                const rmName = reg8Names[rm];
+                if (opcode === 0x18) {
+                    const destValue = this.getReg8(rmName);
+                    const result = (destValue - regValue - oldCF) & 0xFF;
+                    this.setReg8(rmName, result);
+                    this.setFlag('CF', destValue < (regValue + oldCF));
+                    this.updateArithmeticFlags(result, destValue, regValue + oldCF, undefined, true);
+                } else {
+                    const destValue = this.getReg8(rmName);
+                    const result = (regValue - destValue - oldCF) & 0xFF;
+                    this.setReg8(regName, result);
+                    this.setFlag('CF', regValue < (destValue + oldCF));
+                    this.updateArithmeticFlags(result, regValue, destValue + oldCF, undefined, true);
+                }
+                return 2;
+            } else {
+                const addr = this.calculateAddress(modrm);
+                if (opcode === 0x18) {
+                    const memValue = this.readMem(addr, 1);
+                    const result = (memValue - regValue - oldCF) & 0xFF;
+                    this.writeMem(addr, result, 1);
+                    this.setFlag('CF', memValue < (regValue + oldCF));
+                    this.updateArithmeticFlags(result, memValue, regValue + oldCF, undefined, true);
+                } else {
+                    const memValue = this.readMem(addr, 1);
+                    const result = (regValue - memValue - oldCF) & 0xFF;
+                    this.setReg8(regName, result);
+                    this.setFlag('CF', regValue < (memValue + oldCF));
+                    this.updateArithmeticFlags(result, regValue, memValue + oldCF, undefined, true);
+                }
+                return 4;
+            }
+        } else {
+            const regName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
+            const regValue = this.getReg32(regName);
+
+            if (mod === 3) {
+                const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+                if (opcode === 0x19) {
+                    const destValue = this.getReg32(rmName);
+                    const result = (destValue - regValue - oldCF) >>> 0;
+                    this.setReg32(rmName, result);
+                    this.setFlag('CF', (destValue >>> 0) < ((regValue >>> 0) + oldCF));
+                    this.updateArithmeticFlags(result, destValue, regValue + oldCF, undefined, false);
+                } else {
+                    const destValue = this.getReg32(rmName);
+                    const result = (regValue - destValue - oldCF) >>> 0;
+                    this.setReg32(regName, result);
+                    this.setFlag('CF', (regValue >>> 0) < ((destValue >>> 0) + oldCF));
+                    this.updateArithmeticFlags(result, regValue, destValue + oldCF, undefined, false);
+                }
+                return 2;
+            } else {
+                const addr = this.calculateAddress(modrm);
+                if (opcode === 0x19) {
+                    const memValue = this.readMem(addr, 4);
+                    const result = (memValue - regValue - oldCF) >>> 0;
+                    this.writeMem(addr, result, 4);
+                    this.setFlag('CF', (memValue >>> 0) < ((regValue >>> 0) + oldCF));
+                    this.updateArithmeticFlags(result, memValue, regValue + oldCF, undefined, false);
+                } else {
+                    const memValue = this.readMem(addr, 4);
+                    const result = (regValue - memValue - oldCF) >>> 0;
+                    this.setReg32(regName, result);
+                    this.setFlag('CF', (regValue >>> 0) < ((memValue >>> 0) + oldCF));
+                    this.updateArithmeticFlags(result, regValue, memValue + oldCF, undefined, false);
+                }
+                return 4;
+            }
         }
     }
     
@@ -1757,13 +1950,13 @@ class X86CPU {
                 const addr = this.calculateAddress(modrm);
                 if (opcode === 0x20) {
                     // AND r/m8, r8
-                    const memValue = this.mem.read8(addr);
+                    const memValue = this.readMem(addr, 1);
                     const result = (memValue & regValue) & 0xFF;
-                    this.mem.write8(addr, result);
+                    this.writeMem(addr, result, 1);
                     this.updateArithmeticFlags(result, 0, 0, 0, true);
                 } else {
                     // AND r8, r/m8
-                    const memValue = this.mem.read8(addr);
+                    const memValue = this.readMem(addr, 1);
                     const result = (regValue & memValue) & 0xFF;
                     this.setReg8(regName, result);
                     this.updateArithmeticFlags(result, 0, 0, 0, true);
@@ -1845,7 +2038,7 @@ class X86CPU {
         } else {
             // Memory operand
             destAddr = this.calculateAddress(modrm);
-            destValue = isByteOp ? this.mem.read8(destAddr) : this.mem.read32(destAddr);
+            destValue = isByteOp ? this.readMem(destAddr, 1) : this.readMem(destAddr, 4);
             destRegName = null;
         }
         
@@ -1924,15 +2117,71 @@ class X86CPU {
             } else {
                 // Memory destination
                 if (isByteOp) {
-                    this.mem.write8(destAddr, result & 0xFF);
+                    this.writeMem(destAddr, result & 0xFF, 1);
                 } else {
-                    this.mem.write32(destAddr, result);
+                    this.writeMem(destAddr, result, 4);
                 }
             }
         }
         
-        return isByteOp ? 2 : 4;  // 8-bit = 2 cycles, 32-bit = 4 cycles
+                return isByteOp ? 2 : 4;  // 8-bit = 2 cycles, 32-bit = 4 cycles
     }
+
+    // Handle IMUL r32, r/m32, imm (0x69 = 32-bit imm, 0x6B = 8-bit sign-extended)
+    handleImulRegMem(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;   // Destination register
+        const rm = modrm & 7;            // Source register/Memory
+        
+        let srcValue;
+        if (mod === 3) {
+            // Register source
+            const rmName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+            srcValue = this.getReg32(rmName);
+        } else {
+            // Memory source
+            const addr = this.calculateAddress(modrm);
+            srcValue = this.readMem(addr, 4);
+        }
+        
+        // Read immediate
+        const is32BitImm = (opcode === 0x69);
+        let immValue;
+        if (is32BitImm) {
+            immValue = this.readMem(this.regs.eip, 4);
+            this.regs.eip += 4;
+        } else {
+            const imm8 = this.readMem(this.regs.eip, 1);
+            this.regs.eip++;
+            // Sign-extend
+            immValue = (imm8 & 0x80) ? (imm8 | 0xFFFFFF00) : imm8;
+        }
+        
+        // IMUL: signed multiply of srcValue * immValue
+        // Result is low 32 bits stored in destination reg
+        const result = ((srcValue | 0) * (immValue | 0)) >>> 0;
+        
+        const regName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
+        this.setReg32(regName, result);
+        
+        // Set flags: CF=OF=1 if result doesn't fit in 32-bit signed,
+        // else CF=OF=0.  For simplicity, compute the full 64-bit signed
+        // product and compare with 32-bit truncation.
+        const fullProduct = BigInt(srcValue | 0) * BigInt(immValue | 0);
+        const truncated = BigInt(Int32Array.from([result])[0] || 0);
+        const overflow = fullProduct !== truncated;
+        this.setFlag('CF', overflow ? 1 : 0);
+        this.setFlag('OF', overflow ? 1 : 0);
+        
+        return is32BitImm ? 4 : 3;
+    }
+    
+
+
     
 
     

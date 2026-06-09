@@ -71,7 +71,10 @@ function loadModules() {
   const MachineExports = context.module.exports;
   const X86Machine = MachineExports.X86Machine;
 
-  return { X86Memory, VGATextDevice, X86CPU, VGATextMode, X86Machine };
+  vm.runInContext(fs.readFileSync(path.join(__dirname, 'hardemu/bios.js'), 'utf8'), context);
+  const BIOS = context.BIOS || context.module.exports;
+
+  return { X86Memory, VGATextDevice, X86CPU, VGATextMode, X86Machine, BIOS };
 }
 
 function run() {
@@ -88,7 +91,7 @@ function run() {
     process.exit(1);
   }
 
-  const { X86Memory, X86CPU, VGATextMode, X86Machine } = modules;
+  const { X86Memory, X86CPU, VGATextMode, X86Machine, BIOS } = modules;
 
   const testCategories = process.argv[2] || 'all';
   const runAll = testCategories === 'all';
@@ -1472,12 +1475,24 @@ function run() {
       machine.destroy();
     });
 
-    test('PIC request IRQ sets ISR', () => {
+    test('PIC request IRQ sets IRR (ISR only when IF=1)', () => {
       const machine = new X86Machine();
       machine.pic.master.imr = 0x00;
+      // With IF=0 (default), IRQ stays pending in IRR
       machine.pic.requestIRQ(0);
-      assert((machine.pic.master.isr & 1) !== 0, 'ISR bit should be set');
+      assert((machine.pic.master.irr & 1) !== 0, 'IRR bit should be set when IF=0');
+      assert((machine.pic.master.isr & 1) === 0, 'ISR should NOT be set when IF=0');
+      // With IF=1, IRQ is delivered and ISR is set
+      const machine2 = new X86Machine();
+      machine2.pic.master.imr = 0x00;
+      machine2.cpu.setFlag('IF', 1);
+      machine2.pic.master.irr = 0;  // clear any stale state
+      machine2.pic.master.isr = 0;
+      machine2.pic.requestIRQ(0);
+      assert((machine2.pic.master.irr & 1) === 0, 'IRR should be cleared after delivery');
+      assert((machine2.pic.master.isr & 1) !== 0, 'ISR bit should be set when IF=1');
       machine.destroy();
+      machine2.destroy();
     });
 
     test('PIT creation and reset', () => {
@@ -1738,6 +1753,373 @@ function run() {
         assert(executed >= 10, `Only executed ${executed} instructions before crash`);
       });
     }
+  });
+
+  run('BIOS Services', ({ X86Machine, BIOS, X86Memory, X86CPU }) => {
+    test('BIOS instance created and wired to CPU', () => {
+      const machine = new X86Machine();
+      assert(machine.bios !== null, 'BIOS should exist on machine');
+      assert(machine.cpu.bios !== null, 'BIOS should be wired to CPU');
+      assert(machine.cpu.bios instanceof BIOS, 'BIOS should be BIOS instance');
+      machine.destroy();
+    });
+
+    test('INT 10h AH=0x0E teletype writes to VGA buffer', () => {
+      const machine = new X86Machine();
+      machine.setupInitialIDT();
+      // Set up a tiny snippet at the initial IVT vector for INT 10h so
+      // handleInt can find it if BIOS trap is bypassed — but our trap
+      // intercepts before handleInt, so this is just safety.
+      machine.cpu.regs.eax = 0x0E00 | 0x48;  // AH=0x0E, AL='H'
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);  // INT
+      machine.mem.write8(0x1001, 0x10);  // 0x10
+      // Execute INT 0x10 — BIOS should handle it before handleInt
+      machine.cpu.step();
+      const charCode = machine.mem.read8(0xB8000);
+      assertEq(charCode, 0x48, 'VGA buffer should contain H');
+      assert(machine.vga.dirty, 'VGA should be dirty after teletype');
+      assertEq(machine.vga.cursorX, 1, 'Cursor should advance after teletype');
+      machine.destroy();
+    });
+
+    test('INT 10h teletype handles newline and scroll', () => {
+      const machine = new X86Machine();
+      // Move cursor to last row, first column
+      machine.vga.cursorY = 24;
+      machine.vga.cursorX = 0;
+      // Write newline (0x0A)
+      machine.cpu.regs.eax = 0x0E00 | 0x0A;
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x10);
+      machine.cpu.step();
+      // Cursor should stay at row 24 (scrolled, new bottom row)
+      assertEq(machine.vga.cursorY, 24, 'Cursor should stay at bottom after LF+scroll');
+      assertEq(machine.vga.cursorX, 0, 'Cursor col unchanged after LF');
+      machine.destroy();
+    });
+
+    test('INT 10h AH=0x02 set cursor position', () => {
+      const machine = new X86Machine();
+      machine.cpu.regs.eax = 0x0200;  // AH=0x02
+      machine.cpu.regs.edx = 0x0503;  // DH=5, DL=3
+      machine.cpu.regs.ebx = 0;       // BH=page 0
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x10);
+      machine.cpu.step();
+      assertEq(machine.vga.cursorY, 5, 'Cursor row should be 5');
+      assertEq(machine.vga.cursorX, 3, 'Cursor col should be 3');
+      machine.destroy();
+    });
+
+    test('INT 10h AH=0x03 get cursor position', () => {
+      const machine = new X86Machine();
+      machine.vga.cursorY = 12;
+      machine.vga.cursorX = 40;
+      machine.cpu.regs.eax = 0x0300;  // AH=0x03
+      machine.cpu.regs.ebx = 0;
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x10);
+      machine.cpu.step();
+      const row = (machine.cpu.regs.edx >> 8) & 0xFF;
+      const col = machine.cpu.regs.edx & 0xFF;
+      assertEq(row, 12, 'DH should be cursor row');
+      assertEq(col, 40, 'DL should be cursor col');
+      machine.destroy();
+    });
+
+    test('INT 10h scroll up blanks the window', () => {
+      const machine = new X86Machine();
+      // Fill screen with 'X' chars
+      for (let i = 0; i < 25 * 80; i++) {
+        machine.mem.write8(0xB8000 + i * 2, 0x58);
+      }
+      // Scroll up the whole window with AL=0 (blank all)
+      machine.cpu.regs.eax = 0x0600;
+      machine.cpu.regs.ebx = 0x0700;
+      machine.cpu.regs.ecx = 0x0000;
+      machine.cpu.regs.edx = 0x184F;
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x10);
+      machine.cpu.step();
+      // All cells should be space (0x20)
+      assertEq(machine.mem.read8(0xB8000), 0x20, 'Top-left should be blank after scroll');
+      assert(machine.vga.dirty, 'VGA should be dirty after scroll');
+      machine.destroy();
+    });
+
+    test('INT 10h AH=0x09 write char with attribute', () => {
+      const machine = new X86Machine();
+      machine.cpu.regs.eax = 0x0900 | 0x41;  // AH=0x09, AL='A'
+      machine.cpu.regs.ebx = 0x02;            // BL=green-on-black
+      machine.cpu.regs.ecx = 1;               // CX=count
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x10);
+      machine.cpu.step();
+      assertEq(machine.mem.read8(0xB8000), 0x41, 'VGA buffer should contain A');
+      assertEq(machine.mem.read8(0xB8001), 0x02, 'Attribute should be 0x02');
+      machine.destroy();
+    });
+
+    test('INT 16h AH=0x01 check key returns ZF=1 when empty', () => {
+      const machine = new X86Machine();
+      machine.cpu.regs.eax = 0x0100;
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x16);
+      machine.cpu.step();
+      const zf = (machine.cpu.eflags >> 6) & 1;
+      assertEq(zf, 1, 'ZF should be 1 when no key available');
+      machine.destroy();
+    });
+
+    test('INT 16h AH=0x00 read key after scancode in buffer', () => {
+      const machine = new X86Machine();
+      // Put a scancode in the keyboard buffer
+      machine.keyboard.buffer.push(0x1E);  // 'a'
+      machine.keyboard.outputFull = true;
+      // Read via INT 16h AH=0x00
+      machine.cpu.regs.eax = 0x0000;
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x16);
+      machine.cpu.step();
+      // AL should be ASCII 'a' (0x61), AH should be scancode (0x1E)
+      const al = machine.cpu.regs.eax & 0xFF;
+      const ah = (machine.cpu.regs.eax >> 8) & 0xFF;
+      assertEq(al, 0x61, 'AL should be ASCII a');
+      assertEq(ah, 0x1E, 'AH should be scancode 0x1E');
+      machine.destroy();
+    });
+
+    test('INT 11h returns equipment list', () => {
+      const machine = new X86Machine();
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x11);
+      machine.cpu.step();
+      assertEq(machine.cpu.regs.eax & 0xFFFF, 0x0020, 'Equipment list should have video+floppy');
+      machine.destroy();
+    });
+
+    test('INT 12h returns memory size', () => {
+      const machine = new X86Machine();
+      machine.cpu.regs.eax = 0x12340000;
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x12);
+      machine.cpu.step();
+      assertEq(machine.cpu.regs.eax & 0xFFFF, 640, 'AX should be 640 KB');
+      machine.destroy();
+    });
+
+    test('Non-BIOS INT passes through to normal dispatch', () => {
+      const machine = new X86Machine();
+      machine.setupInitialIDT();
+      // Set up a simple handler at 0x5000 that does IRET
+      machine.mem.write8(0x5000, 0xCF);  // IRET
+      // Set IDT entry for INT 0x80 to point to 0x5000
+      const entryAddr = machine.cpu.idtBase + (0x80 * 8);
+      machine.mem.write16(entryAddr, 0x5000 & 0xFFFF);
+      machine.mem.write16(entryAddr + 2, 0x0008);
+      machine.mem.write8(entryAddr + 4, 0x00);
+      machine.mem.write8(entryAddr + 5, 0x8E);
+      machine.mem.write8(entryAddr + 6, (0x5000 >> 16) & 0xFF);
+      machine.mem.write8(entryAddr + 7, (0x5000 >> 24) & 0xFF);
+      machine.cpu.regs.eax = 0x12345678;
+      machine.cpu.regs.esp = 0x10000;
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x80);
+      const spBefore = machine.cpu.regs.esp;
+      machine.cpu.step();
+      // Non-BIOS INT should have pushed a frame (ESP decreased)
+      assert(machine.cpu.regs.esp < spBefore, 'ESP should decrease (interrupt frame pushed)');
+      // EIP should now be at the handler (0x5000), not past INT
+      assertEq(machine.cpu.regs.eip, 0x5000, 'EIP should be at IRET handler');
+      machine.destroy();
+    });
+  });
+
+  run('Keyboard Input Capture', ({ X86Machine }) => {
+    test('handleKeyEvent sends scancode for letter a', () => {
+      const machine = new X86Machine();
+      machine.keyboard.handleKeyEvent('a', true);
+      assert(machine.keyboard.buffer.length > 0, 'Buffer should contain scancode');
+      const sc = machine.keyboard.buffer[0];
+      assertEq(sc, 0x1E, 'Scancode for a should be 0x1E');
+      machine.destroy();
+    });
+
+    test('handleKeyEvent sets outputFull flag and triggers IRQ1', () => {
+      const machine = new X86Machine();
+      let irq1Fired = false;
+      const origTrigger = machine.triggerIRQ.bind(machine);
+      machine.triggerIRQ = (irq) => {
+        if (irq === 1) irq1Fired = true;
+        origTrigger(irq);
+      };
+      machine.keyboard.handleKeyEvent('Enter', true);
+      assert(machine.keyboard.outputFull, 'Output full flag should be set');
+      assert(irq1Fired, 'IRQ1 should fire on keypress');
+      machine.destroy();
+    });
+
+    test('handleKeyEvent key release sends break code', () => {
+      const machine = new X86Machine();
+      machine.keyboard.handleKeyEvent('a', false);  // key release
+      assert(machine.keyboard.buffer.length > 0, 'Buffer should contain break scancode');
+      const sc = machine.keyboard.buffer[0];
+      assertEq(sc, 0x1E | 0x80, 'Break scancode should have high bit set');
+      machine.destroy();
+    });
+
+    test('handleKeyEvent maps Enter, Backspace, Tab, Escape', () => {
+      const machine = new X86Machine();
+      machine.keyboard.handleKeyEvent('Enter', true);
+      assertEq(machine.keyboard.buffer[0], 0x1C);
+      machine.keyboard.buffer = [];
+      machine.keyboard.handleKeyEvent('Backspace', true);
+      assertEq(machine.keyboard.buffer[0], 0x0E);
+      machine.keyboard.buffer = [];
+      machine.keyboard.handleKeyEvent('Tab', true);
+      assertEq(machine.keyboard.buffer[0], 0x0F);
+      machine.keyboard.buffer = [];
+      machine.keyboard.handleKeyEvent('Escape', true);
+      assertEq(machine.keyboard.buffer[0], 0x01);
+      machine.destroy();
+    });
+
+    test('handleKeyEvent maps arrow keys', () => {
+      const machine = new X86Machine();
+      machine.keyboard.handleKeyEvent('ArrowUp', true);
+      assertEq(machine.keyboard.buffer[0], 0x48);
+      machine.keyboard.buffer = [];
+      machine.keyboard.handleKeyEvent('ArrowDown', true);
+      assertEq(machine.keyboard.buffer[0], 0x50);
+      machine.keyboard.buffer = [];
+      machine.keyboard.handleKeyEvent('ArrowLeft', true);
+      assertEq(machine.keyboard.buffer[0], 0x4B);
+      machine.keyboard.buffer = [];
+      machine.keyboard.handleKeyEvent('ArrowRight', true);
+      assertEq(machine.keyboard.buffer[0], 0x4D);
+      machine.destroy();
+    });
+
+    test('handleKeyEvent maps function keys', () => {
+      const machine = new X86Machine();
+      machine.keyboard.handleKeyEvent('F1', true);
+      assertEq(machine.keyboard.buffer[0], 0x3B);
+      machine.keyboard.buffer = [];
+      machine.keyboard.handleKeyEvent('F5', true);
+      assertEq(machine.keyboard.buffer[0], 0x3F);
+      machine.keyboard.buffer = [];
+      machine.keyboard.handleKeyEvent('F10', true);
+      assertEq(machine.keyboard.buffer[0], 0x44);
+      machine.destroy();
+    });
+
+    test('Multiple keypresses queued in buffer order', () => {
+      const machine = new X86Machine();
+      machine.keyboard.handleKeyEvent('h', true);
+      machine.keyboard.handleKeyEvent('e', true);
+      machine.keyboard.handleKeyEvent('l', true);
+      machine.keyboard.handleKeyEvent('l', true);
+      machine.keyboard.handleKeyEvent('o', true);
+      assertEq(machine.keyboard.buffer.length, 5, 'Buffer should hold 5 scancodes');
+      assertEq(machine.keyboard.read(0x60), 0x23, 'First: h scancode');
+      assertEq(machine.keyboard.read(0x60), 0x12, 'Second: e scancode');
+      assertEq(machine.keyboard.read(0x60), 0x26, 'Third: l scancode');
+      assertEq(machine.keyboard.read(0x60), 0x26, 'Fourth: l scancode');
+      assertEq(machine.keyboard.read(0x60), 0x18, 'Fifth: o scancode');
+      assertEq(machine.keyboard.buffer.length, 0, 'Buffer should be empty after reads');
+      machine.destroy();
+    });
+
+    test('Keypress captured then read via port 0x60', () => {
+      const machine = new X86Machine();
+      machine.keyboard.handleKeyEvent('x', true);
+      const sc = machine.keyboard.read(0x60);
+      assertEq(sc, 0x2D, 'Port 0x60 should return scancode 0x2D for x');
+      const status = machine.keyboard.read(0x64);
+      assert((status & 0x01) === 0, 'Status should show buffer empty after read');
+      machine.destroy();
+    });
+
+    test('handleKeyEvent handles Space key', () => {
+      const machine = new X86Machine();
+      machine.keyboard.handleKeyEvent(' ', true);
+      assertEq(machine.keyboard.buffer[0], 0x39, 'Space scancode should be 0x39');
+      machine.destroy();
+    });
+
+    test('handleKeyEvent handles uppercase letter same scancode as lowercase', () => {
+      const machine = new X86Machine();
+      machine.keyboard.handleKeyEvent('A', true);
+      assertEq(machine.keyboard.buffer[0], 0x1E, 'A scancode same as a (0x1E)');
+      machine.destroy();
+    });
+
+    test('Terminal onData forwards keypress to keyboard', () => {
+      // Simulate what init.js terminal.onData does
+      const machine = new X86Machine();
+      const data = 'hello';
+      for (const ch of data) {
+        let key = ch;
+        if (key === '\r') key = 'Enter';
+        else if (key === '\x7f') key = 'Backspace';
+        else if (key === '\t') key = 'Tab';
+        else if (key === '\x1b') key = 'Escape';
+        machine.keyboard.handleKeyEvent(key, true);
+        machine.keyboard.handleKeyEvent(key, false);
+      }
+      // 5 chars x 2 (press + release) = 10 scancodes
+      assertEq(machine.keyboard.buffer.length, 10, 'Buffer should have 10 scancodes');
+      // Read and verify press + release pattern
+      assertEq(machine.keyboard.read(0x60), 0x23, 'h press');
+      assertEq(machine.keyboard.read(0x60), 0x23 | 0x80, 'h release');
+      assertEq(machine.keyboard.read(0x60), 0x12, 'e press');
+      assertEq(machine.keyboard.read(0x60), 0x12 | 0x80, 'e release');
+      machine.destroy();
+    });
+
+    test('Keypress captured and readable via BIOS INT 16h', () => {
+      const machine = new X86Machine();
+      // Send a keypress through the keyboard
+      machine.keyboard.handleKeyEvent('z', true);
+      // Read via INT 16h AH=0x00
+      machine.cpu.regs.eax = 0x0000;
+      machine.cpu.regs.eip = 0x1000;
+      machine.mem.write8(0x1000, 0xCD);
+      machine.mem.write8(0x1001, 0x16);
+      machine.cpu.step();
+      const al = machine.cpu.regs.eax & 0xFF;
+      const ah = (machine.cpu.regs.eax >> 8) & 0xFF;
+      assertEq(al, 0x7A, 'AL should be ASCII z (0x7A)');
+      assertEq(ah, 0x2C, 'AH should be scancode 0x2C');
+      machine.destroy();
+    });
+
+    test('Keyboard IRQ1 flow: keypress -> buffer -> port read', () => {
+      const machine = new X86Machine();
+      // Simulate the full IRQ1 flow:
+      // 1. Key pressed -> scancode in buffer + IRQ1
+      // 2. IRQ handler reads port 0x60 -> gets scancode
+      // 3. Port read clears output flag
+      machine.keyboard.handleKeyEvent('w', true);
+      assert(machine.keyboard.outputFull, 'Output full after keypress');
+      assert(machine.keyboard.buffer.length > 0, 'Buffer has data');
+      // Kernel's IRQ1 handler would read port 0x60
+      const scancode = machine.keyboard.read(0x60);
+      assertEq(scancode, 0x11, 'Scancode for w is 0x11');
+      assert(!machine.keyboard.outputFull, 'Output full cleared after read');
+      machine.destroy();
+    });
   });
 
   console.log(`\n${BOLD}${CYAN}╔══════════════════════════════════════╗${RESET}`);

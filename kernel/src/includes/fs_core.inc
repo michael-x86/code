@@ -437,6 +437,12 @@ dir_lookup:
     movzx eax, word [edi + 4]            ; rec_len
     test eax, eax
     jz .next_block                       ; zero rec_len = end of entries
+    ; Guard against corrupted rec_len that exceeds the remaining buffer.
+    ; Without this check, a rec_len > ecx would underflow the subtraction
+    ; below and cause the loop to read past the block boundary, potentially
+    ; into unmapped memory or garbage BSS state.
+    cmp eax, ecx
+    ja .next_block
 
     ; Robust name comparison: name_len bytes from edi+8 must equal esi
     ; and esi must be NUL-terminated at the end of the match.
@@ -469,6 +475,8 @@ dir_lookup:
     pop ecx
 
     movzx eax, word [edi + 4]
+    cmp eax, ecx                         ; second rec_len bounds check
+    ja .next_block
     sub ecx, eax
     add edi, eax
     jmp .scan_entry
@@ -862,8 +870,8 @@ file_read:
     mov ecx, BLOCK_SIZE
     sub ecx, eax                         ; bytes available in this block
     cmp [file_bytes_left], ecx
-    jle .rd_copy
-    mov ecx, [file_bytes_left]
+    jge .rd_copy                         ; enough bytes for a full block
+    mov ecx, [file_bytes_left]           ; else clamp to remaining bytes
 .rd_copy:
     push esi
     push edi

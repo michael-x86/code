@@ -149,6 +149,14 @@ page_mapping:
     or  eax, PAGE_PRESENT_RW
     mov [edx + (4 * 4)], eax
     mov [edx + (772 * 4)], eax
+
+    ; PDE[514] — re-use identity_page_table so the kernel doesn't fault
+    ; when the FS init path computes an address in this range.
+    ; Virtual 0x80800000..0x80BFFFFF maps to physical 0x00000000..0x003FFFFF.
+    ; This puts usable RAM behind the page table so reads won't #PF.
+    lea eax, [identity_page_table + ebp]
+    or  eax, PAGE_PRESENT_RW
+    mov [edx + (514 * 4)], eax
     ret
 
 

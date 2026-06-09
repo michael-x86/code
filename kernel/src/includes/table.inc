@@ -6,14 +6,13 @@
 ; ----------------------------------
 ; The keymap is 1 byte per scancode, so any multi-byte character in the
 ; source shifts every entry after it. The original keymap_swe in
-; input.inc had this bug in two places: the row with zxc was pushed
-; right by one because `'\\'` was assembled as TWO backslashes, and
-; any literal non-ASCII would be encoded as UTF-8 (2+ bytes) by NASM.
+; input.inc had this bug in two places: `'\\'` assembled as two bytes
+; in single quotes, and non-ASCII literals encoded as UTF-8 by NASM.
 ;
-; This file avoids both: every entry is a single byte (either a printable
-; ASCII char in single quotes, or an explicit `0xNN` Latin-1/CP437 code
-; for å ä ö Å Ä Ö ´ ¨ ¤ '). Each row is annotated with its scancode so
-; adding or changing an entry is a one-line, low-risk edit.
+; The US keymap (input.drv) was also affected — fixed by using a single
+; backslash. This file avoids both issues by using explicit single bytes.
+; Each row is annotated with its scancode so adding or changing an entry
+; is a one-line, low-risk edit.
 ;
 ; Character codes used
 ; --------------------

@@ -64,6 +64,11 @@ class VGATextMode {
         this.dirty = true;
         this.dirtyRegions = [];
         
+        // Cursor blink state (~530ms period, standard VGA rate)
+        this.blinkVisible = true;
+        this.blinkNextTime = 0;  // 0 = never run; initialized on first render
+        this.blinkPeriod = 530;  // ms between toggles
+        
         // Callback for port I/O (to integrate with CPU)
         this.onPortWrite = null;
         this.onPortRead = null;
@@ -85,7 +90,7 @@ class VGATextMode {
         this.crtcRegisters[0x07] = 0x1F;  // Vertical display enable end
         this.crtcRegisters[0x08] = 0x00;  // Vertical blanking start
         this.crtcRegisters[0x09] = 0x4F;  // Maximum scan line
-        this.crtcRegisters[0x0A] = 0x0D;  // Cursor start
+        this.crtcRegisters[0x0A] = 0x2D;  // Cursor start (blink enabled, scanline 13)
         this.crtcRegisters[0x0B] = 0x0E;  // Cursor end
         this.crtcRegisters[0x0C] = 0x00;  // Start address high
         this.crtcRegisters[0x0D] = 0x00;  // Start address low
@@ -304,6 +309,16 @@ class VGATextMode {
     
     // Render VGA text buffer to canvas
     render() {
+        // Update cursor blink state
+        const now = Date.now();
+        if (this.blinkNextTime === 0) {
+            this.blinkNextTime = now + this.blinkPeriod;
+        } else if (now >= this.blinkNextTime) {
+            this.blinkVisible = !this.blinkVisible;
+            this.blinkNextTime = now + this.blinkPeriod;
+        }
+        
+        // Skip if nothing changed (including blink state)
         if (!this.ctx || !this.dirty) return;
         
         // Clear canvas
@@ -355,10 +370,12 @@ class VGATextMode {
             }
         }
         
-        // Draw cursor (if visible)
+        // Draw cursor (if visible and blink state is on)
         const cursorStart = this.crtcRegisters[0x0A] & 0x1F;
         const cursorEnd = this.crtcRegisters[0x0B] & 0x1F;
-        if (cursorStart <= cursorEnd) {
+        const blinkEnabled = (this.crtcRegisters[0x0A] >> 5) & 1;
+        const cursorOn = blinkEnabled ? this.blinkVisible : (cursorStart <= cursorEnd);
+        if (cursorOn && cursorStart <= cursorEnd) {
             this.ctx.fillStyle = '#FFFFFF';
             this.ctx.fillRect(
                 this.cursorX * charWidth,
@@ -369,6 +386,15 @@ class VGATextMode {
         }
         
         this.dirty = false;
+    }
+    
+    // Check if cursor blink needs a redraw (call this even when !dirty)
+    needsBlinkRedraw() {
+        const blinkEnabled = (this.crtcRegisters[0x0A] >> 5) & 1;
+        if (!blinkEnabled) return false;
+        if (this.blinkNextTime === 0) return false;
+        const now = Date.now();
+        return now >= this.blinkNextTime;
     }
     
     // Mark screen as dirty (needs re-render)

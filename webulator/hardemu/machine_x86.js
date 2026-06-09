@@ -31,6 +31,14 @@ class X86Machine {
         this.debug = false;
         this.breakpoints = [];
         
+        // Serial port (COM1) state
+        this.serialRxBuffer = [];
+        this.serialLcr = 0;
+        this.serialMcr = 0;
+        this.serialIer = 0;
+        this.serialDll = 0;
+        this.serialDlm = 0;
+        
         // Canvas for VGA rendering
         this.canvas = null;
         
@@ -69,6 +77,11 @@ class X86Machine {
         this.cpu.machine = this;
         this.cpu.debug = this.debug;
         
+        // Create BIOS — provides INT 10h/13h/16h services by routing
+        // directly into the emulated device models.
+        this.bios = new BIOS(this);
+        this.cpu.bios = this.bios;
+        
         // Mark VGA dirty when memory is written at 0xB8000
         this.mem.onVgaUpdate = () => {
             this.vga.dirty = true;
@@ -87,23 +100,73 @@ class X86Machine {
         this.vga.onPortWrite = (port, value) => this.cpuPortWrite(port, value);
         this.vga.onPortRead = (port) => this.cpuPortRead(port);
         
+        // Install initial IDT so the machine can survive early exceptions
+        this.setupInitialIDT();
+        
         console.log('x86 Machine initialized');
+    }
+    
+    // Install a minimal IDT: all 256 entries point to a cli;hlt handler
+    // at physical 0x6000, with CS selector 0x08 (kernel code segment).
+    // This ensures any exception before the kernel loads its own IDT
+    // halts cleanly instead of tripling fault or crashing.
+    setupInitialIDT() {
+        const IDT_BASE = 0x5000;
+        const HANDLER_ADDR = 0x6000;
+        
+        // cli (0xFA), hlt (0xF4)
+        this.mem.write8(HANDLER_ADDR, 0xFA);
+        this.mem.write8(HANDLER_ADDR + 1, 0xF4);
+        
+        for (let i = 0; i < 256; i++) {
+            const entryAddr = IDT_BASE + (i * 8);
+            this.mem.write16(entryAddr, HANDLER_ADDR & 0xFFFF);
+            this.mem.write16(entryAddr + 2, 0x0008);
+            this.mem.write8(entryAddr + 4, 0x00);
+            this.mem.write8(entryAddr + 5, 0x8E);  // present, 32-bit interrupt gate
+            this.mem.write8(entryAddr + 6, (HANDLER_ADDR >> 16) & 0xFF);
+            this.mem.write8(entryAddr + 7, (HANDLER_ADDR >> 24) & 0xFF);
+        }
+        
+        this.cpu.idtBase = IDT_BASE;
+        this.cpu.idtLimit = 0x7FF;
     }
     
     // Reset the machine (like pressing reset button)
     reset() {
         this.stop();
+        
+        // Machine-level execution state
+        this.tstates = 0;
+        this.halted = false;
+        this.breakpoints = [];
+        
+        // Clear serial port (COM1) state — stale bytes would corrupt
+        // a freshly loaded kernel that expects a clean line discipline.
+        this.serialRxBuffer = [];
+        this.serialLcr = 0;
+        this.serialMcr = 0;
+        this.serialIer = 0;
+        this.serialDll = 0;
+        this.serialDlm = 0;
+        
+        // Subsystem resets
         this.cpu.reset();
-        this.mem.init();
+        this.mem.init();      // zeros all RAM, including 0x5000 IDT and 0x6000 handler
         this.vga.init();
         this.pic.reset();
         this.pit.reset();
         this.keyboard.reset();
         this.ata.reset();
         
-        // Load BIOS (simplified - just set reset vector)
-        // In real hardware, reset vector is at 0xFFFFFFF0
-        // For simplicity, we'll load a simple BIOS that boots from disk
+        // Re-install the initial IDT since mem.init() cleared it
+        this.setupInitialIDT();
+        
+        // Render the now-empty VGA buffer to the canvas (clears any
+        // residual pixels left over from the previous session).
+        if (this.vga && this.vga.ctx) {
+            this.vga.render();
+        }
         
         console.log('Machine reset');
     }
@@ -131,8 +194,11 @@ class X86Machine {
         this.running = true;
         this.halted = false;
         
-        // Calculate T-states per 16ms interval (roughly 60 FPS)
-        this.tstatesPerInterval = Math.floor(this.cpuFreq / 60 / this.speedDivider);
+        // Calculate T-states per 16ms interval (roughly 60 FPS).
+        // Floor ensures correct deceleration, but we keep a minimum of 6000
+        // so the PIT (~100 Hz, divisor 11932) fires at ~3 Hz and the task
+        // scheduler can context-switch into the shell task every ~1 s.
+        this.tstatesPerInterval = Math.max(6000, Math.floor(this.cpuFreq / 60 / this.speedDivider));
         
         // Start execution loop
         const outerThis = this;
@@ -184,6 +250,9 @@ class X86Machine {
         // Render VGA if dirty
         if (this.vga.dirty) {
             this.vga.render();
+        } else if (this.vga.needsBlinkRedraw && this.vga.needsBlinkRedraw()) {
+            this.vga.dirty = true;
+            this.vga.render();
         }
         
         // Notify UI for refresh (register display, etc.)
@@ -202,6 +271,9 @@ class X86Machine {
             
             // Render VGA if dirty
             if (this.vga.dirty) {
+                this.vga.render();
+            } else if (this.vga.needsBlinkRedraw && this.vga.needsBlinkRedraw()) {
+                this.vga.dirty = true;
                 this.vga.render();
             }
         }
@@ -281,11 +353,8 @@ class X86Machine {
         } else if (port === 0x92) {
             // A20 line control
             this.handleA20(value);
-        } else if (port === 0x3F8) {
-            // Serial port (COM1) - for debug output
-            if (this.onSerialOutput) {
-                this.onSerialOutput(value);
-            }
+        } else if (port >= 0x3F8 && port <= 0x3FE) {
+            this.serialPortWrite(port, value);
         } else {
             if (this.debug) {
                 console.log(`Unhandled port write: 0x${port.toString(16)}`);
@@ -319,11 +388,22 @@ class X86Machine {
         } else if (port >= 0x1F0 && port <= 0x1F7) {
             return this.ata.readPrimary(port);
         } else if (port === 0x3F8) {
-            // Serial port data register
+            if (this.serialRxBuffer.length > 0) return this.serialRxBuffer.shift();
             return 0;
         } else if (port === 0x3FD) {
-            // Serial port line status register: THR empty + line ready
-            return 0x60;
+            let status = 0x60;
+            if (this.serialRxBuffer.length > 0) status |= 0x01;
+            return status;
+        } else if (port === 0x3FA) {
+            return 0x06;
+        } else if (port === 0x3FB) {
+            return this.serialLcr;
+        } else if (port === 0x3FC) {
+            return this.serialMcr;
+        } else if (port === 0x3FE) {
+            return 0x30;
+        } else if (port === 0x3F9) {
+            return 0;
         } else {
             if (this.debug) {
                 console.log(`Unhandled port read: 0x${port.toString(16)}`);
@@ -344,6 +424,42 @@ class X86Machine {
     // Trigger IRQ (called by devices)
     triggerIRQ(irqNum) {
         this.pic.requestIRQ(irqNum);
+    }
+    
+    // Write data to serial RX buffer (from terminal UI)
+    writeSerial(data) {
+        for (let i = 0; i < data.length; i++) {
+            this.serialRxBuffer.push(data.charCodeAt(i) & 0xFF);
+        }
+        if (this.serialRxBuffer.length > 0 && (this.serialIer & 1)) {
+            this.triggerIRQ(4);
+        }
+    }
+    
+    // Handle writes to COM1 serial port registers
+    serialPortWrite(port, value) {
+        const reg = port - 0x3F8;
+        if (this.serialLcr & 0x80) {
+            if (reg === 0) this.serialDll = value;
+            else if (reg === 1) this.serialDlm = value;
+            return;
+        }
+        switch (reg) {
+            case 0:
+                if (this.onSerialOutput) this.onSerialOutput(value);
+                break;
+            case 1:
+                this.serialIer = value;
+                break;
+            case 2:
+                break;
+            case 3:
+                this.serialLcr = value;
+                break;
+            case 4:
+                this.serialMcr = value;
+                break;
+        }
     }
     
     // Set canvas for VGA rendering
@@ -492,7 +608,7 @@ class PIC8259A {
                 // Special mask mode
                 pic.specialMask = !!(value & 0x10);
             }
-        } else {
+            } else {
             // OCW2: EOI, rotate, etc.
             if (value & 0x20) {
                 // EOI (End of Interrupt)
@@ -514,6 +630,8 @@ class PIC8259A {
                     // Non-specific EOI
                     pic.isr = 0;
                 }
+                // Re-check for more pending interrupts after EOI
+                this.checkInterrupts();
             }
         }
     }
@@ -585,14 +703,34 @@ class PIC8259A {
         // Check if any unmasked, unserviced IRQs are pending
         const masterPending = this.master.irr & ~this.master.imr & ~this.master.isr;
         if (masterPending) {
-            // Find highest priority IRQ (lowest number)
             for (let i = 0; i < 8; i++) {
                 if (masterPending & (1 << i)) {
-                    // Trigger interrupt on CPU
-                    const vector = this.master.base + i;
-                    this.triggerInterrupt(vector);
-                    this.master.isr |= (1 << i);
-                    this.master.irr &= ~(1 << i);
+                    if (i === 2 && (this.master.icw3 & (1 << 2))) {
+                        // Slave PIC cascaded on IRQ2 — check slave
+                        const slavePending = this.slave.irr & ~this.slave.imr & ~this.slave.isr;
+                        if (slavePending) {
+                            for (let j = 0; j < 8; j++) {
+                                if (slavePending & (1 << j)) {
+                                    const vector = this.slave.base + j;
+                                    if (this.triggerInterrupt(vector)) {
+                                        this.slave.isr |= (1 << j);
+                                        this.slave.irr &= ~(1 << j);
+                                        this.master.isr |= (1 << 2);
+                                        this.master.irr &= ~(1 << 2);
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                        // No slave IRQ pending — clear spurious master IRR
+                        this.master.irr &= ~(1 << 2);
+                    } else {
+                        const vector = this.master.base + i;
+                        if (this.triggerInterrupt(vector)) {
+                            this.master.isr |= (1 << i);
+                            this.master.irr &= ~(1 << i);
+                        }
+                    }
                     break;
                 }
             }
@@ -601,7 +739,12 @@ class PIC8259A {
     
     triggerInterrupt(vector) {
         if (this.machine.cpu && this.machine.cpu.getFlag('IF')) {
+            console.log(`[IRQ] Delivering interrupt vector 0x${vector.toString(16)} (IRQ${vector - this.master.base})`);
             this.machine.cpu.handleInt(vector);
+            return true;
+        } else {
+            console.log(`[IRQ] Vector 0x${vector.toString(16)} pending (IF=0)`);
+            return false;
         }
     }
 }
@@ -639,7 +782,7 @@ class PIT8254 {
             ch.ticking = false;
         }
         for (let a of this.access) {
-            a.state = 0;
+            a.state = 2;  // Default to single-byte access (no port 0x43 config needed)
             a.lsb = 0;
         }
     }
@@ -928,8 +1071,9 @@ class PS2Keyboard {
     // Handle key event from UI
     handleKeyEvent(key, down) {
         // Convert key to scancode (set 1, XT)
-        // This is a simplified mapping
+        // Includes full keyboard mapping
         const scancodeMap = {
+            // Letters (lowercase)
             'a': 0x1E, 'b': 0x30, 'c': 0x2E, 'd': 0x20,
             'e': 0x12, 'f': 0x21, 'g': 0x22, 'h': 0x23,
             'i': 0x17, 'j': 0x24, 'k': 0x25, 'l': 0x26,
@@ -937,11 +1081,54 @@ class PS2Keyboard {
             'q': 0x10, 'r': 0x13, 's': 0x1F, 't': 0x14,
             'u': 0x16, 'v': 0x2F, 'w': 0x11, 'x': 0x2D,
             'y': 0x15, 'z': 0x2C,
-            '1': 0x02, '2': 0x03, '3': 0x04, '4': 0x05,
-            '5': 0x06, '6': 0x07, '7': 0x08, '8': 0x09,
-            '9': 0x0A, '0': 0x0B,
+            // Uppercase letters (map to same scancodes, shift state tracked separately)
+            'A': 0x1E, 'B': 0x30, 'C': 0x2E, 'D': 0x20,
+            'E': 0x12, 'F': 0x21, 'G': 0x22, 'H': 0x23,
+            'I': 0x17, 'J': 0x24, 'K': 0x25, 'L': 0x26,
+            'M': 0x32, 'N': 0x31, 'O': 0x18, 'P': 0x19,
+            'Q': 0x10, 'R': 0x13, 'S': 0x1F, 'T': 0x14,
+            'U': 0x16, 'V': 0x2F, 'W': 0x11, 'X': 0x2D,
+            'Y': 0x15, 'Z': 0x2C,
+            // Numbers
+            '0': 0x0B, '1': 0x02, '2': 0x03, '3': 0x04, '4': 0x05,
+            '5': 0x06, '6': 0x07, '7': 0x08, '8': 0x09, '9': 0x0A,
+            // Punctuation
+            '-': 0x0C, '_': 0x0C, '=': 0x0D, '+': 0x0D,
+            '[': 0x1A, '{': 0x1A, ']': 0x1B, '}': 0x1B,
+            '\\': 0x2B, '|': 0x2B,
+            ';': 0x27, ':': 0x27, "'": 0x28, '"': 0x28,
+            ',': 0x33, '<': 0x33, '.': 0x34, '>': 0x34,
+            '/': 0x35, '?': 0x35, '`': 0x29, '~': 0x29,
+            // Whitespace
             'Enter': 0x1C, 'Escape': 0x01, 'Backspace': 0x0E,
-            'Tab': 0x0F, 'Space': 0x39,
+            'Tab': 0x0F, ' ': 0x39, 'Space': 0x39,
+            // Modifier keys
+            'Shift': 0x2A, 'LeftShift': 0x2A,
+            'RightShift': 0x36, 'ShiftRight': 0x36,
+            'Control': 0x1D, 'Ctrl': 0x1D,
+            'LeftControl': 0x1D, 'LeftCtrl': 0x1D,
+            'RightControl': 0x1D, 'RightCtrl': 0x1D,  // E0 prefix not implemented
+            'Alt': 0x38, 'LeftAlt': 0x38,
+            'RightAlt': 0x38,  // E0 prefix not implemented
+            'CapsLock': 0x3A,
+            'NumLock': 0x45,
+            'ScrollLock': 0x46,
+            // Arrow keys
+            'ArrowUp': 0x48, 'Up': 0x48,
+            'ArrowDown': 0x50, 'Down': 0x50,
+            'ArrowLeft': 0x4B, 'Left': 0x4B,
+            'ArrowRight': 0x4D, 'Right': 0x4D,
+            // Function keys
+            'F1': 0x3B, 'F2': 0x3C, 'F3': 0x3D, 'F4': 0x3E,
+            'F5': 0x3F, 'F6': 0x40, 'F7': 0x41, 'F8': 0x42,
+            'F9': 0x43, 'F10': 0x44, 'F11': 0x57, 'F12': 0x58,
+            // Navigation
+            'Insert': 0x52, 'Delete': 0x53, 'Del': 0x53,
+            'Home': 0x47, 'End': 0x4F,
+            'PageUp': 0x49, 'PageDown': 0x51,
+            // Misc
+            'PrintScreen': 0x37, 'Pause': 0x45, 'Break': 0x45,
+            'ContextMenu': 0x5D, 'Menu': 0x5D,
         };
         
         let scancode = scancodeMap[key] || 0;
@@ -981,7 +1168,7 @@ class ATADisk {
         };
         
         // PIO data buffer for sector reads/writes
-        this.pioBuffer = new Uint16Array(256);
+        this.pioBuffer = new Uint16Array(256 * 8);  // 8 sectors max = 4096 bytes
         this.pioOffset = 0;
         this.pioCount = 0;  // Number of words remaining in buffer
         this.pioWriteMode = false;  // true if we're expecting writes

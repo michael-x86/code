@@ -7,10 +7,18 @@ $("#clean").on("click",    () => {
     resetKernel();
 });
 
-$("#speed-slider").on("input", function() {
-    const div = parseInt($(this).val());
-    const freq = (10000000 / div) / 1000000;
-    $("#speed-label").text(freq.toFixed(div >= 20 ? 0 : 1) + ' MHz');
+function setSpeedDivider(div) {
+    div = Math.max(1, Math.floor(div));
+    const freq = 10000000 / div;
+    if (freq >= 1000000) {
+        $("#speed-label").text((freq / 1000000).toFixed(1) + ' MHz');
+    } else if (freq >= 1000) {
+        $("#speed-label").text((freq / 1000).toFixed(0) + ' KHz');
+    } else {
+        $("#speed-label").text(freq.toFixed(2) + ' Hz');
+    }
+    if (div <= 1000) $("#speed-slider").val(div);
+    $("#speed-div").val(div);
     if (machine) {
         machine.speedDivider = div;
         if (machine.running) {
@@ -18,6 +26,14 @@ $("#speed-slider").on("input", function() {
             machine.start();
         }
     }
+}
+
+$("#speed-slider").on("input", function() {
+    setSpeedDivider(parseInt($(this).val()));
+});
+
+$("#speed-div").on("change", function() {
+    setSpeedDivider(parseInt($(this).val()));
 });
 
 function showPauseView() {
@@ -110,8 +126,8 @@ $('#container .close').on('click', () => {
 })
 
 jQuery(() => {
-    $('#continue').hide();
-    $('#pause').show();
+    $('#pause').hide();
+    $('#continue').show();
     $('#speed-slider').trigger('input');
 
     let menus = JSON.parse(localStorage.getItem('menus')) ?? {};

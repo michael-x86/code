@@ -4,6 +4,12 @@ function loadKernel(file_rom) {
     reader.onload = function(e) {
         const data = new Uint8Array(e.target.result);
         if (machine && machine.mem) {
+            // Re-install initial IDT before loading (validates the CPU can
+            // survive any exception during early kernel boot).  loadBinary
+            // writes at 0x100000+, far from the IDT at 0x5000, so this is
+            // safe to call before loading.
+            machine.setupInitialIDT();
+
             machine.mem.loadBinary(data, 0x100000);
             machine.cpu.regs.eip = 0x100000;
             $("#kernready").addClass("ready");
@@ -42,6 +48,7 @@ function loadBootloader(file_boot) {
     reader.onload = function(e) {
         const data = new Uint8Array(e.target.result);
         if (machine && machine.mem) {
+            machine.setupInitialIDT();
             machine.mem.loadBinary(data, 0x7C00);
             machine.cpu.regs.eip = 0x7C00;
             $("#bootready").addClass("ready");
