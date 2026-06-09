@@ -4,14 +4,16 @@
 ;
 ; Paging layout
 ; -------------
-; We set up a higher-half kernel with five 4 MB windows, all identity-
-; mapped at the bottom of the address space and mirrored at 0xC0000000+:
+; We set up a higher-half kernel with six 4 MB identity-mapped windows
+; and a higher-half mirror at 0xC0000000+:
 ;
 ;   PDE 0  / 768  -> identity_page_table   (0x00000000 .. 0x003FFFFF)
 ;   PDE 1  / 769  -> kernel_low_page_table (0x00400000 .. 0x007FFFFF)
 ;   PDE 2  / 770  -> heap_page_table_0     (0x00800000 .. 0x00BFFFFF)
 ;   PDE 3  / 771  -> heap_page_table_1     (0x00C00000 .. 0x00FFFFFF)
 ;   PDE 4  / 772  -> heap_page_table_2     (0x01000000 .. 0x013FFFFF)
+;   PDE 65        -> highmem_page_table    (0x10400000 .. 0x107FFFFF)
+;   PDE 514       -> identity_page_table (mirror, 0x80800000..0x80BFFFFF)
 ;
 ; This dual identity + higher-half mirror is what lets the boot sequence
 ; get away with computing a physical base via ebp (the kernel is still
@@ -40,11 +42,12 @@ section .text
 
 
 ; -----------------------------------------------------------------------------
-; page_mapping — build the page directory and all five page tables
+; page_mapping — build the page directory and all six page tables
 ;
 ; Called once during kernel startup, before paging is enabled. Fills:
-;   - identity_page_table, kernel_low_page_table, heap_page_table_0..2
-;   - page_directory (only PDEs 0..4 and 768..772 are wired up; the rest
+;   - identity_page_table, kernel_low_page_table, heap_page_table_0..2,
+;     highmem_page_table
+;   - page_directory (wires PDEs 0..4, 65, 514, and 768..772; the rest
 ;     are zero, which means "not present")
 ; -----------------------------------------------------------------------------
 page_mapping:
@@ -117,6 +120,18 @@ page_mapping:
     add edi, 4
     loop .fill_heap2
 
+    ; --- highmem_page_table: physical 0x10400000..0x107FFFFF --------------
+    lea edi, [highmem_page_table + ebp]
+    mov eax, 0x10400000
+    mov ecx, PAGE_TABLE_ENTRIES
+.fill_highmem:
+    mov ebx, eax
+    or  ebx, PAGE_PRESENT_RW
+    mov [edi], ebx
+    add eax, PAGE_SIZE
+    add edi, 4
+    loop .fill_highmem
+
     ; --- Wire PDEs: identity map (low) + higher-half mirror (0xC0000000) --
     lea edx, [page_directory + ebp]
 
@@ -157,6 +172,15 @@ page_mapping:
     lea eax, [identity_page_table + ebp]
     or  eax, PAGE_PRESENT_RW
     mov [edx + (514 * 4)], eax
+
+    ; PDE[65] — identity-map high memory 0x10400000..0x107FFFFF so the
+    ; keyboard map data (and any other allocator-placed data) placed at
+    ; ≈260–264 MB by the webulator's memory layout doesn't #PF.
+    ; Virtual addresses in VIRTUAL_PDE65_START..VIRTUAL_PDE65_END map to
+    ; physical 0x10400000..0x107FFFFF.
+    lea eax, [highmem_page_table + ebp]
+    or  eax, PAGE_PRESENT_RW
+    mov [edx + (65 * 4)], eax
     ret
 
 

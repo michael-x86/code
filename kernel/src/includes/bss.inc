@@ -264,6 +264,10 @@ alignb 4096
 heap_page_table_2:
     resd PAGE_TABLE_ENTRIES              ; 1024 PTEs for 0x01000000..0x013FFFFF
 
+alignb 4096
+highmem_page_table:
+    resd PAGE_TABLE_ENTRIES              ; 1024 PTEs for 0x10400000..0x107FFFFF
+
 
 ; --- Heap range (used by memory.inc) -----------------------------------------
 ; heap_start and heap_end are compile-time constants (see constants.inc):
