@@ -775,21 +775,17 @@ sys_rmdir:
 ; ── Task introspection (22) ────────────────────────────────────────────────
 
 ; 22: get_ps_info
-;   in:  ebx = 16-byte dst
+;   in:  ebx = 8-byte dst
 ;   out: 0 on success, -1 if ebx is NULL
-;   layout: [current_task:4][task0_esp:4][task1_esp:4][task2_esp:4]
+;   layout: [current_task:4][task_esp:4]
 sys_get_ps_info:
     cmp ebx, 0
     je .error
     push edx
     mov edx, [current_task]
     mov [ebx + 0], edx
-    mov edx, [task0_esp]
+    mov edx, [task_esp]
     mov [ebx + 4], edx
-    mov edx, [task1_esp]
-    mov [ebx + 8], edx
-    mov edx, [task2_esp]
-    mov [ebx + 12], edx
     pop edx
     xor eax, eax
     ret

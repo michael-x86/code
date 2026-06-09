@@ -180,32 +180,12 @@ draw_main_screen:
     mov eax, 3
     int 0x80
     
-    ; Print task 0 ESP
-    lea esi, [ebp + task0_esp_msg]
+    ; Print task ESP
+    lea esi, [ebp + task_esp_msg]
     mov eax, 1
     int 0x80
     mov ebx, [ebp + ps_buffer + 4]
     mov eax, 5              ; sys_print_hex
-    int 0x80
-    mov eax, 3
-    int 0x80
-    
-    ; Print task 1 ESP
-    lea esi, [ebp + task1_esp_msg]
-    mov eax, 1
-    int 0x80
-    mov ebx, [ebp + ps_buffer + 8]
-    mov eax, 5
-    int 0x80
-    mov eax, 3
-    int 0x80
-    
-    ; Print task 2 ESP
-    lea esi, [ebp + task2_esp_msg]
-    mov eax, 1
-    int 0x80
-    mov ebx, [ebp + ps_buffer + 12]
-    mov eax, 5
     int 0x80
     mov eax, 3
     int 0x80
@@ -362,9 +342,10 @@ memory_examine_mode:
     
     ; Read a few more dwords
     mov ecx, 4
-    mov ebx, 0xC0100004
+    mov esi, 0xC0100004            ; use esi for the address pointer
 .read_loop:
     push ecx
+    mov ebx, esi
     mov eax, 10
     int 0x80
     mov ebx, eax
@@ -374,7 +355,7 @@ memory_examine_mode:
     mov ebx, eax
     mov eax, 0
     int 0x80
-    add ebx, 4
+    add esi, 4
     pop ecx
     loop .read_loop
     
@@ -407,9 +388,7 @@ tick_msg:         db "Tick count: ", 0
 proc_msg:         db "Process Info:", 13, 10, 0
 
 task_id_msg:      db "Current Task ID: ", 0
-task0_esp_msg:    db "Task 0 ESP: ", 0
-task1_esp_msg:    db "Task 1 ESP: ", 0
-task2_esp_msg:    db "Task 2 ESP: ", 0
+task_esp_msg:     db "Task ESP: ", 0
 ps_failed_msg:    db "Failed to get PS info", 13, 10, 0
 
 vbase_msg:        db "Exec base: ", 0

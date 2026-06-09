@@ -239,7 +239,7 @@ CWD_BUF_SIZE       equ 128
 ; Three round-robin tasks scheduled by IRQ0: two idle, one shell.
 ; Stack size of 4 KB per task is enough for a small call graph. The kernel
 ; runs shell + tasks in a single address space; no MMU context switch.
-TASK_COUNT         equ 3
+TASK_COUNT         equ 1
 TASK_STACK_SIZE    equ 4096
 
 

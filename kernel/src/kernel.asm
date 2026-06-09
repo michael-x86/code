@@ -178,9 +178,9 @@ kernel_main:
 
     call init_tasks
     mov dword [current_task], 0
-    mov esp, [task0_esp]
+    mov esp, [task_esp]
     popad
-    iretd                                ; into task0_entry with IF=1
+    iretd                                ; into task_entry with IF=1
 
 
 ; =============================================================================

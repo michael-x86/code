@@ -27,8 +27,10 @@ class X86Memory {
         this.vgaTextSize = 80 * 25 * 2;  // 4000 bytes
         this.vgaText = new Uint8Array(this.vgaTextSize);
         
-        // VGA mode (text or graphics)
-        this.vgaMode = 'text';  // 'text' or 'graphics'
+        // VRAM (VGA graphics mode: 0xA0000, 64KB)
+        this.vgaGraphicsBase = 0xA0000;
+        this.vgaGraphicsSize = 0x10000;  // 64KB — covers all VGA graphics modes
+        this.vgaGraphics = new Uint8Array(this.vgaGraphicsSize);
         
         // Callback for VGA updates (to update canvas)
         this.onVgaUpdate = null;
@@ -41,6 +43,7 @@ class X86Memory {
         
         // Clear VRAM
         this.vgaText.fill(0);
+        this.vgaGraphics.fill(0);
         
         // Load BIOS (reset vector at 0xFFFFFFF0)
         this.loadBIOS();
@@ -60,6 +63,11 @@ class X86Memory {
     // Read 8-bit value from physical address
     read8(physAddr) {
         physAddr = physAddr >>> 0;  // Force unsigned 32-bit
+        
+        // Check VGA graphics memory (0xA0000)
+        if (physAddr >= this.vgaGraphicsBase && physAddr < this.vgaGraphicsBase + this.vgaGraphicsSize) {
+            return this.vgaGraphics[physAddr - this.vgaGraphicsBase];
+        }
         
         // Check VGA text memory
         if (physAddr >= this.vgaTextBase && physAddr < this.vgaTextBase + this.vgaTextSize) {
@@ -86,8 +94,8 @@ class X86Memory {
             return this.ram8[physAddr];
         }
         
-        console.warn(`read8: Address 0x${physAddr.toString(16)} out of range`);
-        return 0xFF;  // Return FF for unmapped memory
+        // Unmapped physical memory reads return 0xFF (floating bus)
+        return 0xFF;
     }
     
     // Read 16-bit value from physical address
@@ -110,6 +118,17 @@ class X86Memory {
     write8(physAddr, value) {
         physAddr = physAddr >>> 0;
         value = value & 0xFF;
+        
+        // Check VGA graphics memory (0xA0000)
+        if (physAddr >= this.vgaGraphicsBase && physAddr < this.vgaGraphicsBase + this.vgaGraphicsSize) {
+            const offset = physAddr - this.vgaGraphicsBase;
+            this.vgaGraphics[offset] = value;
+            
+            if (this.onVgaUpdate) {
+                this.onVgaUpdate(offset | 0x10000, 1);  // High bit indicates graphics update
+            }
+            return;
+        }
         
         // Check VGA text memory
         if (physAddr >= this.vgaTextBase && physAddr < this.vgaTextBase + this.vgaTextSize) {
@@ -139,7 +158,7 @@ class X86Memory {
             return;
         }
         
-        console.warn(`write8: Address 0x${physAddr.toString(16)} out of range`);
+        // Writes to unmapped physical memory are silently dropped
     }
     
     // Write 16-bit value to physical address

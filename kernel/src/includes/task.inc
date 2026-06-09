@@ -2,16 +2,12 @@
 ; task.inc — task stack initialization and entry points
 ; =============================================================================
 ;
-; We have three round-robin tasks, scheduled by IRQ0 (the PIT timer):
-;--
-;   task0  idle (sti; hlt in a loop)
-;   task1  idle (sti; hlt in a loop)
-;   task2  shell  (read keys, dispatch commands)
+; Single-task system: one shell task, scheduled by IRQ0 (the PIT timer).
 ;
-; Each task gets its own 4 KB stack. The first context switch is special:
-;-- the kernel entry code does `mov esp, [task0_esp]; popad; iretd` to
-;-- jump into task 0. After that, IRQ0 saves the current ESP into the
-;-- outgoing task's slot, picks the next task, and iret's into it.
+; The task gets its own 4 KB stack. The first context switch is special:
+;-- the kernel entry code does `mov esp, [task_esp]; popad; iretd` to
+;-- jump into the task. After that, IRQ0 saves the current ESP back into
+;-- task_esp and iret's back (no switch since there's only one task).
 ;
 ; We hand-craft the initial iret frame so the very first switch is just
 ;-- a popad + iret. The frame layout is the one iret expects, top-down:
@@ -40,87 +36,30 @@ section .text
 
 
 ; -----------------------------------------------------------------------------
-; init_tasks — build the initial iret frame for each task
+; init_tasks — build the initial iret frame for the shell task
 ; -----------------------------------------------------------------------------
 init_tasks:
-    ; --- Task 0 ----------------------------------------------------------
-    mov eax, task0_stack_top
+    mov eax, task_stack_top
     sub eax, 4
     mov dword [eax], 0x202               ; EFLAGS: IF=1 so IRQ0 can preempt
     sub eax, 4
     mov dword [eax], CODE_SEG            ; CS
     sub eax, 4
-    mov dword [eax], task0_entry         ; EIP
+    mov dword [eax], task_entry          ; EIP
     sub eax, 32                         ; 8 zeroed GPRs
     mov edi, eax
     mov ecx, 8
     xor ebx, ebx
-.clear0:
+.clear:
     mov [edi], ebx
     add edi, 4
-    loop .clear0
-    mov [task0_esp], eax                 ; ESP = first dword of the zeroed region
-
-    ; --- Task 1 ----------------------------------------------------------
-    mov eax, task1_stack_top
-    sub eax, 4
-    mov dword [eax], 0x202
-    sub eax, 4
-    mov dword [eax], CODE_SEG
-    sub eax, 4
-    mov dword [eax], task1_entry
-    sub eax, 32
-    mov edi, eax
-    mov ecx, 8
-    xor ebx, ebx
-.clear1:
-    mov [edi], ebx
-    add edi, 4
-    loop .clear1
-    mov [task1_esp], eax
-
-    ; --- Task 2 (shell) --------------------------------------------------
-    mov eax, task2_stack_top
-    sub eax, 4
-    mov dword [eax], 0x202
-    sub eax, 4
-    mov dword [eax], CODE_SEG
-    sub eax, 4
-    mov dword [eax], task2_entry
-    sub eax, 32
-    mov edi, eax
-    mov ecx, 8
-    xor ebx, ebx
-.clear2:
-    mov [edi], ebx
-    add edi, 4
-    loop .clear2
-    mov [task2_esp], eax
+    loop .clear
+    mov [task_esp], eax                  ; ESP = first dword of the zeroed region
     ret
 
 
 ; -----------------------------------------------------------------------------
-; Task 0 — idle
-; -----------------------------------------------------------------------------
-task0_entry:
-.loop:
-    HAL_ENABLE_INTS
-    HAL_HALT
-    jmp .loop
-
-
-; -----------------------------------------------------------------------------
-; Task 1 — idle
-; -----------------------------------------------------------------------------
-task1_entry:
-.loop:
-    HAL_ENABLE_INTS
-    HAL_HALT
-    jmp .loop
-
-
-; -----------------------------------------------------------------------------
-; Task 2 — shell
+; Task — shell
 ;--
 ;-- Main loop: poll get_key. On keypress, dispatch by character:
 ;--   - CR (Enter) → save history, parse args, dispatch_command, redraw prompt
@@ -133,7 +72,7 @@ task1_entry:
 ;-- is set, so the top-right counter stays current even when the user
 ;-- is idle at a prompt.
 ; -----------------------------------------------------------------------------
-task2_entry:
+task_entry:
     cmp byte [tick_flag], 0
     je .skip
     mov byte [tick_flag], 0
@@ -168,7 +107,7 @@ task2_entry:
     mov byte [cmd_buf], 0
     call prompt
     HAL_HALT
-    jmp task2_entry
+    jmp task_entry
 .tab:
     call tab_complete
     xor al, al
@@ -181,4 +120,4 @@ task2_entry:
 .done:
     HAL_ENABLE_INTS
     HAL_HALT
-    jmp task2_entry
+    jmp task_entry

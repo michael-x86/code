@@ -35,7 +35,19 @@ function setRegView() {
     $("#reg_ss").text(hex16(cpu.segregs.ss));
 
     $("#reg_cr0").text(hex32(cpu.cregs.cr0));
+    $("#reg_cr2").text(hex32(cpu.cregs.cr2));
     $("#reg_cr3").text(hex32(cpu.cregs.cr3));
+
+    $("#reg_dr0").text(hex32(cpu.dregs.dr0));
+    $("#reg_dr1").text(hex32(cpu.dregs.dr1));
+    $("#reg_dr2").text(hex32(cpu.dregs.dr2));
+    $("#reg_dr3").text(hex32(cpu.dregs.dr3));
+    $("#reg_dr6").text(hex32(cpu.dregs.dr6));
+    $("#reg_dr7").text(hex32(cpu.dregs.dr7));
+
+    $("#reg_gdt").text(hex32(cpu.gdtBase) + '/' + hex16(cpu.gdtLimit));
+    $("#reg_idt").text(hex32(cpu.idtBase) + '/' + hex16(cpu.idtLimit));
+    $("#reg_cpl").text(cpu.cpl);
 
     $("#tstates").text(state.tstates);
 
@@ -47,7 +59,9 @@ function clearRegView() {
                  "#reg_esi", "#reg_edi", "#reg_ebp", "#reg_esp",
                  "#reg_eip", "#reg_eflags",
                  "#reg_cs", "#reg_ds", "#reg_es", "#reg_fs", "#reg_gs", "#reg_ss",
-                 "#reg_cr0", "#reg_cr3",
+                 "#reg_cr0", "#reg_cr2", "#reg_cr3",
+                 "#reg_dr0", "#reg_dr1", "#reg_dr2", "#reg_dr3", "#reg_dr6", "#reg_dr7",
+                 "#reg_gdt", "#reg_idt", "#reg_cpl",
                  "#tstates"];
     ids.forEach(id => $(id).text(""));
 }

@@ -26,10 +26,8 @@ tab_single_ptr   resd 1       ; pointer to the only match, if exactly one
 
 
 ; --- Task state (used by task.inc / irq.inc) ---------------------------------
-task0_esp        resd 1       ; saved ESP for task 0 (idle)
-task1_esp        resd 1       ; saved ESP for task 1 (idle)
-task2_esp        resd 1       ; saved ESP for task 2 (shell)
-current_task     resd 1       ; 0, 1, or 2 — index of the running task
+task_esp         resd 1       ; saved ESP for the single task
+current_task     resd 1       ; always 0 — index of the running task
 
 
 ; --- Keyboard buffer (used by input.inc) ------------------------------------
@@ -206,24 +204,12 @@ idt_start:
 idt_end:
 
 
-; --- Task stacks (used by task.inc) -----------------------------------------
-; One 4 KB stack per task. They are 16-byte aligned to keep SSE-friendly
-; alignment (we don't use SSE, but the cost is zero and the alignment
-; helps debugging in case a stack-walk tool ever looks at these).
+; --- Task stack (used by task.inc) -------------------------------------------
+; 4 KB stack for the single task. 16-byte aligned.
 alignb 16
-task0_stack:
+task_stack:
     resb TASK_STACK_SIZE
-task0_stack_top:
-
-alignb 16
-task1_stack:
-    resb TASK_STACK_SIZE
-task1_stack_top:
-
-alignb 16
-task2_stack:
-    resb TASK_STACK_SIZE
-task2_stack_top:
+task_stack_top:
 
 
 ; --- Main kernel stack -------------------------------------------------------

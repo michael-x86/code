@@ -270,6 +270,137 @@ function run() {
       cpu.regs.eip = 0x1000; cpu.step();
       assertEq(cpu.regs.eax & 0xFF, 0x78);
     });
+
+    test('CLC (0xF8) clears carry flag', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.setFlag('CF', 1);
+      mem.write8(0x1000, 0xF8);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.getFlag('CF'), 0);
+      assertEq(cpu.regs.eip, 0x1001);
+    });
+
+    test('STC (0xF9) sets carry flag', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.setFlag('CF', 0);
+      mem.write8(0x1000, 0xF9);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.getFlag('CF'), 1);
+      assertEq(cpu.regs.eip, 0x1001);
+    });
+
+    test('CLI (0xFA) clears interrupt flag', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.setFlag('IF', 1);
+      mem.write8(0x1000, 0xFA);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.getFlag('IF'), 0);
+    });
+
+    test('STI (0xFB) sets interrupt flag', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.setFlag('IF', 0);
+      mem.write8(0x1000, 0xFB);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.getFlag('IF'), 1);
+    });
+
+    test('CDQ (0x99) sign-extends EAX into EDX (positive)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x7FFFFFFF;
+      mem.write8(0x1000, 0x99);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.edx, 0x00000000);
+    });
+
+    test('CDQ (0x99) sign-extends EAX into EDX (negative)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x80000000;
+      mem.write8(0x1000, 0x99);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.edx, 0xFFFFFFFF);
+    });
+
+    test('CWDE (0x98) sign-extends AX to EAX (positive)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0xFFFF7FFF;
+      mem.write8(0x1000, 0x98);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x00007FFF);
+    });
+
+    test('CWDE (0x98) sign-extends AX to EAX (negative)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x00008000;
+      mem.write8(0x1000, 0x98);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0xFFFF8000);
+    });
+
+    test('XLAT/XLATB (0xD7) translates AL via DS:[EBX+AL]', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.ebx = 0x2000;
+      cpu.regs.eax = 0x00000003;
+      mem.write8(0x2003, 0x42);
+      mem.write8(0x1000, 0xD7);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax & 0xFF, 0x42);
+      assertEq(cpu.regs.eip, 0x1001);
+    });
+
+    test('XCHG EAX, ECX (0x91) exchanges registers', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x11111111;
+      cpu.regs.ecx = 0x22222222;
+      mem.write8(0x1000, 0x91);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x22222222);
+      assertEq(cpu.regs.ecx, 0x11111111);
+    });
+
+    test('XCHG r32, r/m32 (0x87) register-to-register', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0xAAAAAAAA;
+      cpu.regs.ebx = 0xBBBBBBBB;
+      mem.write8(0x1000, 0x87); mem.write8(0x1001, 0xD8);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0xBBBBBBBB);
+      assertEq(cpu.regs.ebx, 0xAAAAAAAA);
+    });
+
+    test('XCHG r8, r/m8 (0x86) register-to-register', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x00000041;
+      cpu.regs.ebx = 0x00000042;
+      mem.write8(0x1000, 0x86); mem.write8(0x1001, 0xD8);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax & 0xFF, 0x42);
+      assertEq(cpu.regs.ebx & 0xFF, 0x41);
+    });
+
+    test('XCHG r32, [mem] (0x87) register-to-memory', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x12345678;
+      mem.write32(0x3000, 0x87654321);
+      mem.write8(0x1000, 0x87); mem.write8(0x1001, 0x05);
+      mem.write32(0x1002, 0x3000);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x87654321);
+      assertEq(mem.read32(0x3000), 0x12345678);
+    });
   });
 
   run('CPU Arithmetic', ({ X86Memory, X86CPU }) => {
@@ -390,6 +521,41 @@ function run() {
       assertEq(cpu.getFlag('ZF'), 0);
       assertEq(cpu.getFlag('SF'), 0);
     });
+
+    test('INC does not change CF', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.setFlag('CF', 1);
+      cpu.regs.eax = 0x00000000;
+      mem.write8(0x1000, 0x40);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x00000001);
+      assertEq(cpu.getFlag('CF'), 1, 'INC should preserve CF');
+      assertEq(cpu.getFlag('ZF'), 0);
+    });
+
+    test('DEC does not change CF', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.setFlag('CF', 1);
+      cpu.regs.eax = 0x00000002;
+      mem.write8(0x1000, 0x48);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x00000001);
+      assertEq(cpu.getFlag('CF'), 1, 'DEC should preserve CF');
+      assertEq(cpu.getFlag('ZF'), 0);
+    });
+
+    test('INC 0x7FFFFFFF sets OF but does not change CF', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.setFlag('CF', 1);
+      cpu.regs.eax = 0x7FFFFFFF;
+      mem.write8(0x1000, 0x40);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.getFlag('OF'), 1, 'INC of 0x7FFFFFFF should set OF');
+      assertEq(cpu.getFlag('CF'), 1, 'INC should preserve CF');
+    });
   });
 
   run('CPU Logical', ({ X86Memory, X86CPU }) => {
@@ -491,6 +657,142 @@ function run() {
       cpu.regs.eip = 0x1000; cpu.step();
       assertEq(cpu.regs.eax & 0xFF, 0xFF);
     });
+
+    test('AND r32, [mem] (0x23) with memory operand', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x0000000F;
+      mem.write32(0x3000, 0x000000F0);
+      mem.write8(0x1000, 0x23); mem.write8(0x1001, 0x05);
+      mem.write32(0x1002, 0x3000);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x00000000);
+      assertEq(cpu.getFlag('ZF'), 1);
+    });
+
+    test('AND [mem], r32 (0x21) with memory operand', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x000000F0;
+      mem.write32(0x3000, 0x0000000F);
+      mem.write8(0x1000, 0x21); mem.write8(0x1001, 0x05);
+      mem.write32(0x1002, 0x3000);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(mem.read32(0x3000), 0x00000000);
+      assertEq(cpu.getFlag('ZF'), 1);
+    });
+
+    test('AND EAX, imm32 (0x25) masks EAX', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x12345678;
+      mem.write8(0x1000, 0x25); mem.write32(0x1001, 0xFFFF0000);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x12340000);
+    });
+
+    test('MOV dword [mem], imm32 (0xC7)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      mem.write8(0x1000, 0xC7); mem.write8(0x1001, 0x05);
+      mem.write32(0x1002, 0x4000);  // address
+      mem.write32(0x1006, 0x12345678);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(mem.read32(0x4000), 0x12345678);
+    });
+
+    test('MOV byte [mem], imm8 (0xC6)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      mem.write8(0x1000, 0xC6); mem.write8(0x1001, 0x05);
+      mem.write32(0x1002, 0x5000);
+      mem.write8(0x1006, 0x42);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(mem.read8(0x5000), 0x42);
+    });
+
+    test('LEA EBX, [EAX + ECX*4 + 0x200] (0x8D)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x1000;
+      cpu.regs.ecx = 0x0020;
+      mem.write8(0x1000, 0x8D); mem.write8(0x1001, 0x9C); mem.write8(0x1002, 0x88);
+      mem.write32(0x1003, 0x200);
+      mem.write8(0x1007, 0x90);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.ebx, 0x1000 + 0x0020*4 + 0x200);
+    });
+
+    test('ADD dword [mem], imm32 (0x81 /0)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      mem.write32(0x4000, 0x00000001);
+      mem.write8(0x1000, 0x81); mem.write8(0x1001, 0x05);
+      mem.write32(0x1002, 0x4000);
+      mem.write32(0x1006, 0x00000002);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(mem.read32(0x4000), 0x00000003);
+    });
+
+    test('SUB dword [mem], imm32 (0x81 /5)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      mem.write32(0x4000, 0x0000000A);
+      mem.write8(0x1000, 0x81); mem.write8(0x1001, 0x2D);
+      mem.write32(0x1002, 0x4000);
+      mem.write32(0x1006, 0x00000003);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(mem.read32(0x4000), 0x00000007);
+      assertEq(cpu.getFlag('CF'), 0);
+    });
+
+    test('CMP dword [mem], imm32 sets ZF (0x81 /7)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      mem.write32(0x4000, 0x00000005);
+      mem.write8(0x1000, 0x81); mem.write8(0x1001, 0x3D);
+      mem.write32(0x1002, 0x4000);
+      mem.write32(0x1006, 0x00000005);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.getFlag('ZF'), 1);
+      assertEq(mem.read32(0x4000), 0x00000005);
+    });
+
+    test('AND byte [mem], imm8 (0x80 /4)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      mem.write8(0x4000, 0xF0);
+      mem.write8(0x1000, 0x80); mem.write8(0x1001, 0x25);
+      mem.write32(0x1002, 0x4000);
+      mem.write8(0x1006, 0x0F);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(mem.read8(0x4000), 0x00);
+      assertEq(cpu.getFlag('ZF'), 1);
+    });
+
+    test('MOV DS, [mem] via 0x8E stores segment selector', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      mem.write32(0x4000, 0x0010);
+      // 0x8E, ModRM=0x1D(mod=00,reg=011(DS),rm=101([disp32]))
+      mem.write8(0x1000, 0x8E); mem.write8(0x1001, 0x1D);
+      mem.write32(0x1002, 0x4000);
+      mem.write8(0x1006, 0x90);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.segregs.ds, 0x0010);
+    });
+
+    test('MOV [mem], DS via 0x8C reads segment selector', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.segregs.ds = 0x1234;
+      // 0x8C, ModRM=0x1D(mod=00,reg=011(DS),rm=101([disp32]))
+      mem.write8(0x1000, 0x8C); mem.write8(0x1001, 0x1D);
+      mem.write32(0x1002, 0x4000);
+      mem.write8(0x1006, 0x90);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(mem.read32(0x4000) & 0xFFFF, 0x1234);
+    });
   });
 
   run('CPU Shifts and Rotates', ({ X86Memory, X86CPU }) => {
@@ -569,6 +871,121 @@ function run() {
       mem.write8(0x1000, 0xD3); mem.write8(0x1001, 0xD0);
       cpu.regs.eip = 0x1000; cpu.step();
       assertEq(cpu.regs.eax, 0x00000001);
+    });
+  });
+
+  run('CPU SIB Addressing Modes', ({ X86Memory, X86CPU }) => {
+    test('MOV EAX, [EBX + ECX*4] (mod=00, base=EBX=011, index=ECX=001, scale=4)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.ebx = 0x3000;
+      cpu.regs.ecx = 0x0004;
+      mem.write32(0x3010, 0xAABBCCDD);
+      // SIB=0x8B: scale=4(10), index=ECX(001), base=EBX(011)
+      mem.write8(0x1000, 0x8B); mem.write8(0x1001, 0x04); mem.write8(0x1002, 0x8B);
+      mem.write8(0x1003, 0x90);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0xAABBCCDD);
+      assertEq(cpu.regs.eip, 0x1003);
+    });
+
+    test('MOV EAX, [EBP*8 + disp32] (mod=00, SIB base=5, index=EBP=101, scale=8)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.ebp = 0x0003;
+      mem.write32(0x4018, 0x12345678);
+      // SIB=0xED: scale=8(11), index=EBP(101), base=101(no base, disp32)
+      mem.write8(0x1000, 0x8B); mem.write8(0x1001, 0x04); mem.write8(0x1002, 0xED);
+      mem.write32(0x1003, 0x4000);
+      mem.write8(0x1007, 0x90);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x12345678);
+      assertEq(cpu.regs.eip, 0x1007);
+    });
+
+    test('MOV EAX, [EDX + ESI*2 + disp8] (mod=01, base=EDX=010, index=ESI=110, scale=2, disp8=4)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.edx = 0x5000;
+      cpu.regs.esi = 0x0008;
+      mem.write32(0x5014, 0xDEADBEEF);
+      // ModRM=0x44(mod=01,reg=EAX,rm=SIB) SIB=0x72(scale=2,index=ESI,base=EDX) disp8=4
+      mem.write8(0x1000, 0x8B); mem.write8(0x1001, 0x44); mem.write8(0x1002, 0x72);
+      mem.write8(0x1003, 0x04);
+      mem.write8(0x1004, 0x90);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0xDEADBEEF);
+      assertEq(cpu.regs.eip, 0x1004);
+    });
+
+    test('MOV EAX, [EAX*4 + disp32] (mod=00, SIB base=5, index=EAX, scale=4)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.eax = 0x0002;
+      mem.write32(0x3008, 0xCAFEBABE);
+      // MOV EAX, [EAX*4 + 0x3000]
+      // ModRM=0x04(EAX,SIB) SIB=0x85(scale=4,index=EAX,base=EBP=5) disp32=0x3000
+      mem.write8(0x1000, 0x8B); mem.write8(0x1001, 0x04); mem.write8(0x1002, 0x85);
+      mem.write32(0x1003, 0x3000);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0xCAFEBABE);
+    });
+
+    test('MOV [ECX + EDI*8 + disp32], EAX (mod=10, base=ECX, index=EDI, scale=8, disp32=0x100)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.ecx = 0x6000;
+      cpu.regs.edi = 0x0020;
+      cpu.regs.eax = 0xFFFF0000;
+      // ModRM=0x84(mod=10,EAX,SIB) SIB=0xFC(scale=8,index=EDI=-4,base=ECX) disp32=0x100
+      // Wait, 0xFC = 11 111 100 -> scale=8, index=ESP(100=no index!) base=ECX
+      // Let me use SIB=0xBC: 10 111 100 -> scale=4, index=EDI, base=ECX
+      // Actually 0xBC = 10 111 100
+      // scale=10 -> 4, index=111 -> EDI, base=100 -> ESP!
+      // Hmm, that uses ESP as base. Let me recalculate.
+      // For base=ECX=001, index=EDI=111, scale=8=11: SIB = 11 111 001 = 0xF9
+      mem.write8(0x1000, 0x89); mem.write8(0x1001, 0x84); mem.write8(0x1002, 0xF9);
+      mem.write32(0x1003, 0x100);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(mem.read32(0x6000 + 0x20*8 + 0x100), 0xFFFF0000);
+    });
+
+    test('MOV EAX, [no base + ESI*4 + disp32] (mod=00, SIB base=5, index=ESI, scale=4)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.esi = 0x0005;
+      mem.write32(0x2014, 0x11223344);
+      // ModRM=0x04(EAX,SIB) SIB=0xB5(scale=4,index=ESI,base=EBP=5) disp32=0x2000
+      mem.write8(0x1000, 0x8B); mem.write8(0x1001, 0x04); mem.write8(0x1002, 0xB5);
+      mem.write32(0x1003, 0x2000);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x11223344, 'ESI*4 + 0x2000 = 0x14 + 0x2000 = 0x2014');
+    });
+
+    test('MOV EAX, [EBP + disp8] (mod=01, no SIB, disp8=0x20)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.ebp = 0x7000;
+      mem.write32(0x7020, 0x55667788);
+      // MOV EAX, [EBP+disp8]: ModRM=0x45(mod=01,EAX,rm=EBP) disp8=0x20
+      mem.write8(0x1000, 0x8B); mem.write8(0x1001, 0x45); mem.write8(0x1002, 0x20);
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x55667788);
+    });
+
+    test('MOV EAX, [ESP + EDX] (mod=00, SIB index=EDX, base=ESP, no disp)', () => {
+      const mem = new X86Memory(4);
+      const cpu = new X86CPU(mem, null);
+      cpu.regs.esp = 0x8000;
+      cpu.regs.edx = 0x0010;
+      mem.write32(0x8010, 0x99887766);
+      // [ESP + EDX]: ModRM=0x04(EAX,SIB) SIB=0x14(scale=1,index=EDX,base=ESP)
+      // 3-byte instruction (no disp32 since mod=0, SIB base=ESP!=5)
+      mem.write8(0x1000, 0x8B); mem.write8(0x1001, 0x04); mem.write8(0x1002, 0x14);
+      mem.write8(0x1003, 0x90);  // NOP after, so no crash if EIP lands here
+      cpu.regs.eip = 0x1000; cpu.step();
+      assertEq(cpu.regs.eax, 0x99887766);
+      assertEq(cpu.regs.eip, 0x1003);
     });
   });
 
@@ -2258,6 +2675,21 @@ function run() {
 
   run('Keyboard-to-VGA Integration', ({ X86Memory, X86CPU }) => {
     const kernelBin = fs.readFileSync(path.join(__dirname, 'kernel-bin/kernel.bin'));
+    // Search for keymap signature in kernel binary: db 0, 27, '1','2','3','4','5',...
+    // = bytes: 00 1B 31 32 33 34 35
+    const keymapSig = Buffer.from([0x00, 0x1B, 0x31, 0x32, 0x33, 0x34, 0x35]);
+    const keymapOff = kernelBin.indexOf(keymapSig);
+    const keymapVirt = 0xC0100000 + keymapOff;     // virtual addr of keymap
+    const keymapShiftVirt = keymapVirt + 0x100;     // keymap_shift = keymap + 256
+
+    // Find keymap_active pointer in the binary (contains keymapVirt)
+    const keymapBytes = Buffer.alloc(4); keymapBytes.writeUInt32LE(keymapVirt);
+    const keymapActiveOff = kernelBin.indexOf(keymapBytes);
+
+    // kbd_shift is 8 bytes before keymap_active in data.inc layout:
+    //   tick_flag(1) tick_count(4) tick_div(4) cursor_pos(4) prompt_limit(4)
+    //   kbd_shift(1) kbd_extended(1) pad(2) keymap_active(4) keymap_shift_active(4)
+    const kbdShiftVirt = 0xC0100000 + (keymapActiveOff - 8);
 
     test('Scancode 0x32 maps to ASCII m via kernel keyboard map', () => {
       const mem = new X86Memory(32);
@@ -2272,32 +2704,26 @@ function run() {
       const CR3 = 0x200000;
       const PT_BASE = 0x201000;
       cpu.cregs.cr3 = CR3;
-      // Clear page directory
       for (let i = 0; i < 1024; i++) mem.write32(CR3 + i * 4, 0);
-      // PDE[0x300] for 0xC0000000-0xC03FFFFF pointing to our page table
       mem.write32(CR3 + 0x300 * 4, PT_BASE | 3);
-      // Fill page table: identity-map 0xC0000000→0x00000000 in 4KB pages
       for (let i = 0; i < 1024; i++) {
         mem.write32(PT_BASE + i * 4, (i << 12) | 3);
       }
-      // Also map PDE[0x00] for low memory (so we can access 0x100000 directly)
       mem.write32(CR3 + 0, PT_BASE | 3);
-      cpu.cregs.cr0 = 0x80000001;  // Enable paging + protected mode
+      cpu.cregs.cr0 = 0x80000001;
 
-      // Initialize keyboard map pointers (using PHYSICAL addresses — paging maps
-      // 0xC010xxxx → 0x0010xxxx, so virtual 0xC01043CD → physical 0x1043CD)
-      // keymap in the built binary starts at offset 0x43CD (0x100000 + 0x43CD = 0x1043CD)
-      const keymapVirt = 0xC01043CD;        // virtual address of keymap (lowercase)
-      const keymapShiftVirt = 0xC01044CD;   // virtual address of keymap_shift (uppercase)
-      mem.write32(0x104BFF, keymapVirt);    // lowercase table pointer
-      mem.write32(0x104C03, keymapShiftVirt); // uppercase table pointer
-      mem.write8(0x104BFD, 0);              // shift flag = 0 (unshifted)
+      // Write the keymap pointers and shift flag at their physical locations
+      const keymapActivePhys = 0x100000 + keymapActiveOff;
+      const kbdShiftPhys = 0x100000 + (keymapActiveOff - 8);
+      mem.write32(keymapActivePhys, keymapVirt);
+      mem.write32(keymapActivePhys + 4, keymapShiftVirt);
+      mem.write8(kbdShiftPhys, 0);
 
       // Set up IDT so page faults don't crash
       const IDT_BASE = 0x5000;
       cpu.idtBase = IDT_BASE;
       cpu.idtLimit = 0x7FF;
-      mem.write8(0x6000, 0xFA); mem.write8(0x6001, 0xF4);  // cli; hlt handler
+      mem.write8(0x6000, 0xFA); mem.write8(0x6001, 0xF4);
       for (let i = 0; i < 256; i++) {
         mem.write16(IDT_BASE + i * 8, 0x6000 & 0xFFFF);
         mem.write16(IDT_BASE + i * 8 + 2, 0x0008);
@@ -2307,55 +2733,29 @@ function run() {
         mem.write8(IDT_BASE + i * 8 + 7, (0x6000 >> 24) & 0xFF);
       }
 
-      // Verify physical memory at the expected location matches kernel binary
-      const physForEip = (mem.read32(PT_BASE + 0x101 * 4) & 0xFFFFF000) + 0xC2D;
-      const physForData = (mem.read32(PT_BASE + 0x104 * 4) & 0xFFFFF000) + 0xBFD;
-      console.log(`[TEST] Virtual 0xC0101C2D → physical 0x${physForEip.toString(16)}`);
-      console.log(`[TEST] Virtual 0xC0104BFD → physical 0x${physForData.toString(16)}`);
-      console.log(`[TEST] Byte at EIP phys = 0x${mem.read8(physForEip).toString(16)} (expected 0x${kernelBin[0x1C2D].toString(16)})`);
-      console.log(`[TEST] Byte at data phys = 0x${mem.read8(physForData).toString(16)}`);
-
-      // Set up CPU state for the scancode-to-ASCII function (0xC0101C21)
-      cpu.regs.eip = 0xC0101C21;
-      cpu.segregs.cs = 0x08;
-      cpu.regs.eax = 0x32;  // Scancode for 'm'
-      cpu.regs.esp = 0xC0150800;  // Valid stack (maps to physical 0x150800)
-      cpu.regs.ebp = cpu.regs.esp;
-      // Map the stack region (0xC0150xxx → 0x150xxx)
-      const stackPtIdx = (cpu.regs.esp >>> 12) & 0x3FF;
-      mem.write32(PT_BASE + stackPtIdx * 4, (cpu.regs.esp & 0xFFFFF000) | 3);
-
-      // Verify the full scancode-to-ASCII data path works through paging.
-      // Instead of stepping CPU instructions (which interacts badly with the
-      // #PF handler that expects a valid stack), we validate the page table
-      // translations and memory contents directly.
+      console.log(`[TEST] keymap virtual = 0x${keymapVirt.toString(16)} (binary offset 0x${keymapOff.toString(16)})`);
+      console.log(`[TEST] keymap_shift virtual = 0x${keymapShiftVirt.toString(16)}`);
+      console.log(`[TEST] keymap_active at 0x${keymapActivePhys.toString(16)} = 0x${mem.read32(keymapActivePhys).toString(16)}`);
+      console.log(`[TEST] kbd_shift at 0x${kbdShiftPhys.toString(16)} = 0x${mem.read8(kbdShiftPhys).toString(16)}`);
 
       const scancode = 0x32;
-
-      // 1. Verify keyboard map table is present at the expected physical address
-      const mapPhysAddr = 0x100000 + 0x43CD;  // keymap physical base
+      const mapPhysAddr = 0x100000 + keymapOff;
       const mapByte = mem.read8(mapPhysAddr + scancode);
       assertEq(mapByte, 0x6D, 'Scancode 0x32 → 0x6D (m) in kernel keyboard map');
 
-      // 2. Verify paging can read the shift flag through translateAddress
-      const shiftPhys = cpu.translateAddress(0xC0104BFD, false);
+      const shiftPhys = cpu.translateAddress(kbdShiftVirt, false);
       const shiftVal = mem.read8(shiftPhys);
       assertEq(shiftVal, 0, 'Shift flag should be 0 (unshifted)');
 
-      // 3. Verify paging can read the keyboard map pointer
-      const ptrPhys = cpu.translateAddress(0xC0104BFF, false);
+      const ptrPhys = cpu.translateAddress(kbdShiftVirt + 8, false);  // +8: keymap_active after kbd_shift+kbd_extended+pad
       const ptrVal = mem.read32(ptrPhys);
       assertEq(ptrVal, keymapVirt, `Keyboard map pointer should be 0x${keymapVirt.toString(16)}`);
 
-      // 4. Verify paging can read the keyboard map entry for scancode 0x32
       const mapPhys = cpu.translateAddress(keymapVirt + scancode, false);
       const charVal = mem.read8(mapPhys);
       assertEq(charVal, 0x6D, 'Character at keyboard map[0x32] should be m');
 
-      // 5. Verify no page fault or crash occurred (CPU not halted)
       assert(!cpu.halted, 'CPU should not be halted');
-
-      // Verify no page fault or crash occurred
       assert(!cpu.halted, 'CPU should not be halted');
     });
   });

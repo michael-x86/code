@@ -20,6 +20,12 @@ class VGATextMode {
         this.BUF_SIZE = this.COLS * this.ROWS * 2;  // 4000 bytes
         this.BUF_ADDR = 0xB8000;  // Physical address of VGA text buffer
         
+        // Graphics mode state and address
+        this.graphicsMode = false;
+        this.GRAPHICS_BUF_ADDR = 0xA0000;
+        this.graphicsResX = 320;
+        this.graphicsResY = 200;
+        
         // Current cursor position (set by kernel via ports 0x3D4/0x3D5)
         this.cursorX = 0;
         this.cursorY = 0;
@@ -129,6 +135,9 @@ class VGATextMode {
         this.graphicsRegs[0x07] = 0x00;  // Color don't care
         this.graphicsRegs[0x08] = 0xFF;  // Bit mask
         
+        // Default to text mode
+        this.graphicsMode = false;
+        
         // Mark entire screen as dirty
         this.dirty = true;
     }
@@ -227,6 +236,19 @@ class VGATextMode {
                 
             case 0x3CF:  // Graphics Controller Data
                 this.graphicsRegs[this.graphicsIndex] = value;
+                // Detect graphics mode: graphics controller misc (index 6) bit 2 = 1
+                if (this.graphicsIndex === 6) {
+                    const newMode = !!(value & 0x04);
+                    if (newMode !== this.graphicsMode) {
+                        this.graphicsMode = newMode;
+                        this.dirty = true;
+                    }
+                }
+                // Detect 256-color chain-4 mode: sequencer mem mode (index 4) bit 3 = 1
+                if (this.graphicsIndex === 4 && (value & 0x08)) {
+                    this.graphicsResY = 200;
+                    this.graphicsResX = 320;
+                }
                 break;
                 
             case 0x3C7:  // DAC Read Index
@@ -307,8 +329,63 @@ class VGATextMode {
         }
     }
     
+    // Render VGA graphics buffer to canvas (mode 13h: 320x200x256)
+    renderGraphics() {
+        if (!this.ctx) return;
+        const width = this.graphicsResX;
+        const height = this.graphicsResY;
+        
+        // Use ImageData for fast pixel rendering
+        let imageData = this._graphicsImageData;
+        if (!imageData || imageData.width !== width || imageData.height !== height) {
+            imageData = this.ctx.createImageData(width, height);
+            this._graphicsImageData = imageData;
+        }
+        const data = imageData.data;
+        
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const pixelIdx = y * width + x;
+                const palIdx = this.mem.read8(this.GRAPHICS_BUF_ADDR + pixelIdx);
+                const r = this.dacPalette[palIdx * 3 + 0];
+                const g = this.dacPalette[palIdx * 3 + 1];
+                const b = this.dacPalette[palIdx * 3 + 2];
+                const dataIdx = pixelIdx * 4;
+                data[dataIdx] = r;
+                data[dataIdx + 1] = g;
+                data[dataIdx + 2] = b;
+                data[dataIdx + 3] = 255;
+            }
+        }
+        
+        // Scale to fit canvas
+        this.ctx.imageSmoothingEnabled = false;  // Pixel-perfect scaling
+        // Draw full canvas first
+        this.ctx.fillStyle = '#000000';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        // Create offscreen canvas at native resolution for scaling
+        let offscreen = this._graphicsOffscreen;
+        if (!offscreen || offscreen.width !== width || offscreen.height !== height) {
+            offscreen = document.createElement('canvas');
+            offscreen.width = width;
+            offscreen.height = height;
+            this._graphicsOffscreen = offscreen;
+        }
+        offscreen.getContext('2d').putImageData(imageData, 0, 0);
+        this.ctx.drawImage(offscreen, 0, 0, this.canvas.width, this.canvas.height);
+    }
+    
     // Render VGA text buffer to canvas
     render() {
+        if (!this.ctx || !this.dirty) return;
+        
+        // Dispatch to graphics or text renderer
+        if (this.graphicsMode) {
+            this.renderGraphics();
+            this.dirty = false;
+            return;
+        }
+        
         // Update cursor blink state
         const now = Date.now();
         if (this.blinkNextTime === 0) {
@@ -317,9 +394,6 @@ class VGATextMode {
             this.blinkVisible = !this.blinkVisible;
             this.blinkNextTime = now + this.blinkPeriod;
         }
-        
-        // Skip if nothing changed (including blink state)
-        if (!this.ctx || !this.dirty) return;
         
         // Clear canvas
         this.ctx.fillStyle = '#000000';

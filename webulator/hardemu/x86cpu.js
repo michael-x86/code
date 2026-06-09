@@ -272,7 +272,7 @@ class X86CPU {
         
         // Apply paging if CR0.PG = 1
         if (this.cregs.cr0 & 0x80000000) {
-            physicalAddr = this.translateAddress(addr);
+            physicalAddr = this.translateAddress(addr, false);
         }
         
         switch (size) {
@@ -288,8 +288,9 @@ class X86CPU {
         let physicalAddr = addr;
         
         // Apply paging if CR0.PG = 1
+        // translateAddress with forWrite=true sets both Accessed and Dirty bits
         if (this.cregs.cr0 & 0x80000000) {
-            physicalAddr = this.translateAddress(addr);
+            physicalAddr = this.translateAddress(addr, true);
         }
         
         switch (size) {
@@ -300,7 +301,8 @@ class X86CPU {
     }
     
     // Translate virtual address to physical using page tables
-    translateAddress(vaddr) {
+    // forWrite: true if this access will write to the page
+    translateAddress(vaddr, forWrite) {
         if (!(this.cregs.cr0 & 0x80000000)) {
             return vaddr;  // Paging disabled
         }
@@ -326,7 +328,7 @@ class X86CPU {
         
         const pdBase = this.cregs.cr3 & 0xFFFFF000;  // Page directory base
         const pdeAddr = pdBase + (pdIndex * 4);
-        const pde = this.mem.read32(pdeAddr);
+        let pde = this.mem.read32(pdeAddr);
         
         if (doTrace) {
             console.log(`[PG]   PD[${pdIndex}] at 0x${pdeAddr.toString(16)} = 0x${pde.toString(16)}`);
@@ -336,17 +338,51 @@ class X86CPU {
         
         if (!(pde & 1)) {
             // Page not present - page fault
-            console.log(`[PG]   PDE not present! #PF vaddr=0x${vaddr.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
+            const rangeStart = pdIndex * 0x400000;
+            const rangeEnd = rangeStart + 0x3FFFFF;
+            console.log(`[PG]   PDE[${pdIndex}] not present! #PF vaddr=0x${vaddr.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
+            console.log(`[PG]   Missing PDE covers 0x${rangeStart.toString(16)}-0x${rangeEnd.toString(16)}`);
+            // Dump a few PDEs around CR3 for context
+            const pdBase0 = this.cregs.cr3 & 0xFFFFF000;
+            for (let di = Math.max(0, pdIndex - 2); di <= Math.min(1023, pdIndex + 2); di++) {
+                const de = this.mem.read32(pdBase0 + di * 4);
+                const rStart = di * 0x400000;
+                console.log(`[PG]     PDE[${di}] @ 0x${(pdBase0 + di*4).toString(16)} = 0x${de.toString(16)}  covers 0x${rStart.toString(16)}-0x${(rStart+0x3FFFFF).toString(16)}`);
+            }
             console.log(`[PG]   Regs: EAX=0x${(this.regs.eax >>> 0).toString(16)} ECX=0x${(this.regs.ecx >>> 0).toString(16)} EDX=0x${(this.regs.edx >>> 0).toString(16)} EBX=0x${(this.regs.ebx >>> 0).toString(16)}`);
             console.log(`[PG]   Regs: ESP=0x${(this.regs.esp >>> 0).toString(16)} EBP=0x${(this.regs.ebp >>> 0).toString(16)} ESI=0x${(this.regs.esi >>> 0).toString(16)} EDI=0x${(this.regs.edi >>> 0).toString(16)}`);
+            // Dump instruction bytes at EIP (read directly from physical RAM; no paging)
+            const eipIdx = (this.regs.eip >>> 22) & 0x3FF;
+            if (eipIdx < 1024) {
+                const eipPde = this.mem.read32(pdBase0 + eipIdx * 4);
+                if (eipPde & 1) {
+                    const eipPtBase = eipPde & 0xFFFFF000;
+                    const eipPtIdx = (this.regs.eip >>> 12) & 0x3FF;
+                    const eipPte = this.mem.read32(eipPtBase + eipPtIdx * 4);
+                    if (eipPte & 1) {
+                        const eipPhys = (eipPte & 0xFFFFF000) + (this.regs.eip & 0xFFF);
+                        console.log(`[PG]   Code at phys 0x${eipPhys.toString(16)}: ` +
+                            `0x${this.mem.read8(eipPhys).toString(16)} ` +
+                            `0x${this.mem.read8(eipPhys + 1).toString(16)} ` +
+                            `0x${this.mem.read8(eipPhys + 2).toString(16)} ` +
+                            `0x${this.mem.read8(eipPhys + 3).toString(16)}`);
+                    }
+                }
+            }
             this.cregs.cr2 = vaddr;
             this.triggerException(14, 0);  // #PF
             return 0;
         }
         
+        // Set Accessed bit (bit 5) in PDE if not already set
+        if (!(pde & (1 << 5))) {
+            pde |= (1 << 5);
+            this.mem.write32(pdeAddr, pde);
+        }
+        
         const ptBase = pde & 0xFFFFF000;
         const pteAddr = ptBase + (ptIndex * 4);
-        const pte = this.mem.read32(pteAddr);
+        let pte = this.mem.read32(pteAddr);
         
         if (doTrace) {
             console.log(`[PG]   PT[${ptIndex}] at 0x${pteAddr.toString(16)} = 0x${pte.toString(16)}`);
@@ -354,10 +390,25 @@ class X86CPU {
         
         if (!(pte & 1)) {
             // Page not present - page fault
-            console.log(`[PG]   PTE not present! Triggering #PF for vaddr=0x${vaddr.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
+            const ptRangeStart = (pdIndex * 0x400000) + (ptIndex * 0x1000);
+            const ptRangeEnd = ptRangeStart + 0xFFF;
+            console.log(`[PG]   PTE[${ptIndex}] not present! #PF vaddr=0x${vaddr.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
+            console.log(`[PG]   Missing PTE covers 0x${ptRangeStart.toString(16)}-0x${ptRangeEnd.toString(16)}`);
             this.cregs.cr2 = vaddr;
             this.triggerException(14, 0);  // #PF
             return 0;
+        }
+        
+        // Set Accessed bit (bit 5) in PTE if not already set
+        if (!(pte & (1 << 5))) {
+            pte |= (1 << 5);
+            this.mem.write32(pteAddr, pte);
+        }
+        
+        // If this is a write, set Dirty bit (bit 6) in PTE
+        if (forWrite && !(pte & (1 << 6))) {
+            pte |= (1 << 6);
+            this.mem.write32(pteAddr, pte);
         }
         
         const physBase = pte & 0xFFFFF000;
@@ -587,6 +638,33 @@ class X86CPU {
                 this.regs.eip++;
                 return 3;
                 
+            // CWDE (0x98) - sign-extend AX to EAX
+            case 0x98:
+                this.regs.eax = ((this.regs.eax & 0x8000) ? (this.regs.eax | 0xFFFF0000) : (this.regs.eax & 0xFFFF)) >>> 0;
+                this.regs.eip++;
+                return 3;
+            // CDQ (0x99) - sign-extend EAX to EDX:EAX
+            case 0x99: {
+                const eaxSigned = this.regs.eax | 0;  // Treat as signed 32-bit
+                this.regs.edx = (eaxSigned < 0) ? 0xFFFFFFFF : 0;
+                this.regs.eip++;
+                return 2;
+            }
+            // XCHG EAX, reg32 (0x91-0x97)
+            case 0x91: case 0x92: case 0x93:
+            case 0x94: case 0x95: case 0x96: case 0x97: {
+                const regIndex = opcode - 0x91;
+                const regName = ['ecx','edx','ebx','esp','ebp','esi','edi'][regIndex];
+                const tmp = this.regs.eax;
+                this.regs.eax = this.getReg32(regName);
+                this.setReg32(regName, tmp);
+                this.regs.eip++;
+                return 3;
+            }
+            // XCHG r8, r/m8 (0x86) and XCHG r32, r/m32 (0x87)
+            case 0x86: case 0x87: {
+                return this.handleXchgRegMem(opcode);
+            }
             // MOV r32, imm32 (0xB8 + rd) (2 cycles)
             // With 0x66 prefix: MOV r16, imm16
             case 0xB8: case 0xB9: case 0xBA: case 0xBB:
@@ -788,8 +866,9 @@ class X86CPU {
                 this.regs.eip++;
                 const imm32 = this.readMem(this.regs.eip, 4);
                 this.regs.eip += 4;
-                const result = this.regs.eax - imm32;
-                this.updateArithmeticFlags(result, this.regs.eax, imm32, this.regs.eax < imm32, false);
+                const result = (this.regs.eax - imm32) >>> 0;
+                this.setFlag('CF', (this.regs.eax >>> 0) < (imm32 >>> 0));
+                this.updateArithmeticFlags(result, this.regs.eax, imm32, undefined, false);
                 return 2;
             }
                 
@@ -970,7 +1049,7 @@ class X86CPU {
                 const oldEax = this.regs.eax;
                 this.regs.eax = (this.regs.eax - imm32) >>> 0;
                 this.setFlag('CF', (oldEax >>> 0) < (imm32 >>> 0));
-                this.updateArithmeticFlags(this.regs.eax, oldEax, imm32, true, false);
+                this.updateArithmeticFlags(this.regs.eax, oldEax, imm32, undefined, false);
                 return 2;
             }
             
@@ -981,17 +1060,6 @@ class X86CPU {
                 this.regs.eip += 4;
                 this.regs.eax = (this.regs.eax ^ imm32) >>> 0;
                 this.updateArithmeticFlags(this.regs.eax, 0, 0, 0, false);
-                return 2;
-            }
-            
-            // CMP EAX, imm32 (0x3d) - short form for EAX (flags only, no write)
-            case 0x3d: {
-                this.regs.eip++;
-                const imm32 = this.readMem(this.regs.eip, 4);
-                this.regs.eip += 4;
-                const result = (this.regs.eax - imm32) >>> 0;
-                this.setFlag('CF', (this.regs.eax >>> 0) < (imm32 >>> 0));
-                this.updateArithmeticFlags(result, this.regs.eax, imm32, true, false);
                 return 2;
             }
             
@@ -1060,7 +1128,7 @@ class X86CPU {
                 const oldVal = this.getReg32(regName);
                 const newVal = (oldVal + 1) >>> 0;
                 this.setReg32(regName, newVal);
-                this.updateArithmeticFlags(newVal, oldVal, 1, 0, false);
+                this.updateArithmeticFlags(newVal, oldVal, 1, undefined, false);
                 this.setFlag('OF', oldVal === 0x7FFFFFFF);
                 this.regs.eip++;
                 return 2;  // INC = 2 cycles
@@ -1072,13 +1140,21 @@ class X86CPU {
                 const oldVal = this.getReg32(regName);
                 const newVal = (oldVal - 1) >>> 0;
                 this.setReg32(regName, newVal);
-                this.updateArithmeticFlags(newVal, oldVal, 1, 0, false);
+                this.updateArithmeticFlags(newVal, oldVal, 1, undefined, false);
                 this.setFlag('OF', oldVal === 0x80000000);
                 this.regs.eip++;
                 return 2;  // DEC = 2 cycles
             }
                 
-            // CLI (0xFA), STI (0xFB), HLT (0xF4), CMC (0xF5)
+            // CLC (0xF8), STC (0xF9), CLI (0xFA), STI (0xFB)
+            case 0xF8:
+                this.setFlag('CF', 0);
+                this.regs.eip++;
+                return 2;
+            case 0xF9:
+                this.setFlag('CF', 1);
+                this.regs.eip++;
+                return 2;
             case 0xFA:
                 this.setFlag('IF', 0);
                 this.regs.eip++;
@@ -1327,7 +1403,8 @@ class X86CPU {
                     }
 
                     default:
-                        return 0;  // Error - invalid reg field for 0xFF
+                        this.triggerException(6, 0);  // #UD
+                        return 10;
                 }
             }
             
@@ -1400,6 +1477,13 @@ class X86CPU {
                 return this.handleStringOp(opcode);
             }
             
+            // XLAT/XLATB (0xD7) — translate AL via DS:[EBX + AL]
+            case 0xD7: {
+                const addr = (this.regs.ebx + (this.regs.eax & 0xFF)) >>> 0;
+                this.regs.eax = (this.regs.eax & 0xFFFFFF00) | (this.readMem(addr, 1) & 0xFF);
+                this.regs.eip++;
+                return 4;
+            }
             // MOV r/m16, segment (0x8C) and MOV segment, r/m16 (0x8E)
             case 0x8C: case 0x8E: {
                 return this.handleMovSegReg(opcode);
@@ -1988,13 +2072,13 @@ class X86CPU {
                 const addr = this.calculateAddress(modrm);
                 if (opcode === 0x21) {
                     // AND r/m32, r32
-                    const memValue = this.read32(addr);
+                    const memValue = this.readMem(addr, 4);
                     const result = (memValue & regValue) >>> 0;
-                    this.write32(addr, result);
+                    this.writeMem(addr, result, 4);
                     this.updateArithmeticFlags(result, 0, 0, 0, false);
                 } else {
                     // AND r32, r/m32
-                    const memValue = this.read32(addr);
+                    const memValue = this.readMem(addr, 4);
                     const result = (regValue & memValue) >>> 0;
                     this.setReg32(regName, result);
                     this.updateArithmeticFlags(result, 0, 0, 0, false);
@@ -2091,7 +2175,7 @@ class X86CPU {
             case 0x5:  // SUB
                 result = (destValue - immValue) >>> 0;
                 this.setFlag('CF', (destValue >>> 0) < (immValue >>> 0));
-                this.updateArithmeticFlags(result, destValue, immValue, true, isByteOp);
+                this.updateArithmeticFlags(result, destValue, immValue, undefined, isByteOp);
                 break;
             case 0x6:  // XOR
                 result = destValue ^ immValue;
@@ -2387,6 +2471,51 @@ class X86CPU {
         }
     }
     
+    // Handle XCHG r8/r32, r/m8/r/m32 (0x86, 0x87)
+    handleXchgRegMem(opcode) {
+        this.regs.eip++;
+        const modrm = this.readMem(this.regs.eip, 1);
+        this.regs.eip++;
+        
+        const mod = (modrm >> 6) & 3;
+        const reg = (modrm >> 3) & 7;
+        const rm = modrm & 7;
+        const isByteOp = (opcode === 0x86);
+        
+        const regName = isByteOp
+            ? ['al','cl','dl','bl','ah','ch','dh','bh'][reg]
+            : ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][reg];
+        const regValue = isByteOp ? this.getReg8(regName) : this.getReg32(regName);
+        
+        if (mod === 3) {
+            // Register to register
+            const rmName = isByteOp
+                ? ['al','cl','dl','bl','ah','ch','dh','bh'][rm]
+                : ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][rm];
+            const rmValue = isByteOp ? this.getReg8(rmName) : this.getReg32(rmName);
+            if (isByteOp) {
+                this.setReg8(rmName, regValue);
+                this.setReg8(regName, rmValue);
+            } else {
+                this.setReg32(rmName, regValue);
+                this.setReg32(regName, rmValue);
+            }
+            return 3;
+        } else {
+            // Memory operand
+            const addr = this.calculateAddress(modrm);
+            const memValue = isByteOp ? this.readMem(addr, 1) : this.readMem(addr, 4);
+            if (isByteOp) {
+                this.writeMem(addr, regValue, 1);
+                this.setReg8(regName, memValue);
+            } else {
+                this.writeMem(addr, regValue, 4);
+                this.setReg32(regName, memValue);
+            }
+            return 3;
+        }
+    }
+    
     // Handle OR r/m8, r8 (0x08), OR r/m32, r32 (0x09)
     // OR r8, r/m8 (0x0A), OR r32, r/m32 (0x0B)
     handleOrRegMem(opcode) {
@@ -2574,6 +2703,11 @@ class X86CPU {
             if (!(mod === 0 && base === 5)) {
                 const baseRegName = ['eax','ecx','edx','ebx','esp','ebp','esi','edi'][base];
                 effectiveAddr = this.getReg32(baseRegName);
+            } else {
+                // mod=0, base=5 in SIB: no base register, read 32-bit displacement
+                const disp32 = this.readMem(this.regs.eip, 4);
+                this.regs.eip += 4;
+                effectiveAddr = disp32;
             }
             
             // Index register (index=4 means no index)
@@ -3163,7 +3297,8 @@ class X86CPU {
                 if (this.debug) {
                     console.log(`Unhandled shift/rotate operation: ${reg}`);
                 }
-                return 0;
+                this.triggerException(6, 0);  // #UD
+                return 10;
         }
         
         // Write back result
@@ -3476,7 +3611,7 @@ class X86CPU {
                     const val1 = this.readMem(src, size);
                     const val2 = this.readMem(dst, size);
                     const result = (val1 - val2) >>> 0;
-                    this.updateArithmeticFlags(result, val1, val2, val1 < val2, size === 2);
+                    this.updateArithmeticFlags(result, val1, val2, val1 < val2, size === 1);
                     this.setReg32('esi', this.getReg32('esi') + direction);
                     this.setReg32('edi', this.getReg32('edi') + direction);
                     cycles += 4;

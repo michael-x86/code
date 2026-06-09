@@ -194,19 +194,25 @@ class X86Machine {
         this.running = true;
         this.halted = false;
         
-        // Calculate T-states per 16ms interval (roughly 60 FPS).
-        // Floor ensures correct deceleration, but we keep a minimum of 6000
-        // so the PIT (~100 Hz, divisor 11932) fires at ~3 Hz and the task
-        // scheduler can context-switch into the shell task every ~1 s.
-        this.tstatesPerInterval = Math.max(6000, Math.floor(this.cpuFreq / 60 / this.speedDivider));
+        // Compute interval and T-state budget so that the effective speed
+        // matches the requested speedDivider.  At slower speeds we lengthen
+        // the interval so that the PIT (which is ticked once per instruction)
+        // can still count down and fire at a reasonable rate.
+        const desiredTstatesPerMs = this.cpuFreq / this.speedDivider / 1000;
+        const minIntervalMs = 16;
+        const minTstates = 6000;
+        const maxIntervalMs = 60000;
+        this.intervalMs = Math.min(maxIntervalMs,
+            Math.max(minIntervalMs, Math.ceil(minTstates / Math.max(desiredTstatesPerMs, 1e-6))));
+        this.tstatesPerInterval = Math.max(1, Math.floor(desiredTstatesPerMs * this.intervalMs));
         
         // Start execution loop
         const outerThis = this;
         this.interval = setInterval(() => {
             outerThis.executionLoop();
-        }, 16);  // ~60 FPS
+        }, this.intervalMs);
         
-        console.log('Machine started');
+        console.log(`Machine started (interval=${this.intervalMs}ms, budget=${this.tstatesPerInterval})`);
     }
     
     // Stop execution
@@ -219,7 +225,7 @@ class X86Machine {
         console.log('Machine stopped');
     }
     
-    // Execution loop (called every 16ms)
+    // Execution loop (called every intervalMs)
     executionLoop() {
         if (!this.running) return;
         
@@ -686,16 +692,16 @@ class PIC8259A {
     }
     
     // Request IRQ (called by devices)
+    // NOTE: only sets IRR bits; delivery happens at instruction boundaries
+    // via the CPU's step()->checkInterrupts() path.
     requestIRQ(irqNum) {
         if (irqNum < 8) {
             this.master.irr |= (1 << irqNum);
-            this.checkInterrupts();
         } else {
             // Slave PIC (IRQ 8-15)
             irqNum -= 8;
             this.slave.irr |= (1 << irqNum);
             this.master.irr |= (1 << 2);
-            this.checkInterrupts();
         }
     }
     
@@ -771,6 +777,13 @@ class PIT8254 {
             { state: 0, lsb: 0 },
         ];
         
+        // Latched counter values for reading (set by latch command, cleared after read)
+        this.latch = [
+            { active: false, value: 0, count: 0 },  // count = bytes remaining to read
+            { active: false, value: 0, count: 0 },
+            { active: false, value: 0, count: 0 },
+        ];
+        
         this.init();
     }
     
@@ -784,6 +797,11 @@ class PIT8254 {
         for (let a of this.access) {
             a.state = 2;  // Default to single-byte access (no port 0x43 config needed)
             a.lsb = 0;
+        }
+        for (let l of this.latch) {
+            l.active = false;
+            l.value = 0;
+            l.count = 0;
         }
     }
     
@@ -806,8 +824,11 @@ class PIT8254 {
             // Configure 16-bit access state based on access mode
             const a = this.access[channel];
             if (access === 0) {
-                // Latch count (for reading) — just reset access state
-                a.state = 0;
+                // Latch count (for reading) — snapshot the current counter
+                const l = this.latch[channel];
+                l.active = true;
+                l.value = ch.count;
+                l.count = 2;  // Two bytes to read (LSB then MSB)
             } else if (access === 1) {
                 // LSB only
                 a.state = 2;  // complete after single byte
@@ -858,6 +879,18 @@ class PIT8254 {
         if (port === 0x43) return 0;
         const channel = port - 0x40;
         if (channel >= 0 && channel <= 2) {
+            const l = this.latch[channel];
+            if (l.active) {
+                // Return latched value
+                const byte = l.value & 0xFF;
+                l.value >>= 8;
+                l.count--;
+                if (l.count <= 0) {
+                    l.active = false;
+                }
+                return byte;
+            }
+            // Live read — return current count LSB
             return this.channels[channel].count & 0xFF;
         }
         return 0;

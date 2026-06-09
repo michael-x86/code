@@ -83,50 +83,8 @@ irq0:
     dec ecx
     jnz .tick_disp
 
-    ; Defer task switch if a PIO transfer is in progress.
-    cmp byte [disk_busy], 0
-    jne .skip_switch
-
-    ; next = (current + 1) % TASK_COUNT
-    mov eax, [current_task]
-    inc eax
-    cmp eax, TASK_COUNT
-    jb .save
-    xor eax, eax
-
-.save:
-    cmp dword [current_task], 0
-    je .was0
-    cmp dword [current_task], 1
-    je .was1
-    mov [task2_esp], esp
-    jmp .load
-.was0:
-    mov [task0_esp], esp
-    jmp .load
-.was1:
-    mov [task1_esp], esp
-
-.load:
-    mov [current_task], eax
-    cmp eax, 0
-    je .run0
-    cmp eax, 1
-    je .run1
-    mov esp, [task2_esp]
-    jmp .done
-.run0:
-    mov esp, [task0_esp]
-    jmp .done
-.run1:
-    mov esp, [task1_esp]
-.done:
-    mov al, PIC_EOI
-    out PIC_MASTER_CMD, al
-    popad
-    iretd
-
-.skip_switch:
+    ; Single-task: no actual context switch needed, just acknowledge the PIC.
+    ; (The save/load would be a no-op since there's only one task.)
     mov al, PIC_EOI
     out PIC_MASTER_CMD, al
     popad
