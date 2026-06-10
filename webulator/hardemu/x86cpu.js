@@ -5,6 +5,18 @@
  * This is the core of the webulator x86 adaptation to run the user's OS kernel.
  */
 
+// Thrown by translateAddress when a page fault occurs. Unwinds the current
+// instruction so execution does not continue with a bogus physical address;
+// step() catches it and delivers #PF via triggerException.
+class PageFaultError extends Error {
+    constructor(vaddr, errorCode) {
+        super(`#PF at 0x${(vaddr >>> 0).toString(16)} err=0x${errorCode.toString(16)}`);
+        this.name = 'PageFaultError';
+        this.vaddr = vaddr >>> 0;
+        this.errorCode = errorCode;
+    }
+}
+
 class X86CPU {
     constructor(memory, pic) {
         // 32-bit general purpose registers
@@ -24,7 +36,8 @@ class X86CPU {
             cr0: 0,  // PE (bit 0), PG (bit 31)
             cr1: 0,
             cr2: 0,  // Page fault linear address
-            cr3: 0   // Page directory base (top 20 bits)
+            cr3: 0,  // Page directory base (top 20 bits)
+            cr4: 0   // PSE (bit 4), etc.
         };
         
         // Debug registers (DR0-DR7)
@@ -58,7 +71,10 @@ class X86CPU {
         
         // EIP of the faulting instruction (for exception frame)
         this.faultEip = 0;
-        
+
+        // Nesting depth of triggerException (for double/triple fault escalation)
+        this._exceptionDepth = 0;
+
         // T-state tracking (for cycle-accurate emulation)
         this.tstates = 0;
         
@@ -94,6 +110,7 @@ class X86CPU {
         this.cregs.cr0 = 0;  // Real mode, no paging
         this.cregs.cr2 = 0;
         this.cregs.cr3 = 0;
+        this.cregs.cr4 = 0;
         
         // Reset debug registers
         this.dregs.dr0 = 0;
@@ -117,6 +134,7 @@ class X86CPU {
         this.cpl = 0;
         this.tstates = 0;
         this.faultEip = 0;
+        this._exceptionDepth = 0;
         this._tsc = undefined;
         this._pagingDebugCount = undefined;
         this.prefixes = {
@@ -267,12 +285,13 @@ class X86CPU {
     }
     
     // Read memory (with paging if enabled)
-    readMem(addr, size) {
+    // forExec: true when this read is an instruction fetch (sets #PF error code bit 4)
+    readMem(addr, size, forExec) {
         let physicalAddr = addr;
-        
+
         // Apply paging if CR0.PG = 1
         if (this.cregs.cr0 & 0x80000000) {
-            physicalAddr = this.translateAddress(addr, false);
+            physicalAddr = this.translateAddress(addr, false, forExec);
         }
         
         switch (size) {
@@ -300,13 +319,41 @@ class X86CPU {
         }
     }
     
+    // Raise a page fault: set CR2 and abort the current access by throwing.
+    // The throw unwinds to step(), which delivers #PF via triggerException —
+    // this prevents the faulting instruction from continuing with a bogus
+    // physical address, and lets faults during exception delivery escalate
+    // to double/triple fault.
+    // Error code bits: 0=P (protection violation vs not-present), 1=W/R,
+    // 2=U/S, 3=RSVD, 4=I/D (instruction fetch).
+    pageFault(vaddr, present, forWrite, userMode, forExec, rsvd) {
+        const errorCode =
+            (present ? 1 : 0) |
+            (forWrite ? 2 : 0) |
+            (userMode ? 4 : 0) |
+            (rsvd ? 8 : 0) |
+            (forExec ? 16 : 0);
+        this.cregs.cr2 = vaddr >>> 0;
+        throw new PageFaultError(vaddr, errorCode);
+    }
+
     // Translate virtual address to physical using page tables
     // forWrite: true if this access will write to the page
-    translateAddress(vaddr, forWrite) {
+    // forExec: true if this access is an instruction fetch
+    // The page-table walk itself uses physical memory (this.mem.*) directly:
+    // CR3 and PDE/PTE frame addresses are physical and must never recurse
+    // through paging.
+    translateAddress(vaddr, forWrite, forExec) {
         if (!(this.cregs.cr0 & 0x80000000)) {
             return vaddr;  // Paging disabled
         }
-        
+
+        vaddr = vaddr >>> 0;
+        // Effective privilege of the access: user if CPL==3
+        const userMode = this.cpl === 3 || (this.segregs.cs & 3) === 3;
+        // CR0.WP: when set, supervisor writes also honor read-only pages
+        const wp = (this.cregs.cr0 & 0x10000) !== 0;
+
         // Track paging debug - trace first walks + always trace faults
         if (this._pagingDebugCount === undefined) this._pagingDebugCount = 0;
         const doTrace = this._pagingDebugCount < 25;
@@ -338,48 +385,41 @@ class X86CPU {
         
         if (!(pde & 1)) {
             // Page not present - page fault
-            const rangeStart = pdIndex * 0x400000;
-            const rangeEnd = rangeStart + 0x3FFFFF;
-            console.log(`[PG]   PDE[${pdIndex}] not present! #PF vaddr=0x${vaddr.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
-            console.log(`[PG]   Missing PDE covers 0x${rangeStart.toString(16)}-0x${rangeEnd.toString(16)}`);
-            // Dump a few PDEs around CR3 for context
-            const pdBase0 = this.cregs.cr3 & 0xFFFFF000;
-            for (let di = Math.max(0, pdIndex - 2); di <= Math.min(1023, pdIndex + 2); di++) {
-                const de = this.mem.read32(pdBase0 + di * 4);
-                const rStart = di * 0x400000;
-                console.log(`[PG]     PDE[${di}] @ 0x${(pdBase0 + di*4).toString(16)} = 0x${de.toString(16)}  covers 0x${rStart.toString(16)}-0x${(rStart+0x3FFFFF).toString(16)}`);
-            }
-            console.log(`[PG]   Regs: EAX=0x${(this.regs.eax >>> 0).toString(16)} ECX=0x${(this.regs.ecx >>> 0).toString(16)} EDX=0x${(this.regs.edx >>> 0).toString(16)} EBX=0x${(this.regs.ebx >>> 0).toString(16)}`);
-            console.log(`[PG]   Regs: ESP=0x${(this.regs.esp >>> 0).toString(16)} EBP=0x${(this.regs.ebp >>> 0).toString(16)} ESI=0x${(this.regs.esi >>> 0).toString(16)} EDI=0x${(this.regs.edi >>> 0).toString(16)}`);
-            // Dump instruction bytes at EIP (read directly from physical RAM; no paging)
-            const eipIdx = (this.regs.eip >>> 22) & 0x3FF;
-            if (eipIdx < 1024) {
-                const eipPde = this.mem.read32(pdBase0 + eipIdx * 4);
-                if (eipPde & 1) {
-                    const eipPtBase = eipPde & 0xFFFFF000;
-                    const eipPtIdx = (this.regs.eip >>> 12) & 0x3FF;
-                    const eipPte = this.mem.read32(eipPtBase + eipPtIdx * 4);
-                    if (eipPte & 1) {
-                        const eipPhys = (eipPte & 0xFFFFF000) + (this.regs.eip & 0xFFF);
-                        console.log(`[PG]   Code at phys 0x${eipPhys.toString(16)}: ` +
-                            `0x${this.mem.read8(eipPhys).toString(16)} ` +
-                            `0x${this.mem.read8(eipPhys + 1).toString(16)} ` +
-                            `0x${this.mem.read8(eipPhys + 2).toString(16)} ` +
-                            `0x${this.mem.read8(eipPhys + 3).toString(16)}`);
-                    }
-                }
-            }
-            this.cregs.cr2 = vaddr;
-            this.triggerException(14, 0);  // #PF
-            return 0;
+            console.log(`[PG]   PDE[${pdIndex}] not present! #PF vaddr=0x${vaddr.toString(16)} at EIP=0x${this.regs.eip.toString(16)} (covers 0x${(pdIndex * 0x400000).toString(16)}-0x${(pdIndex * 0x400000 + 0x3FFFFF).toString(16)})`);
+            this.pageFault(vaddr, false, forWrite, userMode, forExec, false);
         }
-        
+
+        // 4MB large page (PSE): PDE.PS (bit 7) with CR4.PSE (bit 4) set.
+        // The PDE maps the page directly; there is no page table walk.
+        if ((this.cregs.cr4 & 0x10) && (pde & 0x80)) {
+            if (userMode && !(pde & 4)) {
+                this.pageFault(vaddr, true, forWrite, userMode, forExec, false);
+            }
+            if (forWrite && !(pde & 2) && (userMode || wp)) {
+                this.pageFault(vaddr, true, forWrite, userMode, forExec, false);
+            }
+            // Reserved bits 21:13 of a 4MB PDE must be zero (no PAE/PSE-36)
+            if (pde & 0x003FE000) {
+                this.pageFault(vaddr, true, forWrite, userMode, forExec, true);
+            }
+            let newPde = pde | (1 << 5);          // Accessed
+            if (forWrite) newPde |= (1 << 6);     // Dirty (held in PDE for 4MB pages)
+            if (newPde !== pde) {
+                this.mem.write32(pdeAddr, newPde);
+            }
+            const physAddr4M = ((pde & 0xFFC00000) | (vaddr & 0x3FFFFF)) >>> 0;
+            if (doTrace) {
+                console.log(`[PG]   4MB page → phys=0x${physAddr4M.toString(16)} (PDE=0x${pde.toString(16)})`);
+            }
+            return physAddr4M;
+        }
+
         // Set Accessed bit (bit 5) in PDE if not already set
         if (!(pde & (1 << 5))) {
             pde |= (1 << 5);
             this.mem.write32(pdeAddr, pde);
         }
-        
+
         const ptBase = pde & 0xFFFFF000;
         const pteAddr = ptBase + (ptIndex * 4);
         let pte = this.mem.read32(pteAddr);
@@ -390,15 +430,18 @@ class X86CPU {
         
         if (!(pte & 1)) {
             // Page not present - page fault
-            const ptRangeStart = (pdIndex * 0x400000) + (ptIndex * 0x1000);
-            const ptRangeEnd = ptRangeStart + 0xFFF;
             console.log(`[PG]   PTE[${ptIndex}] not present! #PF vaddr=0x${vaddr.toString(16)} at EIP=0x${this.regs.eip.toString(16)}`);
-            console.log(`[PG]   Missing PTE covers 0x${ptRangeStart.toString(16)}-0x${ptRangeEnd.toString(16)}`);
-            this.cregs.cr2 = vaddr;
-            this.triggerException(14, 0);  // #PF
-            return 0;
+            this.pageFault(vaddr, false, forWrite, userMode, forExec, false);
         }
-        
+
+        // Page-level protection: U/S and R/W are the AND of PDE and PTE bits
+        if (userMode && (!(pde & 4) || !(pte & 4))) {
+            this.pageFault(vaddr, true, forWrite, userMode, forExec, false);
+        }
+        if (forWrite && (!(pde & 2) || !(pte & 2)) && (userMode || wp)) {
+            this.pageFault(vaddr, true, forWrite, userMode, forExec, false);
+        }
+
         // Set Accessed bit (bit 5) in PTE if not already set
         if (!(pte & (1 << 5))) {
             pte |= (1 << 5);
@@ -445,7 +488,32 @@ class X86CPU {
             this.halted = true;
             return;
         }
-        
+
+        this._exceptionDepth++;
+        try {
+            this.deliverException(exceptionNum, errorCode, name);
+        } catch (e) {
+            if (!(e instanceof PageFaultError)) throw e;
+            // Page fault while delivering an exception (IDT entry or stack
+            // push hit an unmapped/protected page).
+            if (exceptionNum === 8 || this._exceptionDepth > 2) {
+                // Fault while delivering #DF → triple fault. Real hardware
+                // resets; halt with a clear message so the failure is visible.
+                console.error(`[EXC] TRIPLE FAULT delivering ${name} (nested #PF at 0x${(e.vaddr >>> 0).toString(16)}) — CPU halted`);
+                this.halted = true;
+            } else {
+                console.error(`[EXC] #PF during delivery of ${name} → escalating to #DF`);
+                this.triggerException(8, 0);  // #DF always pushes error code 0
+            }
+        } finally {
+            this._exceptionDepth--;
+        }
+    }
+
+    // Actual exception delivery: read IDT gate, push frame, jump to handler.
+    // May throw PageFaultError if the IDT or stack pages fault; the caller
+    // (triggerException) escalates that to #DF / triple fault.
+    deliverException(exceptionNum, errorCode, name) {
         // Get IDT entry (8 bytes per entry)
         // Bytes 0-1: Offset[15:0]
         // Bytes 2-3: Selector
@@ -538,13 +606,19 @@ class X86CPU {
             return 0;
         }
         
-        // Check pending interrupts before executing each instruction
-        this.checkInterrupts();
-        
         // Decode and execute
         try {
-            const opcode = this.readMem(this.regs.eip, 1);
+            // Check pending interrupts before executing each instruction.
+            // Inside the try so a #PF during interrupt delivery (stack push,
+            // IDT read) is caught below; faultEip is set first so the pushed
+            // return address is the not-yet-executed instruction.
             this.faultEip = this.regs.eip;
+            this.checkInterrupts();
+
+            // Record instruction start BEFORE any fetch: if the opcode fetch
+            // itself page-faults, the pushed EIP must point at this instruction
+            this.faultEip = this.regs.eip;
+            const opcode = this.readMem(this.regs.eip, 1, true);
             
             if (this.debug) {
                 console.log(`EIP=0x${this.regs.eip.toString(16)}, Opcode=0x${opcode.toString(16)}`);
@@ -565,7 +639,7 @@ class X86CPU {
                    (prefix >= 0x26 && prefix <= 0x3E && (prefix & 0x7) === 6)) {
                 this.handlePrefix(prefix);
                 this.regs.eip++;
-                prefix = this.readMem(this.regs.eip, 1);
+                prefix = this.readMem(this.regs.eip, 1, true);
             }
             
             // Execute instruction
@@ -584,6 +658,13 @@ class X86CPU {
             
             return cycles;
         } catch (e) {
+            if (e instanceof PageFaultError) {
+                // Abort the faulting instruction and deliver #PF. faultEip
+                // (instruction start) is what gets pushed, so IRET restarts
+                // the faulting instruction once the handler maps the page.
+                this.triggerException(14, e.errorCode);
+                return 25;  // approximate exception delivery cost
+            }
             console.error(`CPU error at EIP=0x${this.regs.eip.toString(16)}:`, e);
             this.halted = true;
             return 0;
@@ -626,7 +707,7 @@ class X86CPU {
         // Handle multi-byte opcodes (0x0F prefix)
         if (opcode === 0x0F) {
             this.regs.eip++;
-            const opcode2 = this.readMem(this.regs.eip, 1);
+            const opcode2 = this.readMem(this.regs.eip, 1, true);
             this.regs.eip++;
             return this.executeExtendedInstruction(opcode2);
         }
@@ -3102,18 +3183,24 @@ class X86CPU {
                 if (this.debug || (value & 0x80000000)) {
                     console.log(`[PG] MOV to CR0: 0x${value.toString(16)} (PG=${(value & 0x80000000) ? 'ENABLED' : 'off'}) CR3=0x${this.cregs.cr3.toString(16)} EIP=0x${this.regs.eip.toString(16)}`);
                 }
+            } else if (reg === 2) {
+                this.cregs.cr2 = value;
             } else if (reg === 3) {
                 this.cregs.cr3 = value;
                 if (this.debug) {
                     console.log(`MOV to CR3: 0x${value.toString(16)}`);
                 }
+            } else if (reg === 4) {
+                this.cregs.cr4 = value;
             }
             return 4;  // MOV to CR = 4 cycles
         } else if (opcode2 === 0x20) {
             // MOV CRx, r32 (move from CR)
             let value = 0;
             if (reg === 0) value = this.cregs.cr0;
+            else if (reg === 2) value = this.cregs.cr2;
             else if (reg === 3) value = this.cregs.cr3;
+            else if (reg === 4) value = this.cregs.cr4;
             this.setReg32(rmName, value);
             return 4;  // MOV from CR = 4 cycles
         }
@@ -3861,9 +3948,11 @@ class X86CPU {
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = X86CPU;
+    module.exports.PageFaultError = PageFaultError;
 }
 if (typeof window !== 'undefined') {
     window.X86CPU = X86CPU;
+    window.PageFaultError = PageFaultError;
 }
 // Also assign to 'this' (global in VM context)
 if (typeof this !== 'undefined') {
