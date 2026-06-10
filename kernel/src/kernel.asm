@@ -146,6 +146,11 @@ kernel_main:
     call set_syscall
     call set_irq12
     lidt [idt_descriptor]
+
+    ; Probe for ACPI tables on the platform. This sets rsdt_found and caches
+    ; FADT/MADT addresses for reboot, shutdown, and future APIC/HPET support.
+    call acpi_init
+
     call pic_remap
     call set_freq                        ; 100 Hz PIT
 
@@ -201,6 +206,9 @@ kernel_main:
 
 ; --- Block device and filesystem --------------------------------------------
 %include "drivers/ata.drv"
+
+; --- ACPI tables (device discovery, power management) ------------------------
+%include "drivers/acpi.drv"
 %include "fs_core.inc"
 %include "vfs.inc"
 %include "ecc.inc"

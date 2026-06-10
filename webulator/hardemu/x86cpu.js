@@ -2184,7 +2184,7 @@ class X86CPU {
             case 0x7:  // CMP (compare, only sets flags)
                 result = (destValue - immValue) >>> 0;
                 this.setFlag('CF', (destValue >>> 0) < (immValue >>> 0));
-                this.updateArithmeticFlags(result, destValue, immValue, true, isByteOp);
+                this.updateArithmeticFlags(result, destValue, immValue, undefined, isByteOp);
                 result = destValue;  // CMP doesn't write result
                 break;
         }
@@ -2838,8 +2838,8 @@ class X86CPU {
     }
     
     // MOVZX r32, r/m8 (0x0F 0xB6) and MOVZX r32, r/m16 (0x0F 0xB7)
+    // EIP already points to the ModRM byte when called from executeExtendedInstruction.
     handleMovzx(opcode2) {
-        this.regs.eip++;
         const modrm = this.readMem(this.regs.eip, 1);
         this.regs.eip++;
         
@@ -2865,8 +2865,8 @@ class X86CPU {
     }
     
     // MOVSX r32, r/m8 (0x0F 0xBE) and MOVSX r32, r/m16 (0x0F 0xBF)
+    // EIP already points to the ModRM byte when called from executeExtendedInstruction.
     handleMovsx(opcode2) {
-        this.regs.eip++;
         const modrm = this.readMem(this.regs.eip, 1);
         this.regs.eip++;
         

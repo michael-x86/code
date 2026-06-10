@@ -172,6 +172,21 @@ syscall_table:
     dd  sys_sound            ; 48 : ebx = frequency (Hz), ecx = duration (10ms ticks) -> 0 / -1
 
 
+; --- ACPI state ---------------------------------------------------------------
+; Set by acpi_init. rsdt_found = 1 when ACPI tables are detected and parsed.
+; rsdt_address is the physical address of the RSDT.
+; fadt_address is the cached physical address of the FADT (or 0 if not found).
+; madt_address is the cached physical address of the MADT (or 0 if not found).
+; acpi_s5_slp_typa / acpi_s5_slp_typb are the sleep type values for S5 (soft-off),
+; extracted from the DSDT's \_S5 package. Default to 5/5 for QEMU compat.
+rsdt_found          db 0
+rsdt_address        dd 0
+fadt_address        dd 0
+madt_address        dd 0
+acpi_s5_slp_typa    db ACPI_S5_SLP_TYPa
+acpi_s5_slp_typb    db ACPI_S5_SLP_TYPb
+
+
 ; --- VGA register dumps (used by graphics.inc vga_write_regs) ---------------
 ; Each table is 61 bytes in the canonical order consumed by vga_write_regs:
 ;   1  Miscellaneous Output (port 0x3C2)

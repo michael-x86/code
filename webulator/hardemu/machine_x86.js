@@ -1313,14 +1313,16 @@ class ATADisk {
             const srcOffset = lba * 512;
             const wordsToRead = count * 256;
             
+            let actualWords = 0;
             for (let i = 0; i < wordsToRead && (srcOffset + i * 2 + 1) < this.disk.length; i++) {
                 const lo = this.disk[srcOffset + i * 2];
                 const hi = this.disk[srcOffset + i * 2 + 1];
                 this.pioBuffer[i] = (hi << 8) | lo;
+                actualWords++;
             }
             
             this.pioOffset = 0;
-            this.pioCount = count * 256;
+            this.pioCount = actualWords;
             this.pioWriteMode = false;
             
             this.regs.status = 0x58;  // DRDY + DRQ + SERV

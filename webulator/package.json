@@ -1,8 +1,8 @@
 {
-  "name": "zealwebemulator",
-  "productName": "Zeal-WebEmulator",
+  "name": "Webulator",
+  "productName": "Webulator",
   "version": "1.0.0",
-  "description": "A emulator for Zeal 8-bit Computer based on electron",
+  "description": "A VM emulator based on electron",
   "main": "electron/index.js",
   "scripts": {
     "start": "electron-forge start",
@@ -51,8 +51,8 @@
     "live-server": "^1.2.2"
   },
   "build": {
-    "appId": "com.zealemu",
-    "productName": "Zeal-WebEmulator",
+    "appId": "com.webulator",
+    "productName": "Webulator",
     "files": [
       "**/*"
     ],

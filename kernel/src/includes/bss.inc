@@ -110,6 +110,20 @@ ata_port_base    resd 1                   ; hot cache of fs_ata_base
 disk_busy        resb 1
 
 
+; --- ACPI scratch buffer (used by drivers/acpi.drv) -------------------------
+; acpi_buf is a page-aligned 4 KB buffer for loading ACPI tables from
+; physical memory. acpi_copy_table copies a table into this buffer for
+; checksum verification and field parsing. This avoids depending on the
+; identity mapping of physical memory for tables that may be anywhere.
+;
+; acpi_tmp provides 4 dwords of temporary storage for the RSDP scan and
+; RSDT walk routines.
+alignb 4
+acpi_tmp         resd 4
+alignb 4096
+acpi_buf         resb 4096
+
+
 ; --- Block FS cache (used by fs_core.inc) ----------------------------------
 ; sb_buf is the in-memory copy of the superblock. The on-disk superblock
 ; is at fs_base_lba + 0; we read it at boot and write it back on every

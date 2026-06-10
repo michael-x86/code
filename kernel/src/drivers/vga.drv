@@ -441,17 +441,34 @@ banner:
 
 
 ; -----------------------------------------------------------------------------
-; shutdown — exit QEMU via the isa-debug-exit device
+; shutdown — ACPI-aware system power-off
 ;--
-;-- The QEMU -device isa-debug-exit,iobase=0xf4,iosize=0x04 maps a port
-;-- write to a QEMU exit with status = (value & 0xFF) << 1 | 1. Writing
-;-- 0 gives exit status 1 (clean shutdown for the test harness).
+;-- Tries acpi_shutdown first (ACPI S5 sleep). If ACPI is not available,
+;-- falls back to the QEMU isa-debug-exit device (port 0xF4, value 0).
 ; -----------------------------------------------------------------------------
 shutdown:
     cli
+    call acpi_shutdown
+    ; Fallback: QEMU isa-debug-exit
     mov dx, 0xF4
     mov al, 0
     out dx, al
+    hlt
+    ret
+
+
+; -----------------------------------------------------------------------------
+; reboot — ACPI-aware system reset
+;--
+;-- Tries acpi_reboot first (FADT reset register). If ACPI is not available,
+;-- falls back to the keyboard controller reset (port 0x64, value 0xFE).
+; -----------------------------------------------------------------------------
+reboot:
+    cli
+    call acpi_reboot
+    ; Fallback: keyboard controller
+    mov al, KBD_RESET_VALUE
+    out KBD_RESET_PORT, al
     hlt
     ret
 

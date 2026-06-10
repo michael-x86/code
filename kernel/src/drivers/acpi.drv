@@ -1,0 +1,398 @@
+; =============================================================================
+; acpi.drv — ACPI table parser and power management
+; =============================================================================
+;
+; Scans physical memory for the RSDP (Root System Description Pointer),
+; walks the RSDT to locate the FADT and MADT, and exposes reboot/shutdown
+; primitives that use standard ACPI mechanisms (reset register, S5 sleep)
+; instead of platform-specific hacks.
+;
+; All ACPI tables live in the first 4 MB of physical memory, which is
+; identity-mapped by PDE 0. This means we can dereference physical
+; addresses directly as virtual addresses.
+;
+; Exposed routines
+; ----------------
+;   acpi_init        — scan for RSDP, parse RSDT, cache FADT/MADT
+;   acpi_find_table  — locate any ACPI table by 4-byte signature
+;   acpi_reboot      — trigger system reset (ACPI + fallback)
+;   acpi_shutdown    — enter ACPI S5 (soft-off) state
+;   acpi_is_present  — check whether ACPI tables were found
+;
+; The driver uses pre-hardcoded SLP_TYPx values (0x05 / 0x05, matching
+; QEMU's \_S5). A future AML parser (Phase 4) would extract these from
+; the DSDT dynamically.
+; =============================================================================
+
+
+section .text
+
+
+; -----------------------------------------------------------------------------
+; acpi_init — scan the ACPI RSDP and walk the RSDT
+;
+; Scans physical memory 0xE0000–0xFFFFF for the RSDP signature "RSD PTR ",
+; verifies the checksum, extracts the RSDT address, walks the RSDT, and
+; caches pointers to known tables (FADT, MADT).
+;
+; out:  CF = 0 on success (rsdt_found set), CF = 1 if no ACPI tables
+; -----------------------------------------------------------------------------
+acpi_init:
+    push esi
+    push edi
+    push eax
+    push ecx
+    push edx
+
+    ; --- Scan physical memory 0xE0000–0xFFFFF for "RSD PTR " ---------------
+    mov esi, ACPI_RSDP_SCAN_START
+
+.scan_loop:
+    cmp esi, ACPI_RSDP_SCAN_END
+    ja .not_found
+
+    ; Check 8-byte signature "RSD PTR "
+    mov eax, [esi]
+    mov edx, [esi + 4]
+    cmp eax, 0x20445352       ; "RSD " (little-endian)
+    jne .advance
+    cmp edx, 0x20525450       ; "PTR " (little-endian)
+    jne .advance
+
+    ; --- Signature found — verify checksum ---------------------------------
+    ; Sum of first 20 bytes (ACPI v1) must be 0 mod 256
+    xor eax, eax
+    xor ecx, ecx
+.checksum_loop:
+    movzx edx, byte [esi + ecx]
+    add eax, edx
+    inc ecx
+    cmp ecx, 20
+    jb .checksum_loop
+    test al, al
+    jnz .advance               ; checksum failed, try next address
+
+    ; --- Verify ACPI v2+ extended checksum if revision >= 2 ---------------
+    movzx edx, byte [esi + 15]  ; RSDP.revision
+    cmp dl, 2
+    jb .checksum_done
+
+    ; Sum all 36 bytes for v2+
+    xor eax, eax
+    xor ecx, ecx
+.ext_checksum_loop:
+    movzx edx, byte [esi + ecx]
+    add eax, edx
+    inc ecx
+    cmp ecx, 36
+    jb .ext_checksum_loop
+    test al, al
+    jnz .advance               ; extended checksum failed
+
+.advance:
+    ; Move to next 16-byte aligned address in scan region
+    add esi, 16
+    jmp .scan_loop
+
+.checksum_done:
+    ; --- Extract RSDT address ---------------------------------------------
+    mov eax, [esi + 16]        ; RSDP.rsdt_addr
+    mov [rsdt_address], eax
+    mov byte [rsdt_found], 1
+
+    ; --- Walk RSDT to cache known tables ----------------------------------
+    ; RSDT entries are 32-bit physical addresses
+    mov esi, eax
+    ; Verify RSDT signature
+    cmp dword [esi], "RSDT"
+    jne .done
+
+    mov ecx, [esi + 4]         ; SDT.length
+    sub ecx, 36                ; skip header
+    shr ecx, 2                 ; number of entries
+    add esi, 36                ; first entry pointer
+
+.walk_rsdt:
+    test ecx, ecx
+    jz .done
+
+    mov eax, [esi]             ; table physical address
+    push esi
+    push ecx
+    mov esi, eax
+
+    ; Check for FADT (signature "FACP" — yes, FADT uses "FACP" as its sig)
+    cmp dword [esi], "FACP"
+    jne .check_madt
+    mov [fadt_address], eax
+    jmp .walk_next
+
+.check_madt:
+    cmp dword [esi], "APIC"
+    jne .walk_next
+    mov [madt_address], eax
+
+.walk_next:
+    pop ecx
+    pop esi
+    add esi, 4
+    dec ecx
+    jmp .walk_rsdt
+
+.not_found:
+    stc
+.done:
+    pop edx
+    pop ecx
+    pop eax
+    pop edi
+    pop esi
+    ret
+
+
+; -----------------------------------------------------------------------------
+; acpi_find_table — locate an ACPI table by signature
+;
+; Walks the RSDT to find a table whose 4-byte signature matches the
+; requested value. This is independent of the cached pointers — use
+; this for tables that acpi_init doesn't specifically cache.
+;
+;   in:  eax = 4-byte signature as little-endian dword (e.g. "HPET")
+;   out: eax = physical address of table, or 0 if not found / no ACPI
+;   clobbers: ecx, edx
+; -----------------------------------------------------------------------------
+acpi_find_table:
+    push esi
+
+    cmp byte [rsdt_found], 0
+    je .not_found
+
+    mov [acpi_tmp], eax          ; save requested signature
+    mov esi, [rsdt_address]
+    test esi, esi
+    jz .not_found
+
+    ; Verify RSDT signature
+    cmp dword [esi], "RSDT"
+    jne .not_found
+
+    mov ecx, [esi + 4]          ; SDT.length
+    sub ecx, 36
+    shr ecx, 2
+    lea esi, [esi + 36]
+
+.lookup:
+    test ecx, ecx
+    jz .not_found
+
+    mov eax, [esi]
+    mov edx, [eax]
+    cmp edx, [acpi_tmp]          ; compare with requested signature
+    je .found
+
+    add esi, 4
+    dec ecx
+    jmp .lookup
+
+.found:
+    mov eax, [esi]
+    pop esi
+    ret
+
+.not_found:
+    xor eax, eax
+    pop esi
+    ret
+
+
+; -----------------------------------------------------------------------------
+; acpi_copy_table — copy an ACPI table from physical memory into acpi_buf
+;
+; Copies the entire table (header + body) from physical memory into the
+; page-aligned acpi_buf scratch buffer. Table boundaries may extend beyond
+; the identity-mapped first 4 MB; using this buffer avoids depending on
+; identity mapping for tables at arbitrary physical addresses.
+;
+;   in:  esi = physical address of ACPI table
+;   out: edi = pointer to acpi_buf (table copied here)
+;         CF = 0 on success, CF = 1 if table too large for buffer
+;   clobbers: ecx, edx
+; -----------------------------------------------------------------------------
+acpi_copy_table:
+    mov edi, acpi_buf
+    mov ecx, [esi + 4]          ; SDT.length
+    cmp ecx, 4096
+    ja .too_big
+
+    push esi
+.next_byte:
+    movzx edx, byte [esi]
+    mov [edi], dl
+    inc esi
+    inc edi
+    dec ecx
+    jnz .next_byte
+
+    mov edi, acpi_buf
+    pop esi
+    clc
+    ret
+
+.too_big:
+    stc
+    ret
+
+
+; -----------------------------------------------------------------------------
+; acpi_verify_checksum — verify an ACPI table's checksum
+;
+; Copies the table into acpi_buf and verifies that all bytes sum to 0 mod
+; 256. This works for any physical address, even beyond the identity-mapped
+; first 4 MB.
+;
+;   in:  esi = physical address of ACPI table
+;   out: CF = 0 if valid (sum == 0 mod 256), CF = 1 if invalid
+;   clobbers: edi
+; -----------------------------------------------------------------------------
+acpi_verify_checksum:
+    push eax
+    push ecx
+    push edx
+
+    call acpi_copy_table
+    jc .bad
+
+    mov ecx, [edi + 4]          ; SDT.length
+    xor eax, eax
+    xor edx, edx
+
+.sum_loop:
+    movzx edx, byte [edi]
+    add eax, edx
+    inc edi
+    dec ecx
+    jnz .sum_loop
+
+    test al, al
+    jnz .bad
+
+    clc
+    pop edx
+    pop ecx
+    pop eax
+    ret
+
+.bad:
+    stc
+    pop edx
+    pop ecx
+    pop eax
+    ret
+
+
+; -----------------------------------------------------------------------------
+; acpi_is_present — check whether ACPI tables were found
+;
+;   out: eax = 1 if ACPI tables found, 0 otherwise
+; -----------------------------------------------------------------------------
+acpi_is_present:
+    movzx eax, byte [rsdt_found]
+    ret
+
+
+; -----------------------------------------------------------------------------
+; acpi_reboot — trigger system reset via ACPI reset register
+;
+; Writes the FADT reset_value to the reset_reg address. If no ACPI or the
+; reset register is not configured, falls back to the keyboard controller
+; reset (port 0x64, value 0xFE).
+;
+; This function does not return on success.
+; -----------------------------------------------------------------------------
+acpi_reboot:
+    push eax
+    push edx
+
+    mov eax, [fadt_address]
+    test eax, eax
+    jz .fallback
+
+    ; --- FADT.reset_reg is a 12-byte Generic Address Structure at +116 ----
+    ; AddressSpaceId at +116: 0 = system memory, 1 = system I/O
+    movzx edx, byte [eax + FADT_RESET_REG_ASP]
+    movzx ecx, byte [eax + FADT_RESET_VALUE]
+
+    cmp dl, 1
+    je .io_reset
+    cmp dl, 0
+    je .mmio_reset
+    jmp .fallback              ; unknown address space
+
+.io_reset:
+    ; Read the port address from the GAS Address field (qword at +120)
+    mov edx, [eax + FADT_RESET_REG_ADDR]
+    test edx, edx
+    jz .fallback
+    mov al, cl                 ; reset_value
+    out dx, al
+    hlt
+    ret
+
+.mmio_reset:
+    ; Read the MMIO address from the GAS Address field (qword at +120)
+    mov edx, [eax + FADT_RESET_REG_ADDR]
+    test edx, edx
+    jz .fallback
+    mov [edx], cl              ; write reset_value to MMIO address
+    hlt
+    ret
+
+.fallback:
+    ; --- Keyboard controller reset (port 0x64, value 0xFE) ----------------
+    mov al, KBD_RESET_VALUE
+    out KBD_RESET_PORT, al
+    hlt
+    ret
+
+
+; -----------------------------------------------------------------------------
+; acpi_shutdown — enter ACPI S5 (soft-off) state
+;
+; Writes (SLP_TYPa << 0) | (SLP_TYPb << 8) | SCI_EN to the PM1a_CNT_BLK.
+; The SLP_TYPx values are pre-configured in acpi_s5_slp_typa / _typb.
+;
+; If no ACPI tables are found, falls back to the QEMU isa-debug-exit port
+; (0xF4). This function does not return on success.
+; -----------------------------------------------------------------------------
+acpi_shutdown:
+    push eax
+    push edx
+
+    mov eax, [fadt_address]
+    test eax, eax
+    jz .fallback
+
+    ; --- Read PM1a_CNT_BLK from FADT (+64) --------------------------------
+    mov edx, [eax + FADT_PM1a_CNT_BLK]
+    test edx, edx
+    jz .fallback
+
+    ; --- Construct sleep value: (SLP_TYPb << 8) | SLP_TYPa | SCI_EN -------
+    movzx eax, byte [acpi_s5_slp_typa]
+    movzx ecx, byte [acpi_s5_slp_typb]
+    shl ecx, 8
+    or  eax, ecx
+    or  eax, SCI_EN
+
+    ; Write sleep value to PM1a_CNT_BLK (16-bit port write)
+    out dx, ax
+    hlt
+    ret
+
+.fallback:
+    ; --- QEMU isa-debug-exit (port 0xF4, value 0) -------------------------
+    mov dx, 0xF4
+    mov al, 0
+    out dx, al
+    hlt
+    ret

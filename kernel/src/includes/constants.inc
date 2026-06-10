@@ -114,6 +114,79 @@ PIT_FREQUENCY      equ 100
 PIT_DIVISOR        equ 11932
 
 
+; --- ACPI (Advanced Configuration and Power Interface) -------------------------
+; ACPI tables live in physical memory 0xE0000-0xFFFFF (RSDP scan region).
+; The RSDP signature is "RSD PTR " (8 bytes). RSDT/XSDT contain arrays of
+; pointers to other description tables.
+ACPI_RSDP_SCAN_START equ 0x000E0000
+ACPI_RSDP_SCAN_END   equ 0x000FFFFF
+ACPI_RSDP_SIGNATURE  equ "RSD PTR "
+ACPI_SDT_SIGNATURE   equ "RSDT"        ; Root System Description Table
+
+; FADT field offsets (from start of table, after 36-byte SDT header)
+FADT_FACS           equ 36             ; dword: FACS physical addr
+FADT_DSDT           equ 40             ; dword: DSDT physical addr
+FADT_SMI_CMD        equ 48             ; byte: SMI command port
+FADT_ACPI_ENABLE    equ 49             ; byte
+FADT_ACPI_DISABLE   equ 50             ; byte
+FADT_S4BIOS_REQ     equ 51             ; byte
+FADT_PSTATE_CNT     equ 52             ; byte
+FADT_PM1a_EVT_BLK   equ 56             ; dword: PM1a event block base port
+FADT_PM1b_EVT_BLK   equ 60             ; dword
+FADT_PM1a_CNT_BLK   equ 64             ; dword: PM1a control block base port
+FADT_PM1b_CNT_BLK   equ 68             ; dword
+FADT_PM2_CNT_BLK    equ 72             ; dword
+FADT_PM_TMR_BLK     equ 76             ; dword
+FADT_GPE0_BLK       equ 80             ; dword
+FADT_GPE1_BLK       equ 84             ; dword
+FADT_PM1_EVT_LEN    equ 88             ; byte
+FADT_PM1_CNT_LEN    equ 89             ; byte
+FADT_PM2_CNT_LEN    equ 90             ; byte
+FADT_PM_TMR_LEN     equ 91             ; byte
+FADT_GPE0_BLK_LEN   equ 92             ; byte
+FADT_GPE1_BLK_LEN   equ 93             ; byte
+FADT_GPE1_BASE      equ 94             ; byte
+FADT_CST_CNT        equ 95             ; byte
+FADT_C2_LATENCY     equ 96             ; word
+FADT_C3_LATENCY     equ 98             ; word
+FADT_FLUSH_SIZE     equ 100            ; word
+FADT_FLUSH_STRIDE   equ 102            ; word
+FADT_DUTY_OFFSET    equ 104            ; byte
+FADT_DUTY_WIDTH     equ 105            ; byte
+FADT_DAY_ALARM      equ 106            ; byte
+FADT_MONTH_ALARM    equ 107            ; byte
+FADT_CENTURY        equ 108            ; byte
+FADT_IAPC_BOOT_ARCH equ 109            ; word
+FADT_FLAGS          equ 112            ; dword
+FADT_RESET_REG      equ 116            ; 12-byte Generic Address Structure
+  FADT_RESET_REG_ASP equ 116           ; byte: AddressSpaceId (0=mem, 1=I/O)
+  FADT_RESET_REG_BW  equ 117           ; byte: RegisterBitWidth
+  FADT_RESET_REG_BO  equ 118           ; byte: RegisterBitOffset
+  FADT_RESET_REG_ADDR equ 120          ; qword: Address (port or MMIO)
+  FADT_RESET_REG_AS  equ 128           ; byte: AccessSize
+FADT_RESET_VALUE    equ 129            ; byte
+
+; ACPI sleep / power-off constants
+; SCI_EN bit must be set when writing SLP_TYPx to PM1a_CNT
+SCI_EN              equ 1              ; bit 0
+
+; Default SLP_TYPx for S5 (soft-off) — matches QEMU's \_S5 package {0x05, 0x05, ...}
+; In Phase 4 these will come from DSDT AML parsing.
+ACPI_S5_SLP_TYPa    equ 5
+ACPI_S5_SLP_TYPb    equ 5
+
+; Typical FADT reset register values
+; I/O port 0xCF9, value 0x06 (QEMU) or 0x0E (real hardware)
+ACPI_RESET_VALUE    equ 0x06
+ACPI_RESET_PORT     equ 0xCF9
+
+; PM1a_CNT_BLK port offset for the SLP_TYPx field
+PM1a_CNT_SLEEP      equ 0              ; SLP_TYPx goes in bits 0-4 of PM1a_CNT+0
+
+; Keyboard controller port 0x64 reset (fallback)
+KBD_RESET_PORT      equ 0x64
+KBD_RESET_VALUE     equ 0xFE
+
 ; --- ATA PIO -----------------------------------------------------------------
 ; The kernel does not hardcode a single controller. The bootloader writes
 ; the active port base, drive-select byte, and FS base LBA to physical
