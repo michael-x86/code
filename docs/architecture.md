@@ -13,7 +13,7 @@
 3. Kernel (`kernel.asm`):
    - Sets up paging: identity-maps first 20 MB + higher-half at `0xC0000000+`
    - Initializes the IDT andPIC (IRQ0 = PIT at 100 Hz)
-   - Creates tasks (task 2 = shell)
+   - Creates the shell task
    - Enters the scheduler loop
 
 ## Memory Map (after paging)
@@ -37,9 +37,8 @@ A 32 KB `page_bitmap` tracks ownership of 1 GB of 4 KB physical frames.
 ### Multitasking
 
 - Round-robin via PIT IRQ0 (100 Hz)
-- Each task has its own kernel stack
+- Single shell task with its own kernel stack
 - Context switch saves/restores all general registers + EFLAGS
-- Task 0: idle, Task 1: background, Task 2: shell
 
 ### Interrupts
 
