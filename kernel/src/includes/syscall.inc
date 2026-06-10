@@ -231,18 +231,69 @@ sys_shutdown:
     ret
 
 
+; ── Address validation for userland memory access ──────────────────────────
+;
+; check_user_addr — verify that ebx does not point to kernel memory
+;   in:  ebx = address to check
+;   out: CF = 0 if safe (user-accessible), CF = 1 if kernel address
+;   preserves: all registers
+;
+; Kernel memory regions (access is blocked):
+;   0xC0100000+              — kernel higher-half (code, data, heap, BSS)
+;   0xC0000000..0xC009FFFF   — page table structures (below GFX framebuffer)
+;   0x80800000..0x80BFFFFF   — PDE 514 mirror of first 4 MB
+;   0x00100000..0x013FFFFF   — kernel physical (image + heap via identity PDEs)
+; ────────────────────────────────────────────────────────────────────────────
+check_user_addr:
+    cmp ebx, KERNEL_VIRTUAL_BASE        ; 0xC0100000
+    jae .bad
+    cmp ebx, 0xC0000000
+    jae .higher_half
+    cmp ebx, 0x80800000                 ; PDE 514 mirror (0x80800000-0x80BFFFFF)
+    jae .pde514_mirror                  ; check before phys_kernel to avoid overlap
+    cmp ebx, 0x00100000
+    jae .phys_kernel
+    clc
+    ret
+.higher_half:
+    cmp ebx, GFX_FB_VIRT                ; 0xC00A0000
+    jb .bad
+    clc
+    ret
+.pde514_mirror:
+    cmp ebx, 0x80C00000
+    jb .bad
+    clc
+    ret
+.phys_kernel:
+    cmp ebx, 0x01400000                 ; past heap region 2
+    jb .bad
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+
 ; ── Raw memory + cwd (10–11) ────────────────────────────────────────────────
 
 ; 10: read_mem
 ;   in:  ebx = address
-;   out: eax = dword at [ebx]
+;   out: eax = dword at [ebx] (or -1 if kernel address)
 sys_read_mem:
+    call check_user_addr
+    jc .bad
     mov eax, [ebx]
+    ret
+.bad:
+    mov eax, -1
     ret
 
 ; 11: getcwd
 ;   in:  edi = dst buffer
 sys_getcwd:
+    test edi, edi
+    jz .bad
     push esi
     mov esi, cwd_buf
 .cp:
@@ -253,6 +304,9 @@ sys_getcwd:
     pop esi
     xor eax, eax
     ret
+.bad:
+    mov eax, -1
+    ret
 
 
 ; ── Filesystem (12–21) ──────────────────────────────────────────────────────
@@ -261,6 +315,8 @@ sys_getcwd:
 ;   in:  esi = path
 ;   out: 0 on success, -1 if path is not a directory
 sys_chdir:
+    test esi, esi
+    jz .nf
     push esi
     push edi
     mov edi, resolve_buf
@@ -298,6 +354,8 @@ sys_chdir:
 ; directories and executables. We disambiguate by loading the child
 ; inode and looking at its INODE_TYPE — that's the source of truth.
 sys_list_dir:
+    test edi, edi
+    jz .ld_nf
     push ebx
     push ecx
     push edx
@@ -414,6 +472,8 @@ sys_list_dir:
 ;   in:  ebx = index, edi = dst
 ;   out: 0 on success, -1 if index out of range
 sys_get_arg:
+    test edi, edi
+    jz .nf
     cmp ebx, [argc]
     jae .nf
     push esi
@@ -439,6 +499,8 @@ sys_get_arg:
 ;   out: 0 on success, -1 on failure
 ;   info layout: [type:4][size:4][reserved:4]
 sys_stat:
+    test edi, edi
+    jz .nf
     push esi
     push edi
     push ebx
@@ -476,6 +538,12 @@ sys_stat:
 ;   Translates LF -> newline, CR -> skip, TAB -> space. Other bytes
 ;   go through putchar verbatim. Used by `cat` for binary-ish input.
 sys_print_n:
+    test esi, esi
+    jz .done
+    cmp ecx, VGA_COLS * 4
+    jbe .ok
+    mov ecx, VGA_COLS * 4
+.ok:
 .lp:
     test ecx, ecx
     jz .done
@@ -610,8 +678,12 @@ sys_write:
     cmp eax, -1
     je .sw_err
     mov ebx, eax
-    mov esi, [esp + 4]                   ; original ebx (userland buffer)
-    mov ecx, [esp]                       ; original ecx (count)
+    mov eax, [esp + 16]                  ; original ebx from pushad (userland buffer)
+    mov ebx, eax
+    call check_user_addr
+    jc .sw_err
+    mov esi, [esp + 16]                  ; original ebx from pushad (userland buffer)
+    mov ecx, [esp + 24]                  ; original ecx from pushad (count)
     xor edx, edx
     call file_write
     cmp eax, -1
@@ -808,6 +880,8 @@ sys_alloc_pages:
     mov eax, ecx
     test eax, eax
     jz .err
+    cmp eax, HEAP_TOTAL_SIZE
+    ja .err
     add eax, 4095
     shr eax, 12
     mov ecx, eax
@@ -883,13 +957,23 @@ sys_free_pages:
     je .found
     add esi, 8
     loop .search
+.bad:
     pop esi
     pop ecx
     pop ebx
     mov eax, -1
     ret
 .found:
+    mov eax, [esi]               ; vaddr from alloc_table
+    cmp eax, heap_start
+    jb .bad
+    cmp eax, heap_end
+    jae .bad
+    test eax, 0xFFF
+    jnz .bad
     mov ebx, [esi + 4]
+    test ebx, ebx
+    jz .bad
     push eax
     call free_pages
     pop eax
@@ -906,9 +990,15 @@ sys_free_pages:
 
 ; 25: write_mem
 ;   in:  ebx = addr, ecx = byte value
+;   out: 0 on success, -1 if kernel address
 sys_write_mem:
+    call check_user_addr
+    jc .bad
     mov byte [ebx], cl
     xor eax, eax
+    ret
+.bad:
+    mov eax, -1
     ret
 
 
@@ -1002,8 +1092,8 @@ sys_get_proc_info:
     push edx
     push esi
     push edi
-    mov eax, [exec_vbase]
-    mov [ebx], eax
+    xor eax, eax
+    mov [ebx], eax            ; zero out exec_vbase to avoid kernel address leak
     mov eax, [exec_pages]
     mov [ebx + 4], eax
     lea esi, [exec_name]
@@ -1065,6 +1155,8 @@ sys_itoa:
 ;-- inline the itoa logic because at this point we want the call to
 ;-- stay in eax-clean and stack-safe territory (userland reads it back).
 sys_get_config:
+    test edi, edi
+    jz .bad
     cmp ebx, 3
     ja .bad
     push ebx
@@ -1154,6 +1246,8 @@ sys_alloc:
     mov ecx, ebx
     test ecx, ecx
     jz .alloc_bad
+    cmp ecx, HEAP_TOTAL_SIZE / PAGE_SIZE
+    ja .alloc_bad
     push ecx
     call find_free_virt
     pop ecx
@@ -1223,7 +1317,16 @@ sys_dealloc:
     mov eax, -1
     ret
 .de_found:
+    mov eax, [esi]               ; vaddr from alloc_table
+    cmp eax, heap_start
+    jb .de_bad
+    cmp eax, heap_end
+    jae .de_bad
+    test eax, 0xFFF
+    jnz .de_bad
     mov ebx, [esi + 4]
+    test ebx, ebx
+    jz .de_bad
     push eax
     call free_pages
     pop eax
@@ -1234,22 +1337,39 @@ sys_dealloc:
     pop esi
     xor eax, eax
     ret
+.de_bad:
+    pop ebx
+    pop ecx
+    pop esi
+    mov eax, -1
+    ret
 
 
 ; ── Single-byte raw access (34–35) ────────────────────────────────────────
 
 ; 34: peek
 ;   in:  ebx = addr
-;   out: eax = byte at [ebx] (zero-extended)
+;   out: eax = byte at [ebx] (zero-extended), or -1 if kernel address
 sys_peek:
+    call check_user_addr
+    jc .bad
     movzx eax, byte [ebx]
+    ret
+.bad:
+    mov eax, -1
     ret
 
 ; 35: poke
 ;   in:  ebx = addr, ecx = byte value
+;   out: 0 on success, -1 if kernel address
 sys_poke:
+    call check_user_addr
+    jc .bad
     mov byte [ebx], cl
     xor eax, eax
+    ret
+.bad:
+    mov eax, -1
     ret
 
 
@@ -1260,17 +1380,18 @@ sys_poke:
 ;   out: 0 on success, -1 on invalid frequency
 ;   Uses PIT channel 2 to generate sound on PC speaker
 sys_sound:
+    ; Check if frequency is valid (must be > 0 and <= 1193180)
+    ; -- must happen before register pushes to keep stack balanced on div-by-zero
+    cmp ebx, 0
+    je .sound_off
+    cmp ebx, 1193180
+    ja .invalid_no_push
+    
     push ebx
     push ecx
     push edx
     push esi
     push edi
-    
-    ; Check if frequency is valid (must be > 0 and <= 1193180)
-    cmp ebx, 0
-    je .sound_off
-    cmp ebx, 1193180
-    ja .invalid
     
     ; Calculate PIT divisor: 1193180 / frequency
     ; Result must fit in 16 bits (max 0xFFFF)
@@ -1302,12 +1423,16 @@ sys_sound:
     jmp .wait
     
 .sound_off:
-    ; Just turn off the speaker
+    ; Just turn off the speaker (no registers pushed)
     in al, 0x61
     and al, 0xFC
     out 0x61, al
     xor eax, eax
-    jmp .done
+    ret
+    
+.invalid_no_push:
+    mov eax, -1
+    ret
     
 .invalid:
     mov eax, -1

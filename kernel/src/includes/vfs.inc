@@ -48,6 +48,17 @@ ensure_fs_ready:
     mov [fs_ata_drive], al
     mov eax, [0x508]
     mov [fs_base_lba], eax
+
+    ; If port base is 0, bootloader handoff wasn't written (e.g. in
+    ;-- webulator without a bootloader).  Use safe defaults so that
+    ;-- filesystem code doesn't operate on zeroed ATA registers.
+    cmp dword [fs_ata_base], 0
+    jne .have_handoff
+    mov dword [fs_ata_base], 0x1F0
+    mov byte  [fs_ata_drive], 0xF0
+    mov dword [fs_base_lba], 0
+.have_handoff:
+
     call load_superblock
     cmp dword [sb_buf + SB_MAGIC], FS_MAGIC
     jne .ok
@@ -118,27 +129,110 @@ fs_resolve:
     jnz .cp_abs
     jmp .done
 .relative:
+    push edi                             ; save dst start for root reset
     mov ebx, esi                         ; remember original path
     mov esi, cwd_buf
-    cmp byte [esi + 1], 0                ; cwd == "/" ?
-    je .root_join
+    xor edx, edx                         ; dst byte counter (bounds check)
 .cp_cwd:
     lodsb
     stosb
+    inc edx
+    cmp edx, CWD_BUF_SIZE - 2
+    jae .rel_done                        ; overflow guard
     test al, al
     jnz .cp_cwd
-    mov byte [edi - 1], '/'              ; replace trailing NUL with '/'
-    jmp .append
-.root_join:
+    dec edi                              ; back over trailing NUL
+    dec edx
+
+.rel_loop:
+    mov esi, ebx
+.rel_skip_slash:
+    cmp byte [esi], '/'
+    jne .rel_check
+    inc esi
+    jmp .rel_skip_slash
+.rel_check:
+    cmp byte [esi], 0
+    je .rel_done
+    ; Check for ".."
+    cmp byte [esi], '.'
+    jne .rel_copy
+    cmp byte [esi + 1], '.'
+    jne .rel_dot
+    mov al, [esi + 2]
+    cmp al, '/'
+    je .rel_dotdot
+    cmp al, 0
+    je .rel_dotdot
+    jmp .rel_copy
+.rel_dot:
+    ; Single "." — skip the component entirely
+    mov al, [esi + 1]
+    cmp al, '/'
+    je .rel_skip_dot
+    cmp al, 0
+    je .rel_done
+    jmp .rel_copy
+.rel_skip_dot:
+    add esi, 2
+    mov ebx, esi
+    jmp .rel_loop
+
+.rel_dotdot:
+    add esi, 2
+    cmp byte [esi], '/'
+    jne .rel_strip
+    inc esi
+.rel_strip:
+    mov ebx, esi
+    cmp edx, 1
+    jbe .rel_strip_root
+    dec edi
+    dec edx
+    cmp byte [edi], '/'
+    jne .rel_strip
+    cmp edx, 1
+    jbe .rel_strip_root
+    mov byte [edi], 0
+    jmp .rel_loop
+.rel_strip_root:
+    mov edi, [esp]                       ; reset to start of dst
+    mov byte [edi], '/'
+    mov byte [edi + 1], 0
+    mov edx, 1
+    inc edi
+    jmp .rel_loop
+
+.rel_copy:
+    cmp edx, 1
+    jbe .rel_copy_path
+    cmp byte [edi - 1], '/'
+    je .rel_copy_path
+    cmp edx, CWD_BUF_SIZE - 2
+    jae .rel_done
     mov byte [edi], '/'
     inc edi
-.append:
-    mov esi, ebx                         ; original relative path
-.cp_name:
+    inc edx
+.rel_copy_path:
+    cmp edx, CWD_BUF_SIZE - 1
+    jae .rel_done
     lodsb
-    stosb
     test al, al
-    jnz .cp_name
+    jz .rel_done
+    cmp al, '/'
+    je .rel_comp_done
+    stosb
+    inc edx
+    jmp .rel_copy_path
+.rel_comp_done:
+    mov ebx, esi
+    mov byte [edi], 0
+    jmp .rel_loop
+
+.rel_done:
+    mov byte [edi], 0
+    pop edi                              ; discard saved start
+    jmp .done
 .done:
     pop edi
     pop esi
