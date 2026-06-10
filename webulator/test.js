@@ -1597,7 +1597,14 @@ function run() {
       mem.write8(14 * 8 + 5, 0x8E);
       mem.write16(14 * 8 + 6, (0x5000 >> 16) & 0xFFFF);
       // Translate an unmapped address to trigger #PF
-      cpu.translateAddress(0x12345000);
+      let pfError = null;
+      try {
+        cpu.translateAddress(0x12345000);
+      } catch (e) {
+        pfError = e;
+      }
+      assert(pfError !== null, 'translateAddress should raise a page fault');
+      assertEq(pfError.errorCode, 0, 'Error code: not-present supervisor read');
       assertEq(cpu.cregs.cr2, 0x12345000, 'CR2 should contain faulting address');
     });
   });
@@ -1665,6 +1672,149 @@ function run() {
       const pte = mem.read32(ptAddr);
       assert((pte & (1 << 5)) !== 0, 'PTE Accessed bit should be set after read');
       assert((pte & (1 << 6)) === 0, 'PTE Dirty bit should NOT be set after read-only');
+    });
+  });
+
+  run('Page Fault Protection & Error Codes', ({ X86Memory, X86CPU }) => {
+    // Common setup: PD at 0x10000, PT at 0x11000, one mapped page
+    function makeCpu(pteFlags) {
+      const mem = new X86Memory(8);
+      const cpu = new X86CPU(mem, null);
+      cpu._pagingDebugCount = 9999;
+      cpu.cregs.cr0 = 0x80000001;
+      cpu.cregs.cr3 = 0x10000;
+      mem.write32(0x10000, 0x11000 | 7);          // PDE: present, RW, user
+      mem.write32(0x11000, 0x20000 | pteFlags);   // PTE for vaddr 0
+      return { mem, cpu };
+    }
+    function catchPF(fn) {
+      try { fn(); } catch (e) {
+        if (e.name === 'PageFaultError') return e;
+        throw e;
+      }
+      return null;
+    }
+
+    test('User write to read-only page faults with err=0x7', () => {
+      const { cpu } = makeCpu(0x5);  // present, read-only, user
+      cpu.segregs.cs = 0x1B;         // RPL 3 = user mode
+      const e = catchPF(() => cpu.writeMem(0x0, 0xAB, 1));
+      assert(e !== null, 'write to RO page should fault in user mode');
+      assertEq(e.errorCode, 0x7, 'err = P|W|U');
+      assertEq(cpu.cregs.cr2, 0, 'CR2 holds faulting vaddr');
+    });
+
+    test('User access to supervisor page faults with err=0x5', () => {
+      const { cpu } = makeCpu(0x3);  // present, RW, supervisor-only
+      cpu.segregs.cs = 0x1B;
+      const e = catchPF(() => cpu.readMem(0x0, 1));
+      assert(e !== null, 'user read of supervisor page should fault');
+      assertEq(e.errorCode, 0x5, 'err = P|U');
+    });
+
+    test('Supervisor write to read-only page honors CR0.WP', () => {
+      const { cpu } = makeCpu(0x1);  // present, read-only, supervisor
+      cpu.segregs.cs = 0x08;         // CPL 0
+      // Without WP, supervisor may write to read-only pages
+      assertEq(catchPF(() => cpu.writeMem(0x0, 0xAB, 1)), null, 'no fault when WP=0');
+      // With WP set, the same write faults
+      cpu.cregs.cr0 |= 0x10000;
+      const e = catchPF(() => cpu.writeMem(0x0, 0xCD, 1));
+      assert(e !== null, 'fault when WP=1');
+      assertEq(e.errorCode, 0x3, 'err = P|W (supervisor)');
+    });
+
+    test('Not-present user read faults with err=0x4', () => {
+      const { mem, cpu } = makeCpu(0x0);  // PTE not present
+      cpu.segregs.cs = 0x1B;
+      const e = catchPF(() => cpu.readMem(0x0, 1));
+      assert(e !== null);
+      assertEq(e.errorCode, 0x4, 'err = U (not present)');
+    });
+
+    test('Instruction fetch fault sets error code bit 4', () => {
+      const { cpu } = makeCpu(0x0);  // PTE not present
+      const e = catchPF(() => cpu.readMem(0x0, 1, true));
+      assert(e !== null);
+      assertEq(e.errorCode, 0x10, 'err = I/D (instruction fetch, not present)');
+    });
+
+    test('4MB page (PSE) translation via PDE.PS', () => {
+      const mem = new X86Memory(16);
+      const cpu = new X86CPU(mem, null);
+      cpu._pagingDebugCount = 9999;
+      cpu.cregs.cr0 = 0x80000001;
+      cpu.cregs.cr4 = 0x10;  // PSE
+      cpu.cregs.cr3 = 0x10000;
+      // PDE 0: 4MB page at phys 0x400000, present, RW, PS
+      mem.write32(0x10000, 0x400000 | 0x83);
+      const phys = cpu.translateAddress(0x00123456, false);
+      assertEq(phys, 0x523456, '4MB page maps directly through PDE');
+      const pde = mem.read32(0x10000);
+      assert((pde & (1 << 5)) !== 0, 'PDE Accessed bit set for 4MB page');
+    });
+
+    test('#PF via step() pushes instruction-start EIP and error code', () => {
+      const mem = new X86Memory(8);
+      const cpu = new X86CPU(mem, null);
+      cpu._pagingDebugCount = 9999;
+      cpu.cregs.cr3 = 0x10000;
+      mem.write32(0x10000, 0x11000 | 3);  // PDE 0
+      // Identity-map pages 0x4000-0x8000 (code, IDT, handler, stack)
+      for (let p = 0; p < 16; p++) mem.write32(0x11000 + p * 4, (p << 12) | 3);
+      // IDT at 0x4000; entry 14 → handler 0x5000
+      cpu.idtBase = 0x4000;
+      cpu.idtLimit = 0x7FF;
+      mem.write16(0x4000 + 14 * 8 + 0, 0x5000);
+      mem.write16(0x4000 + 14 * 8 + 2, 0x0008);
+      mem.write8(0x4000 + 14 * 8 + 5, 0x8E);
+      mem.write16(0x4000 + 14 * 8 + 6, 0);
+      mem.write8(0x5000, 0xF4);  // handler: HLT
+      // Code at 0x6000: mov [0x12345000], eax (write to unmapped page)
+      // 0x66-free encoding: A3 imm32 = mov [moffs32], eax
+      mem.write8(0x6000, 0xA3);
+      mem.write32(0x6001, 0x12345000);
+      cpu.segregs.cs = 0x08;
+      cpu.regs.esp = 0x8000;
+      cpu.regs.eip = 0x6000;
+      cpu.cregs.cr0 = 0x80000001;
+      cpu.step();
+      assertEq(cpu.regs.eip, 0x5000, 'EIP at #PF handler');
+      assertEq(cpu.cregs.cr2, 0x12345000, 'CR2 = faulting address');
+      assertEq(mem.read32(cpu.regs.esp), 0x2, 'error code on stack = W (not present, write)');
+      assertEq(mem.read32(cpu.regs.esp + 4), 0x6000, 'pushed EIP = instruction start');
+    });
+
+    test('#PF during #PF delivery escalates to double fault', () => {
+      const mem = new X86Memory(8);
+      const cpu = new X86CPU(mem, null);
+      cpu._pagingDebugCount = 9999;
+      cpu.cregs.cr3 = 0x10000;
+      mem.write32(0x10000, 0x11000 | 3);
+      for (let p = 0; p < 16; p++) mem.write32(0x11000 + p * 4, (p << 12) | 3);
+      // IDT itself is mapped; the stack page is not, so the pushes during
+      // #PF delivery fault, escalating to #DF (whose pushes also fault).
+      cpu.idtBase = 0x4000;
+      cpu.idtLimit = 0x7FF;
+      mem.write16(0x4000 + 8 * 8 + 0, 0x5100);
+      mem.write16(0x4000 + 8 * 8 + 2, 0x0008);
+      mem.write8(0x4000 + 8 * 8 + 5, 0x8E);
+      mem.write16(0x4000 + 8 * 8 + 6, 0);
+      mem.write16(0x4000 + 14 * 8 + 0, 0x5000);
+      mem.write16(0x4000 + 14 * 8 + 2, 0x0008);
+      mem.write8(0x4000 + 14 * 8 + 5, 0x8E);
+      mem.write8(0x5100, 0xF4);  // #DF handler: HLT
+      mem.write8(0x5000, 0xF4);  // #PF handler: HLT (should not be reached)
+      // Code: mov [0x12345000], eax → #PF, but ESP points at unmapped page
+      mem.write8(0x6000, 0xA3);
+      mem.write32(0x6001, 0x12345000);
+      cpu.segregs.cs = 0x08;
+      cpu.regs.esp = 0x300000;  // unmapped — pushes during #PF delivery fault
+      cpu.regs.eip = 0x6000;
+      cpu.cregs.cr0 = 0x80000001;
+      cpu.step();
+      // #DF delivery also pushes to the same unmapped stack → triple fault
+      assert(cpu.halted, 'unrecoverable fault chain should halt (triple fault)');
     });
   });
 
