@@ -2,7 +2,7 @@
 bits 16
 
 ; ── Constants ────────────────────────────────────────────────────────────────
-KERNEL_SECTORS  equ 0x21F
+KERNEL_SECTORS  equ 0xA8
 ; Max sectors per INT 13h call.  SeaBIOS 1.17 refuses reads larger than 127
 ; sectors; 64 is safe on every BIOS and keeps the segment math simple.
 MAX_SEC         equ 64

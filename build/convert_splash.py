@@ -20,6 +20,43 @@ def quantize_332(r, g, b):
     return (ri << 5) | (gi << 2) | bi
 
 
+WIDTH  = 320
+HEIGHT = 200
+
+
+def crop_content(img):
+    """Crop away solid-black borders, returning the tight bounding box."""
+    w, h = img.size
+    px = img.load()
+
+    def is_blank(rgb, threshold=10):
+        return rgb[0] < threshold and rgb[1] < threshold and rgb[2] < threshold
+
+    x0, y0, x1, y1 = 0, 0, w - 1, h - 1
+
+    while x0 < w:
+        if not all(is_blank(px[x0, y]) for y in range(h)):
+            break
+        x0 += 1
+    while x1 >= 0:
+        if not all(is_blank(px[x1, y]) for y in range(h)):
+            break
+        x1 -= 1
+    while y0 < h:
+        if not all(is_blank(px[x, y0]) for x in range(x0, x1 + 1)):
+            break
+        y0 += 1
+    while y1 >= 0:
+        if not all(is_blank(px[x, y1]) for x in range(x0, x1 + 1)):
+            break
+        y1 -= 1
+
+    if x0 >= x1 or y0 >= y1:
+        return img                       # entirely blank — leave as-is
+
+    return img.crop((x0, y0, x1 + 1, y1 + 1))
+
+
 def main():
     project_dir = sys.argv[1] if len(sys.argv) > 1 else "."
     src = f"{project_dir}/voss-haas.png"
@@ -30,28 +67,35 @@ def main():
         print(f"  ! {src} not found — skipping splash conversion", file=sys.stderr)
         return
 
-    img = img.resize((640, 400), Image.LANCZOS)
-
     if img.mode == "RGBA":
-        # Blend alpha against black
         bg = Image.new("RGB", img.size, (0, 0, 0))
         bg.paste(img, mask=img.split()[3])
         img = bg
     elif img.mode != "RGB":
         img = img.convert("RGB")
 
-    raw = bytearray(img.size[0] * img.size[1])
+    # Crop black borders, then scale to fit WIDTH x HEIGHT preserving aspect
+    img = crop_content(img)
+    img.thumbnail((WIDTH, HEIGHT), Image.LANCZOS)
+
+    # Centre on a black canvas
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
+    ox = (WIDTH - img.width) // 2
+    oy = (HEIGHT - img.height) // 2
+    canvas.paste(img, (ox, oy))
+
+    raw = bytearray(WIDTH * HEIGHT)
     i = 0
-    for y in range(img.size[1]):
-        for x in range(img.size[0]):
-            r, g, b = img.getpixel((x, y))
+    for y in range(HEIGHT):
+        for x in range(WIDTH):
+            r, g, b = canvas.getpixel((x, y))
             raw[i] = quantize_332(r, g, b)
             i += 1
 
     with open(dst, "wb") as f:
         f.write(raw)
 
-    print(f"  + splash.dat ({len(raw)} bytes)")
+    print(f"  + splash.dat ({len(raw)} bytes) — cropped, scaled, centred")
 
 
 if __name__ == "__main__":

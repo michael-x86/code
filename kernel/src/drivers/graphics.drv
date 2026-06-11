@@ -158,6 +158,13 @@ vbe_read:
 vbe_set_mode:
     pushad
 
+    ; The Bochs VBE dispi interface must be activated by writing the magic
+    ; ID before any other register write.  Without this, writes to the
+    ; index/data ports are silently ignored.
+    mov ax, VBE_DISPI_INDEX_ID
+    mov bx, VBE_DISPI_ID4
+    call vbe_write
+
     mov ax, VBE_DISPI_INDEX_XRES
     mov bx, GFX_WIDTH
     call vbe_write
