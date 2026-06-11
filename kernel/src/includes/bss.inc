@@ -19,6 +19,10 @@
 section .bss
 
 
+; --- VGA cursor state (used by vga.drv) ------------------------------------
+alignb 4
+cursor_initialized resb 1     ; 1 once cursor shape has been configured
+
 ; --- Tab completion state (used by shell.inc) -------------------------------
 alignb 4
 tab_match_count  resd 1       ; number of candidates matching the prefix

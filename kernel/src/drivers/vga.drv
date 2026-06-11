@@ -193,15 +193,35 @@ prompt:
 
 
 ; -----------------------------------------------------------------------------
-; cursor — program the VGA hardware cursor (the blinking underscore)
+; cursor — program the VGA hardware cursor position
 ;--
-;-- The VGA controller has two index/data port pairs: 0x3D4/0x3D5 for
-;-- the index (0x0E = cursor high, 0x0F = cursor low). The cursor
-;-- position is a 16-bit value, written MSB-then-LSB.
+;-- Programs the cursor position via CRTC registers 0x0E (high byte) and
+;-- 0x0F (low byte).  On first call, also sets the cursor to a green
+;-- blinking block (CRTC 0x0A = start scanline 0 + blink, 0x0B = end
+;-- scanline 15).  The on-screen colour comes from the character attribute
+;-- at the cursor cell (green-on-black = 0x02), which the hardware cursor
+;-- shows in reverse-video on the cursor scanlines.
 ; -----------------------------------------------------------------------------
 cursor:
     push eax
     push edx
+    cmp byte [cursor_initialized], 0
+    jne .pos
+    ; First call: set cursor shape to blinking block (scanlines 0-15).
+    mov dx, 0x3D4
+    mov al, 0x0A
+    out dx, al
+    mov dx, 0x3D5
+    mov al, 0x20                     ; blink enable | start scanline 0
+    out dx, al
+    mov dx, 0x3D4
+    mov al, 0x0B
+    out dx, al
+    mov dx, 0x3D5
+    mov al, 0x0F                     ; end scanline 15 (full height)
+    out dx, al
+    mov byte [cursor_initialized], 1
+.pos:
     mov dx, 0x3D4
     mov al, 0x0F
     out dx, al
