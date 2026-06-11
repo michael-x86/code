@@ -2731,25 +2731,6 @@ sys_rmdir:
     mov eax,-1
     ret
 
-xsys_ps_info:
-    cmp ebx,0 ; Basic sanity check
-    je .error
-    push edx
-    mov edx,[current_task]
-    mov [ebx+0],edx
-    mov edx,[task0_esp]
-    mov [ebx+4],edx
-    mov edx,[task1_esp]
-    mov [ebx+8],edx
-    mov edx,[task2_esp]
-    mov [ebx+12],edx
-    pop edx
-    xor eax,eax ; success
-    ret
-.error:
-    mov eax,-1  ; error
-    ret
-
 sys_ps_info:
     cmp ebx,0               ; Basic sanity check 
     je .error
@@ -2772,19 +2753,11 @@ sys_ps_info:
     mov [ebx+16],edx        ; Store it into the 5th dword slot
 
     pop edx
-    mov eax, 5              ; RETURN VALUE: Tell the binary we filled 5 slots!
+    mov eax,5           ; RETURN VALUE: filled 5 slots!
     ret
 .error:
-    mov eax,-1              ; error
+    mov eax,-1            
     ret
-;EDI
-;ESI
-;EBP
-;original ESP
-;EBX
-;EDX
-;ECX
-;EAX
 
 sys_stack_dump:
     call show_regs
@@ -3013,7 +2986,7 @@ init_bounce:
     popa
     ret
 
-backagin:
+;backagin:
     ret
 
 bounce_step: 
