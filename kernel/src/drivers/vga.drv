@@ -203,7 +203,7 @@ cursor_blit:
     lea edi, [eax + edi * 2]
     cmp byte [cursor_visible], 0
     je .off
-    mov ax, 0x2020                   ; black-on-green space = green block
+    mov ax, 0x02DB                   ; green-on-black full block = green block
     jmp .out
 .off:
     mov ax, 0x0720                   ; green-on-black space = normal
