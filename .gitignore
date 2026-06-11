@@ -45,3 +45,11 @@ build/*.png
 build/*.ppm
 
 docs/Fialka_200.pdf
+docs/gui-plan.md
+voss-haas.png
+
+# Generated symbol address map (extracted from kernel binary)
+build/kernel-syms.json
+
+# Webulator build artifacts copied from build/
+webulator/kernel-bin/
