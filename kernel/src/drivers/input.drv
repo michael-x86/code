@@ -62,10 +62,16 @@ get_key:
     ret
 .check_pgdn:
     cmp al, 0xF1                        ; Page Down
-    jne .translate
+    jne .check_arrow
     call scroll_down
     xor al, al
     ret
+.check_arrow:
+    cmp al, 0xF2                        ; Up / Down / Left / Right arrows
+    jb .translate
+    cmp al, 0xF5
+    ja .translate
+    ret                                 ; return 0xF2-0xF5 as-is
 
 .translate:
     cmp al, 128

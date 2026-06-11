@@ -81,6 +81,8 @@ task_entry:
     call get_key
     test al, al
     jz .done
+    cmp al, 0xF2                        ; Skip extended keys (arrow keys)
+    jae .done
     cmp al, 13
     je .enter
     cmp al, 8

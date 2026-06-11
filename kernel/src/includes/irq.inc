@@ -135,8 +135,28 @@ irq1:
     jmp .buffer_extended
 .check_pgdn:
     cmp bl, 0x51
-    jne .done                             ; ignore other extended keys
+    jne .check_up_ext
     mov al, 0xF1                          ; special value for Page Down
+    jmp .buffer_extended
+.check_up_ext:
+    cmp bl, 0x48                          ; Up arrow
+    jne .check_left_ext
+    mov al, 0xF2
+    jmp .buffer_extended
+.check_left_ext:
+    cmp bl, 0x4B                          ; Left arrow
+    jne .check_right_ext
+    mov al, 0xF4
+    jmp .buffer_extended
+.check_right_ext:
+    cmp bl, 0x4D                          ; Right arrow
+    jne .check_down_ext
+    mov al, 0xF5
+    jmp .buffer_extended
+.check_down_ext:
+    cmp bl, 0x50                          ; Down arrow
+    jne .done                             ; ignore other extended keys
+    mov al, 0xF3
 .buffer_extended:
     ; Buffer al (0xF0 or 0xF1) directly.
     mov edi, [kbd_head]
