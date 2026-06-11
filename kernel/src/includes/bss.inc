@@ -24,6 +24,7 @@ alignb 4
 cursor_initialized resb 1     ; 1 once cursor shape has been configured
 cursor_visible     resb 1     ; 1 = green block shown, 0 = hidden
 cursor_blink_count resb 1     ; tick counter for blink timing
+cursor_prev        resd 1     ; previous cursor position (for restore on move)
 
 ; --- Tab completion state (used by shell.inc) -------------------------------
 alignb 4

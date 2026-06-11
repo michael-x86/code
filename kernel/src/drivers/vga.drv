@@ -224,10 +224,11 @@ cursor_blit:
 cursor:
     push eax
     push edx
+    push edi
 
     ; Disable the hardware cursor by setting start > end (scanline 16 > 0).
     cmp byte [cursor_initialized], 0
-    jne .pos
+    jne .restore_old
     mov dx, 0x3D4
     mov al, 0x0A
     out dx, al
@@ -242,8 +243,23 @@ cursor:
     out dx, al                       ; → hardware cursor never visible
     mov byte [cursor_initialized], 1
 
-.pos:
-    ; Set hardware cursor position (used by blink timing, not visibility).
+.restore_old:
+    ; Restore the previous cursor cell so we don't leave green blocks
+    ; behind when the cursor moves.
+    mov eax, [cursor_pos]
+    cmp eax, [cursor_prev]
+    je .set_pos
+    push eax                         ; save new position
+    mov eax, [cursor_prev]           ; old cursor position
+    mov edi, VGA_TEXT_BUFFER
+    lea edi, [edi + eax * 2]         ; address of old cursor cell
+    mov ax, 0x0720                   ; green-on-black space
+    mov [edi], ax
+    pop eax
+    mov [cursor_prev], eax           ; remember new position
+
+.set_pos:
+    ; Set hardware cursor position.
     mov dx, 0x3D4
     mov al, 0x0F
     out dx, al
@@ -261,6 +277,7 @@ cursor:
     mov byte [cursor_visible], 1
     call cursor_blit
 
+    pop edi
     pop edx
     pop eax
     ret

@@ -80,7 +80,7 @@ task_entry:
 .blink:
     ; Cursor blink: toggle every 15 ticks (~6.7 Hz)
     inc byte [cursor_blink_count]
-    cmp byte [cursor_blink_count], 15
+    cmp byte [cursor_blink_count], 45
     jb .getkey
     mov byte [cursor_blink_count], 0
     xor byte [cursor_visible], 1
