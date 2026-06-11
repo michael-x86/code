@@ -3118,13 +3118,21 @@ function run() {
 
     if (!kernelBin) return;
 
-    // Symbol virtual addresses (extracted from kernel binary analysis):
-    //   acpi_init        = 0xC01008BA  (code section, 5 pushes start here)
-    //   rsdt_found       = 0xC0104F25  (data section)
-    //   fadt_address     = 0xC0104F2A  (data section)
-    const ACPI_INIT_VIRT  = 0xC01008BA;
-    const RSDT_FOUND_VIRT = 0xC0104F25;
-    const FADT_ADDR_VIRT  = 0xC0104F2A;
+    // Load symbol addresses from the JSON map generated at build time.
+    // This avoids hardcoding offsets that change when the kernel source
+    // is modified (e.g. adding or removing code shifts later sections).
+    const symsPath = process.argv[4] || path.join(__dirname, 'kernel-bin/kernel-syms.json');
+    let SYMS = {};
+    if (fs.existsSync(symsPath)) {
+      try {
+        SYMS = JSON.parse(fs.readFileSync(symsPath, 'utf8'));
+      } catch (e) {
+        console.log('Warning: could not parse symbol map at ' + symsPath);
+      }
+    }
+    const ACPI_INIT_VIRT  = parseInt(SYMS.acpi_init  || '0xC01008BA', 16);
+    const RSDT_FOUND_VIRT = parseInt(SYMS.rsdt_found || '0xC0104F25', 16);
+    const FADT_ADDR_VIRT  = parseInt(SYMS.fadt_address || '0xC0104F2A', 16);
 
     // Helper: compute ACPI checksum (all bytes sum to 0 mod 256)
     function acpiChecksum(bytes) {

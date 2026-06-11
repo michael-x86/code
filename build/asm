@@ -13,7 +13,7 @@ IMG="${BUILD_DIR}/os.img"
 # Programs to compile
 COMMANDS_DIR="${PROJECT_DIR}/kernel/src/commands"
 COMMANDS=(exit help env debug dump alloc dealloc poke peek
-          ps vi pwd ls cd ping cat touch write
+          ps vi pwd ls cd ping cat touch write launcher
           rm rmdir mkdir cp mv calc invaders zork gdemo elite enigma up morse)
 RUN_QEMU=false
 FULLSCREEN=false
@@ -86,6 +86,7 @@ python3 gen_fs.py "$BUILD_DIR" fs.bin | sed 's/^/  /'
 
 echo "[3/6] Assembling kernel..."
 nasm -f bin "$KERNEL_ASM" -o "${BUILD_DIR}/kernel.bin" \
+    -l "${BUILD_DIR}/kernel.lst" \
     -I "${KERNEL_INC_DIR}/" \
     -I "${KERNEL_INC_DIR}/drivers/" \
     -I "${PROJECT_DIR}/kernel/src/" \
@@ -126,13 +127,18 @@ echo "  FS:   $FS_IMG (filesystem, separate disk)"
 echo "  OS:   $IMG (combined, $(stat -c%s "$IMG") bytes)"
 echo ""
 
+# Extract ACPI symbol addresses for webulator tests
+python3 "${PROJECT_DIR}/build/extract_syms.py" "${BUILD_DIR}/kernel.bin" \
+    "acpi_init,rsdt_found,fadt_address" > "${BUILD_DIR}/kernel-syms.json"
+
 # Copy binaries for webulator (x86 web emulator)
 WEBULATOR_DIR="${PROJECT_DIR}/webulator/kernel-bin"
 mkdir -p "$WEBULATOR_DIR"
 cp "${BUILD_DIR}/kernel.bin" "${BUILD_DIR}/bootloader.bin" "$WEBULATOR_DIR/"
+cp "${BUILD_DIR}/kernel-syms.json" "$WEBULATOR_DIR/"
 # The webulator expects a combined disk image for ATA emulation
 cp "$IMG" "$WEBULATOR_DIR/os.img"
-echo "[webulator] Copied kernel.bin, bootloader.bin, os.img → $WEBULATOR_DIR"
+echo "[webulator] Copied kernel.bin, bootloader.bin, kernel-syms.json, os.img → $WEBULATOR_DIR"
 
 rm -f "${BUILD_DIR}/kernel.bin" "${BUILD_DIR}/bootloader.bin"
 rm -f "${BUILD_DIR}/fs.bin"
@@ -157,6 +163,7 @@ if [[ "$RUN_QEMU" == true ]]; then
         -drive format=raw,file="$BOOT_IMG",index=0,if=ide
         -drive format=raw,file="$FS_IMG",index=1,if=ide
         -device isa-debug-exit,iobase=0xf4,iosize=0x04
+        -vga std
         -m 128
     )
 

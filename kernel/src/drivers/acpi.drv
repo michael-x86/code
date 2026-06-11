@@ -98,6 +98,14 @@ acpi_init:
     ; --- Extract RSDT address ---------------------------------------------
     mov eax, [esi + 16]        ; RSDP.rsdt_addr
     mov [rsdt_address], eax
+
+    ; Check that the RSDT lies within identity-mapped physical memory
+    ; (PDEs 0-4 cover 0x00000000–0x013FFFFF = 20 MB).  QEMU often places
+    ; ACPI tables above 4 MB, outside our bootstrap page tables — skip
+    ; the walk and leave rsdt_found = 0 when that happens.
+    cmp eax, ACPI_MAPPED_END
+    jae .not_found
+
     mov byte [rsdt_found], 1
 
     ; --- Walk RSDT to cache known tables ----------------------------------
