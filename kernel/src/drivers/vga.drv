@@ -244,8 +244,9 @@ cursor:
     mov byte [cursor_initialized], 1
 
 .restore_old:
-    ; Restore the previous cursor cell so we don't leave green blocks
-    ; behind when the cursor moves.
+    ; Restore the previous cursor cell — but ONLY if it still holds the
+    ; cursor block.  If putchar/delchar already wrote a real character
+    ; there, leave it alone so we don't erase user input.
     mov eax, [cursor_pos]
     cmp eax, [cursor_prev]
     je .set_pos
@@ -253,8 +254,10 @@ cursor:
     mov eax, [cursor_prev]           ; old cursor position
     mov edi, VGA_TEXT_BUFFER
     lea edi, [edi + eax * 2]         ; address of old cursor cell
-    mov ax, 0x0720                   ; green-on-black space
-    mov [edi], ax
+    cmp word [edi], 0x02DB           ; still the cursor block?
+    jne .skip_restore
+    mov word [edi], 0x0720           ; yes → restore to normal space
+.skip_restore:
     pop eax
     mov [cursor_prev], eax           ; remember new position
 
