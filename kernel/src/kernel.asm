@@ -155,7 +155,7 @@ kernel_main:
     call set_freq                        ; 100 Hz PIT
 
     ; Snapshot the BIOS text font (for graphics-mode glyphs and for restoring
-    ; text after Mode 13h) and bring up the PS/2 mouse (IRQ12).
+    ; text after VBE mode) and bring up the PS/2 mouse (IRQ12).
     call gfx_save_font
     call mouse_init
 

@@ -1,7 +1,7 @@
 ; =============================================================================
 ; elite — wireframe space sim for the x86 Assembly Kernel (homage to Elite 1984)
 ; =============================================================================
-; First iteration: VGA Mode 13h (320x200x256), split-screen flight view +
+; First iteration: 640x400x256 graphics, split-screen flight view +
 ; dashboard. A rotating wireframe Cobra Mk III, streaming stardust, a scanner
 ; box and fuel/energy bars. Fixed-point 3D math, no FPU.
 ;

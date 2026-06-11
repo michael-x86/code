@@ -157,7 +157,7 @@ syscall_table:
     dd  sys_dealloc          ; 33 : ebx = vaddr -> 0 / -1
     dd  sys_peek             ; 34 : ebx = addr -> eax = byte at [ebx]
     dd  sys_poke             ; 35 : ebx = addr, ecx = byte -> 0
-    dd  sys_gfx_enter        ; 36 : switch to Mode 13h (320x200x256)
+    dd  sys_gfx_enter        ; 36 : switch to 640x400x256 VBE mode
     dd  sys_gfx_exit         ; 37 : restore text mode 03h + reload font
     dd  sys_gfx_clear        ; 38 : ebx = color -> clear backbuffer
     dd  sys_gfx_pixel        ; 39 : ebx=x, ecx=y, edx=color
@@ -194,7 +194,8 @@ acpi_s5_slp_typb    db ACPI_S5_SLP_TYPb
 ;   25 CRTC                 (index 0x3D4 / data 0x3D5, regs 0..24)
 ;   9  Graphics Controller  (index 0x3CE / data 0x3CF, regs 0..8)
 ;   21 Attribute Controller (index+data 0x3C0, regs 0..20)
-; Values are the standard register sets for 320x200x256 and 80x25 text.
+; Values are the standard register set for 80x25 text. The legacy Mode 13h
+; register dump is kept for reference but is no longer used by gfx_enter.
 mode13_regs:
     db 0x63
     db 0x03, 0x01, 0x0F, 0x00, 0x0E

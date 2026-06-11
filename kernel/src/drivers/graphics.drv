@@ -1,18 +1,17 @@
 ; =============================================================================
-; graphics.inc — VGA Mode 13h (320x200x256) graphics engine + PS/2 mouse
+; graphics.inc — 640x400x256 VBE graphics engine + PS/2 mouse
 ; =============================================================================
 ;
 ; The OS boots and runs in VGA text mode 03h. A userland program (a game,
-; or a graphical TUI) calls sys_gfx_enter to switch to Mode 13h at runtime,
-; draws via the gfx_* primitives, and calls sys_gfx_exit to return to text
-; mode. No BIOS and no bootloader change are involved: the mode switch is
-; done by writing the VGA register set directly (vga_write_regs).
+; or a graphical TUI) calls sys_gfx_enter to switch to 640x400x256 VBE at
+; runtime, draws via the gfx_* primitives, and calls sys_gfx_exit to return to
+; text mode. The mode switch uses QEMU/std VGA's Bochs VBE dispi interface.
 ;
 ; Display model
 ; -------------
-;   - Mode 13h is a linear (chain-4) 320x200x256 framebuffer at physical
-;     0xA0000, reached at the higher-half alias 0xC00A0000 (already mapped
-;     by identity_page_table). Pixel (x,y) is at byte offset y*320 + x.
+;   - The VBE linear framebuffer is physical 0xE0000000, reached through the
+;     higher-half mapping at 0xC2000000. Pixel (x,y) is at byte offset
+;     y*640 + x.
 ;   - All primitives draw into gfx_backbuf (an off-screen BSS buffer).
 ;     gfx_blit copies the whole backbuffer to the visible framebuffer in
 ;     one pass, giving flicker-free updates.
@@ -21,17 +20,15 @@
 ;
 ; Font handling
 ; -------------
-;   Mode 13h's chain-4 writes clobber the BIOS text font stored in VGA
-;   plane 2. gfx_save_font snapshots the 256x16 font into font_save while
-;   still in text mode at boot; gfx_exit restores it with gfx_load_font so
-;   the shell text is intact again. The same snapshot is the glyph source
-;   for gfx_char / gfx_string in graphics mode.
+;   VBE writes replace the active display mode, so gfx_save_font snapshots the
+;   BIOS text font before graphics mode is entered. gfx_exit restores that font
+;   after returning to text mode.
 ;
 ; Mouse
 ; -----
 ;   mouse_init brings up the PS/2 auxiliary device and enables IRQ12.
 ;   irq12 decodes the 3-byte packet into mouse_x / mouse_y / mouse_buttons,
-;   clamped to the 320x200 screen. sys_mouse exposes the state to userland.
+;   clamped to the 640x400 screen. sys_mouse exposes the state to userland.
 ; =============================================================================
 
 
@@ -131,6 +128,85 @@ vga_write_regs:
 
 
 ; -----------------------------------------------------------------------------
+; vbe_write / vbe_read — Bochs VBE dispi register access
+;   in:  ax = dispi index, bx = value (write)
+;   out: ax = value (read)
+; -----------------------------------------------------------------------------
+vbe_write:
+    push dx
+    mov dx, VBE_DISPI_IOPORT_INDEX
+    out dx, ax
+    mov dx, VBE_DISPI_IOPORT_DATA
+    mov ax, bx
+    out dx, ax
+    pop dx
+    ret
+
+vbe_read:
+    push dx
+    mov dx, VBE_DISPI_IOPORT_INDEX
+    out dx, ax
+    mov dx, VBE_DISPI_IOPORT_DATA
+    in ax, dx
+    pop dx
+    ret
+
+
+; -----------------------------------------------------------------------------
+; vbe_set_mode — enable 640x400x256 linear framebuffer mode
+; -----------------------------------------------------------------------------
+vbe_set_mode:
+    pushad
+
+    mov ax, VBE_DISPI_INDEX_XRES
+    mov bx, GFX_WIDTH
+    call vbe_write
+
+    mov ax, VBE_DISPI_INDEX_YRES
+    mov bx, GFX_HEIGHT
+    call vbe_write
+
+    mov ax, VBE_DISPI_INDEX_BPP
+    mov bx, 8
+    call vbe_write
+
+    mov ax, VBE_DISPI_INDEX_VIRT_WIDTH
+    mov bx, GFX_WIDTH
+    call vbe_write
+
+    mov ax, VBE_DISPI_INDEX_VIRT_HEIGHT
+    mov bx, GFX_HEIGHT
+    call vbe_write
+
+    mov ax, VBE_DISPI_INDEX_X_OFFSET
+    xor bx, bx
+    call vbe_write
+
+    mov ax, VBE_DISPI_INDEX_Y_OFFSET
+    xor bx, bx
+    call vbe_write
+
+    mov ax, VBE_DISPI_INDEX_ENABLE
+    mov bx, VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED | VBE_DISPI_8BIT_DAC_ENABLED
+    call vbe_write
+
+    popad
+    ret
+
+
+; -----------------------------------------------------------------------------
+; vbe_disable — leave VBE linear framebuffer mode before restoring text mode
+; -----------------------------------------------------------------------------
+vbe_disable:
+    pushad
+    mov ax, VBE_DISPI_INDEX_ENABLE
+    xor bx, bx
+    call vbe_write
+    popad
+    ret
+
+
+; -----------------------------------------------------------------------------
 ; gfx_font_access_on / gfx_font_access_off — switch VGA memory access to/from
 ; linear plane-2 mode so the character generator font can be read/written.
 ; -----------------------------------------------------------------------------
@@ -188,7 +264,7 @@ gfx_font_access_off:
 gfx_save_font:
     pushad
     call gfx_font_access_on
-    mov esi, GFX_FB_VIRT        ; plane-2 font data at 0xC00A0000
+    mov esi, VGA_APERTURE_VIRT        ; plane-2 font data at 0xA0000
     mov edi, font_save
     mov ecx, 256
 .char:
@@ -206,7 +282,7 @@ gfx_save_font:
 
 ; -----------------------------------------------------------------------------
 ; gfx_load_font — write font_save back into VGA plane 2 (restores text glyphs
-; after Mode 13h corrupted them).
+; after graphics mode returns to text mode).
 ; -----------------------------------------------------------------------------
 gfx_load_font:
     pushad
@@ -214,7 +290,7 @@ gfx_load_font:
     je .done
     call gfx_font_access_on
     mov esi, font_save
-    mov edi, GFX_FB_VIRT
+    mov edi, VGA_APERTURE_VIRT
     mov ecx, 256
 .char:
     push ecx
@@ -271,12 +347,11 @@ gfx_load_palette:
 
 
 ; -----------------------------------------------------------------------------
-; gfx_enter — switch to Mode 13h and present a cleared screen
+; gfx_enter — switch to 640x400x256 VBE mode and present a cleared screen
 ; -----------------------------------------------------------------------------
 gfx_enter:
     pushad
-    mov esi, mode13_regs
-    call vga_write_regs
+    call vbe_set_mode
     call gfx_load_palette       ; deterministic 3-3-2 256-color palette
     mov byte [gfx_mode], 1
     xor ebx, ebx               ; clear backbuffer to color 0
@@ -291,6 +366,7 @@ gfx_enter:
 ; -----------------------------------------------------------------------------
 gfx_exit:
     pushad
+    call vbe_disable
     mov esi, text_regs
     call vga_write_regs
     call gfx_load_font

@@ -1,7 +1,7 @@
 ; =============================================================================
-; gdemo — VGA Mode 13h graphics engine demo
+; gdemo — 640x400x256 graphics engine demo
 ; =============================================================================
-; Switches to 320x200x256 graphics, draws shapes + text, and tracks the
+; Switches to 640x400x256 graphics, draws shapes + text, and tracks the
 ; mouse cursor. Press any key to return to the text shell.
 ; =============================================================================
 

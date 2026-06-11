@@ -14,6 +14,7 @@
 ;   PDE 4  / 772  -> heap_page_table_2     (0x01000000 .. 0x013FFFFF)
 ;   PDE 65        -> highmem_page_table    (0x10400000 .. 0x107FFFFF)
 ;   PDE 514       -> identity_page_table (mirror, 0x80800000..0x80BFFFFF)
+;   PDE 776       -> vbe_lfb_page_table   (0xC2000000..0xC23FFFFF)
 ;
 ; This dual identity + higher-half mirror is what lets the boot sequence
 ; get away with computing a physical base via ebp (the kernel is still
@@ -181,7 +182,28 @@ page_mapping:
     lea eax, [highmem_page_table + ebp]
     or  eax, PAGE_PRESENT_RW
     mov [edx + (65 * 4)], eax
+
+    ; --- vbe_lfb_page_table: physical 0xE0000000..0xE03FFFFF ----------
+    ; Map QEMU/std VGA's Bochs VBE linear framebuffer to 0xC2000000.
+    lea eax, [vbe_lfb_page_table + ebp]
+    or  eax, PAGE_PRESENT_RW
+    mov [edx + (VBE_LFB_PDE * 4)], eax
+
+    lea edi, [vbe_lfb_page_table + ebp]
+    mov eax, VBE_LFB_PHYS
+    xor ecx, ecx
+.fill_vbe_lfb:
+    mov ebx, eax
+    or  ebx, PAGE_PRESENT_RW
+    mov [edi], ebx
+    add eax, PAGE_SIZE
+    add edi, 4
+    inc ecx
+    cmp ecx, PAGE_TABLE_ENTRIES
+    jb .fill_vbe_lfb
+
     ret
+
 
 
 ; -----------------------------------------------------------------------------

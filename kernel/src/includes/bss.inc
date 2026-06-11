@@ -109,6 +109,9 @@ ata_port_base    resd 1                   ; hot cache of fs_ata_base
 ; into a different ATA routine.
 disk_busy        resb 1
 
+alignb 4
+disk_identify_buf resb 512               ; scratch for ATA IDENTIFY responses
+
 
 ; --- ACPI scratch buffer (used by drivers/acpi.drv) -------------------------
 ; acpi_buf is a page-aligned 4 KB buffer for loading ACPI tables from
@@ -156,11 +159,11 @@ file_type        resd 1
 
 
 ; --- Graphics engine state (used by graphics.inc) ---------------------------
-; gfx_mode is 0 in text mode 03h, 1 in graphics Mode 13h. font_save holds a
+; gfx_mode is 0 in text mode 03h, 1 in graphics mode. font_save holds a
 ; snapshot of the BIOS 8x16 text font captured at boot (gfx_save_font); it is
 ; restored on gfx_exit and used as the glyph source for gfx_char/gfx_string.
-; gfx_backbuf is the 64000-byte off-screen buffer all primitives draw into;
-; gfx_blit copies it to the visible framebuffer at 0xC00A0000.
+; gfx_backbuf is the 256000-byte off-screen buffer all primitives draw into;
+; gfx_blit copies it to the VBE linear framebuffer at 0xC2000000.
 alignb 4
 gfx_mode         resb 1                   ; 0 = text, 1 = graphics
 font_saved       resb 1                   ; 1 once font_save is populated
@@ -207,7 +210,7 @@ mouse_pkt2       resb 1                   ; Y delta
 
 alignb 16
 font_save        resb FONT_BYTES          ; 4096-byte 8x16 font snapshot
-gfx_backbuf      resb GFX_FB_SIZE         ; 64000-byte off-screen buffer
+gfx_backbuf      resb GFX_FB_SIZE         ; 256000-byte off-screen buffer
 
 
 ; --- IDT (used by idt.inc) --------------------------------------------------
@@ -267,6 +270,10 @@ heap_page_table_2:
 alignb 4096
 highmem_page_table:
     resd PAGE_TABLE_ENTRIES              ; 1024 PTEs for 0x10400000..0x107FFFFF
+
+alignb 4096
+vbe_lfb_page_table:
+    resd PAGE_TABLE_ENTRIES              ; 1024 PTEs for 0xE0000000..0xE03FFFFF
 
 
 ; --- Heap range (used by memory.inc) -----------------------------------------

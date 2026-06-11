@@ -814,6 +814,9 @@ render:
 ; ══════════════════════════════════════════════════════════════════════════════
 ; DATA
 ; ══════════════════════════════════════════════════════════════════════════════
+section .rodata
+msg_over:   db "GAME OVER", 0
+
 section .bss
 alignb 4
 vtick:      resd 1
@@ -835,4 +838,3 @@ vabx_d:     resd MAXAB
 vaby_d:     resd MAXAB
 vbx:        resd NBAR
 vbhp:       resd NBAR
-msg_over:   db "GAME OVER", 0

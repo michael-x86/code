@@ -91,17 +91,36 @@ SCROLLBACK_MAX     equ 50
 SCREEN_SIZE        equ VGA_COLS * VGA_ROWS * 2   ; 4000 bytes
 
 
-; --- VGA Mode 13h graphics ---------------------------------------------------
-; 320x200x256 linear (chain-4) framebuffer at physical 0xA0000, reachable at
-; the higher-half alias 0xC00A0000 (already covered by identity_page_table).
-; Drawing goes to gfx_backbuf (off-screen); gfx_blit copies it to the screen.
-; The text-mode 8x16 font snapshot (font_save) is also the glyph source for
-; gfx_char/gfx_string.
-GFX_FB_PHYS        equ 0x000A0000
-GFX_FB_VIRT        equ 0xC00A0000
-GFX_WIDTH          equ 320
-GFX_HEIGHT         equ 200
-GFX_FB_SIZE        equ GFX_WIDTH * GFX_HEIGHT    ; 64000 bytes
+; --- Graphics framebuffer -----------------------------------------------------
+; QEMU/std VGA exposes a Bochs VBE dispi linear framebuffer. We use the
+; 640x400x256 mode and map its LFB at a fixed higher-half alias.
+VGA_APERTURE_PHYS  equ 0x000A0000
+VGA_APERTURE_VIRT  equ 0xC00A0000
+
+VBE_LFB_PHYS       equ 0xE0000000
+VBE_LFB_VIRT       equ 0xC2000000
+VBE_LFB_PDE        equ 776
+VBE_DISPI_IOPORT_INDEX equ 0x01CE
+VBE_DISPI_IOPORT_DATA  equ 0x01CF
+VBE_DISPI_ID4      equ 0xB0C4
+VBE_DISPI_ENABLED  equ 0x0001
+VBE_DISPI_LFB_ENABLED equ 0x0040
+VBE_DISPI_8BIT_DAC_ENABLED equ 0x0020
+VBE_DISPI_INDEX_ID equ 0
+VBE_DISPI_INDEX_XRES equ 1
+VBE_DISPI_INDEX_YRES equ 2
+VBE_DISPI_INDEX_BPP equ 3
+VBE_DISPI_INDEX_ENABLE equ 4
+VBE_DISPI_INDEX_VIRT_WIDTH equ 5
+VBE_DISPI_INDEX_VIRT_HEIGHT equ 6
+VBE_DISPI_INDEX_X_OFFSET equ 7
+VBE_DISPI_INDEX_Y_OFFSET equ 8
+
+GFX_FB_PHYS        equ VBE_LFB_PHYS
+GFX_FB_VIRT        equ VBE_LFB_VIRT
+GFX_WIDTH          equ 640
+GFX_HEIGHT         equ 400
+GFX_FB_SIZE        equ GFX_WIDTH * GFX_HEIGHT    ; 256000 bytes
 FONT_WIDTH         equ 8
 FONT_HEIGHT        equ 16
 FONT_BYTES         equ 256 * FONT_HEIGHT          ; 4096-byte font snapshot
@@ -120,6 +139,7 @@ PIT_DIVISOR        equ 11932
 ; pointers to other description tables.
 ACPI_RSDP_SCAN_START equ 0x000E0000
 ACPI_RSDP_SCAN_END   equ 0x000FFFFF
+ACPI_MAPPED_END      equ 0x01400000   ; first byte NOT covered by PDEs 0-4
 ACPI_RSDP_SIGNATURE  equ "RSD PTR "
 ACPI_SDT_SIGNATURE   equ "RSDT"        ; Root System Description Table
 

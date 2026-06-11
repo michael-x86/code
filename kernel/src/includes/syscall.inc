@@ -240,7 +240,8 @@ sys_shutdown:
 ;
 ; Kernel memory regions (access is blocked):
 ;   0xC0100000+              — kernel higher-half (code, data, heap, BSS)
-;   0xC0000000..0xC009FFFF   — page table structures (below GFX framebuffer)
+;   0xC0000000..0xC009FFFF   — page table structures
+;   0xC2000000               — VBE linear framebuffer
 ;   0x80800000..0x80BFFFFF   — PDE 514 mirror of first 4 MB
 ;   0x00100000..0x013FFFFF   — kernel physical (image + heap via identity PDEs)
 ; ────────────────────────────────────────────────────────────────────────────
@@ -256,7 +257,7 @@ check_user_addr:
     clc
     ret
 .higher_half:
-    cmp ebx, GFX_FB_VIRT                ; 0xC00A0000
+    cmp ebx, GFX_FB_VIRT                ; 0xC2000000
     jb .bad
     clc
     ret
