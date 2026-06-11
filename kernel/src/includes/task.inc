@@ -74,10 +74,18 @@ init_tasks:
 ; -----------------------------------------------------------------------------
 task_entry:
     cmp byte [tick_flag], 0
-    je .skip
+    je .blink
     mov byte [tick_flag], 0
     call print_tick
-.skip:
+.blink:
+    ; Cursor blink: toggle every 15 ticks (~6.7 Hz)
+    inc byte [cursor_blink_count]
+    cmp byte [cursor_blink_count], 15
+    jb .getkey
+    mov byte [cursor_blink_count], 0
+    xor byte [cursor_visible], 1
+    call cursor_blit
+.getkey:
     call get_key
     test al, al
     jz .done

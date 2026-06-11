@@ -193,35 +193,57 @@ prompt:
 
 
 ; -----------------------------------------------------------------------------
-; cursor — program the VGA hardware cursor position
+; cursor_blit — draw or erase the green block at cursor_pos in the VGA buffer
+; -----------------------------------------------------------------------------
+cursor_blit:
+    push eax
+    push edi
+    mov edi, [cursor_pos]
+    mov eax, VGA_TEXT_BUFFER
+    lea edi, [eax + edi * 2]
+    cmp byte [cursor_visible], 0
+    je .off
+    mov ax, 0x2020                   ; black-on-green space = green block
+    jmp .out
+.off:
+    mov ax, 0x0720                   ; green-on-black space = normal
+.out:
+    mov [edi], ax
+    pop edi
+    pop eax
+    ret
+
+
+; -----------------------------------------------------------------------------
+; cursor — move the hardware cursor and redraw the software block cursor
 ;--
-;-- Programs the cursor position via CRTC registers 0x0E (high byte) and
-;-- 0x0F (low byte).  On first call, also sets the cursor to a green
-;-- blinking block (CRTC 0x0A = start scanline 0 + blink, 0x0B = end
-;-- scanline 15).  The on-screen colour comes from the character attribute
-;-- at the cursor cell (green-on-black = 0x02), which the hardware cursor
-;-- shows in reverse-video on the cursor scanlines.
+;-- Writes a green block (black-on-green space) at cursor_pos in the VGA
+;-- text buffer.  The hardware cursor is disabled (start > end) so it
+;-- does not interfere.  Blinking is handled separately by the shell loop.
 ; -----------------------------------------------------------------------------
 cursor:
     push eax
     push edx
+
+    ; Disable the hardware cursor by setting start > end (scanline 16 > 0).
     cmp byte [cursor_initialized], 0
     jne .pos
-    ; First call: set cursor shape to blinking block (scanlines 0-15).
     mov dx, 0x3D4
     mov al, 0x0A
     out dx, al
     mov dx, 0x3D5
-    mov al, 0x20                     ; blink enable | start scanline 0
+    mov al, 0x20                     ; blink on, start scanline 0
     out dx, al
     mov dx, 0x3D4
     mov al, 0x0B
     out dx, al
     mov dx, 0x3D5
-    mov al, 0x0F                     ; end scanline 15 (full height)
-    out dx, al
+    mov al, 0x1F                     ; end scanline 31 (outside char cell)
+    out dx, al                       ; → hardware cursor never visible
     mov byte [cursor_initialized], 1
+
 .pos:
+    ; Set hardware cursor position (used by blink timing, not visibility).
     mov dx, 0x3D4
     mov al, 0x0F
     out dx, al
@@ -234,6 +256,11 @@ cursor:
     mov dx, 0x3D5
     mov al, byte [cursor_pos + 1]
     out dx, al
+
+    ; Draw the software cursor at the new position.
+    mov byte [cursor_visible], 1
+    call cursor_blit
+
     pop edx
     pop eax
     ret

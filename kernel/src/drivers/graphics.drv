@@ -398,7 +398,7 @@ gfx_restore_text_palette:
     out dx, al                     ; DAC write index = 0
     mov dx, 0x3C9
     mov esi, text_palette
-    mov ecx, 16                    ; restore 16 colours × 3 bytes
+    mov ecx, 16 * 3                ; restore 16 colours × 3 bytes
     rep outsb
     popad
     ret
