@@ -30,7 +30,10 @@ _start:
     mov eax, 12
     int 0x80
 .done:
-    ret
+    mov ebx,0          ; Return code 0 (Success)
+    mov eax,0          ; System call number 0 (sys_exit)
+    int 0x80           ; Trigger kernel interrupt
+    ;ret
 
 .err:       db "cd: no such directory", 13, 0
 .home_path: db "/root", 0

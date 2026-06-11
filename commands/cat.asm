@@ -4,49 +4,49 @@
 
 
 _start:
-    mov ebx, 1
-    mov edi, arg
-    mov eax, 14              ; sys_get_arg
+    mov ebx,1
+    mov edi,arg
+    mov eax,14              ; sys_get_arg
     int 0x80
-    cmp eax, -1
+    cmp eax,-1
     je .usage
 
-    mov esi, arg
-    mov edi, info
-    mov eax, 15              ; sys_stat -> info: dword type, data, size
+    mov esi,arg
+    mov edi,info
+    mov eax,15              ; sys_stat -> info: dword type, data, size
     int 0x80
     cmp eax, -1
     je .nf
 
-    cmp dword [info], 0      ; type 0 = directory
+    cmp dword [info],0      ; type 0 = directory
     je .isdir
 
-    mov esi, [info+4]
-    mov ecx, [info+8]
-    test ecx, ecx
+    mov esi,[info+4]
+    mov ecx,[info+8]
+    test ecx,ecx
     jz .empty
-    mov eax, 16              ; sys_print_n
+    mov eax,16              ; sys_print_n
     int 0x80
     ; ensure cursor sits at start of next line if file didn't end with \n
-    mov eax, 3
+    mov eax,3
     int 0x80
     ret
 
 .empty:
     ret
 .usage:
-    mov esi, usage_msg
-    mov eax, 2
+    mov esi,usage_msg
+    mov eax,2
     int 0x80
     ret
 .nf:
-    mov esi, nf_msg
-    mov eax, 2
+    mov esi,nf_msg
+    mov eax,2
     int 0x80
     ret
 .isdir:
-    mov esi, isdir_msg
-    mov eax, 2
+    mov esi,isdir_msg
+    mov eax,2
     int 0x80
     ret
 

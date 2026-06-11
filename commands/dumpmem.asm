@@ -16,35 +16,34 @@ _start:
     je .usage
 
     ; Parse hex address via sys_hex2int
-    lea esi, [ebp + arg_buf]
-    mov eax, 28                 ; sys_hex2int
+    lea esi,[ebp+arg_buf]
+    mov eax,28                 ; sys_hex2int
     int 0x80
-    mov [ebp + addr_save], eax  ; save start address
+    mov [ebp+addr_save], eax  ; save start address
 
     ; --- Fetch count argument ---
-    mov ebx, 2
-    lea edi, [ebp + arg_buf2]
-    mov eax, 14                 ; sys_get_arg
+    mov ebx,2
+    lea edi,[ebp+arg_buf2]
+    mov eax,14                 ; sys_get_arg
     int 0x80
-    cmp eax, -1
+    cmp eax,-1
     je .usage
 
     ; Parse hex count via sys_hex2int
-    lea esi, [ebp + arg_buf2]
-    mov eax, 28                 ; sys_hex2int
+    lea esi,[ebp+arg_buf2]
+    mov eax,28                 ; sys_hex2int
     int 0x80
-    mov ecx, eax                ; ecx = byte count
-    test ecx, ecx
+    mov ecx,eax                ; ecx = byte count
+    test ecx,ecx
     jz .done
 
-    mov edi, [ebp + addr_save]  ; restore start address
+    mov edi,[ebp+addr_save]  ; restore start address
 
     ; --- Print header ---
-    lea esi, [ebp + hdr_msg]
-    mov eax, 2                  ; sys_print_cr
+    lea esi,[ebp+hdr_msg]
+    mov eax,2                  ; sys_print_cr
     int 0x80
 
-    ;ret   ;NORD
 ; --- Dump loop: 16 bytes per line ---
 .dump_line:
     cmp ecx, 0
@@ -135,7 +134,9 @@ _start:
     jmp .dump_line
 
 .done:
-    ret
+    mov ebx,0          ; Return code (Success)
+    mov eax,0          ; sys_exit
+    int 0x80           
 
 .usage:
     lea esi, [ebp + usage_msg]
@@ -195,7 +196,7 @@ print_hex_dword:
 putchar:
     push ebx
     mov ebx, eax
-    mov eax, 0                  ; sys_putchar
+    mov eax,39                  ; sys_putchar
     int 0x80
     pop ebx
     ret

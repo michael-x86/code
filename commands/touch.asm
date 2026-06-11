@@ -11,26 +11,26 @@ _start:
 
     mov ebx, 1
     lea edi,[ebp+arg]
-    mov eax, 14              ; sys_get_arg
+    mov eax,14              ; sys_get_arg
     int 0x80
-    cmp eax, -1
+    cmp eax,-1
     je .usage
 
     lea esi,[ebp+arg]
-    mov eax, 17              ; sys_create
+    mov eax,17              ; sys_create
     int 0x80
-    cmp eax, -1
+    cmp eax,-1
     je .err
     ret
 
 .usage:
     lea esi,[ebp+usage_msg]
-    mov eax, 2
+    mov eax,2
     int 0x80
     ret
 .err:
     lea esi,[ebp+err_msg]
-    mov eax, 2
+    mov eax,2
     int 0x80
     ret
 

@@ -208,7 +208,6 @@ reserve_kernel_pages:
     ret
 
 ;-------------------------------
-
 kernel_main:
     call build_idt
     call set_irq0
@@ -233,36 +232,14 @@ kernel_main:
     mov [cursor_pos],eax
     call newline
     call prompt
+
     call init_tasks
-    sti 
-    mov [task0_esp],esp
-    mov esp,[task0_esp]
-    mov dword [current_task],0
-    popad
-    iretd           ; jumps to task0_entry
 
-; task 0
-; Zombie that sleeps and waits for glory
-; -------------------------------------
-task0_entry:
-    .loop:
-    ;call task0_stuff
-    hlt
-    jmp .loop
+    mov [task0_esp],esp 
+    mov dword [current_task],0 
+    sti   
 
-; task 1
-; Another Zombie
-; -------------------------------------
-task1_entry:
-    .loop:
-    ;call task1_stuff
-    hlt
-    jmp .loop
-
-; -------------------------------------
-;   shell and command processor 
-; -------------------------------------
-task2_entry:  
+.task0_entry:
     cmp byte [tick_flag],0
     je .skip
     mov byte [tick_flag],0
@@ -297,8 +274,7 @@ task2_entry:
     mov dword [cmd_len],0     ;reset buffer
     mov byte [cmd_buf],0
     call prompt
-    hlt
-    jmp task2_entry
+    jmp .task0_entry
 .tab:
     call tab_complete
     xor al,al
@@ -309,14 +285,32 @@ task2_entry:
     dec dword [cmd_len]
     call delchar
 .done:
-    hlt
+    ; (polling) hlt might cause input lag or freeze.
+    jmp .task0_entry
+
+task1_entry:
+    mov byte [tick_flag], 0
+    inc dword [tick_div]
+    test dword [tick_div], 1
+    jnz .sleep
+    mov byte [tick_flag], 1
+.sleep:
+    hlt      ; run when timer fires                 
+    jmp task1_entry     
+
+task2_entry:  
+    test dword [on_off],1
+    jnz .paused
+    call bounce_step
+.paused:
+    hlt      ; run when state changes
     jmp task2_entry
 
 sys_hertz:
     push eax
     push edi
     mov eax,[hz]
-    mov edi,0xC00B8000+(1*80+59)*2  ;NORD
+    mov edi,0xC00B8000+(1*80+59)*2  
     call int2str
     mov byte [edi],' '
     add edi,2
@@ -332,6 +326,7 @@ sys_hertz:
     mov byte [edi],' '
     mov byte [edi+1],0x00
     add edi,2
+
     pop edi
     pop eax
     ret
@@ -342,7 +337,7 @@ wait_cmos:
     out 0x70,al
     in  al,0x71
     test al,0x80
-    jnz wait_cmos   
+    jnz wait_cmos
 
     ; Years since 1970 * 365
     mov eax,[year]
@@ -350,7 +345,7 @@ wait_cmos:
     mov ebx,365
     mul ebx
     mov esi,eax
-    
+
     ; Leap years since 1970
     mov eax,[year]
     sub eax,1969
@@ -358,7 +353,7 @@ wait_cmos:
     mov ebx,4
     div ebx
     add esi,eax
-    
+
     mov eax,[year]
     sub eax,1901
     xor edx,edx
@@ -372,18 +367,18 @@ wait_cmos:
     mov ebx,400
     div ebx
     add esi,eax
-    
+
     mov ecx,[month]
     cmp ecx,1
     jle .months_done
-    dec ecx             
-    mov ebx,month_days     
-.mloop:
-    movzx eax,byte [ebx]   
-    add esi,eax            
-    inc ebx               
-    dec ecx            
-    jnz .mloop      
+    dec ecx
+    mov ebx,month_days
+    .mloop:
+    movzx eax,byte [ebx]
+    add esi,eax
+    inc ebx
+    dec ecx
+    jnz .mloop
 
 .months_done:
     mov eax,[day]
@@ -406,7 +401,8 @@ wait_cmos:
     mov [boot_epoch], esi
     ret
 
-bcd2bin:
+
+bcd2bin:               ; currently not in use
     push ebx
     mov bl,al
     shr al,4
@@ -417,7 +413,6 @@ bcd2bin:
     pop ebx
     ret
 
-; task 0
 int2str:
     push ebx
     push ecx
@@ -433,7 +428,7 @@ int2str:
 .convert:
 .repeat:
     xor edx,edx
-    div ebx        ; EAX=quotient EDX=remainder
+    div ebx             ; EAX=quotient EDX=remainder
     add dl,'0'
     push edx
     inc ecx
@@ -936,26 +931,7 @@ sys_tick:
     popad
     ret
 
-; --- Birthing three parallel universes ---
 init_tasks:
-    ; task0 
-    mov eax,task0_stack_top
-    sub eax,4
-    mov dword [eax],0x202
-    sub eax, 4
-    mov dword [eax],0x10
-    sub eax, 4
-    mov dword [eax],task0_entry
-    sub eax,32
-    mov edi,eax
-    mov ecx,8
-    xor ebx,ebx
-.clear0:
-    mov [edi],ebx
-    add edi,4
-    loop .clear0
-    mov [task0_esp],eax
-
     ; task1 
     mov eax,task1_stack_top
     sub eax,4
@@ -1628,17 +1604,19 @@ print_dec:
     test al,al
     jz .done
     movzx ebx,al
-    mov eax,0 ; sys_putchar
+    mov eax,39      ; sys_putchar
     int 0x80
     inc edi
     jmp .print
 .done:
+
     pop edi
     pop edx
     pop ecx
     pop ebx
     pop eax
     ret
+
 
 ;-----------------------------------------------------
 ; Persistence layout: FS region starts at LBA 256.
@@ -2156,38 +2134,42 @@ tab_print_all_matches:
 ; - Building the interrupt handler phonebook -
 ; --------------------------------------------
 build_idt:
-    mov edi,idt_start
-    mov ecx,256
+    mov edi, idt_start
+    mov ecx, 256
 .fill:
     mov eax,isr_default
-    mov [edi],ax             ; low
-    mov word [edi+2],0x08    ; CODE_SEG 
+    mov [edi],ax                ; Offset low (0-15)
+    mov word [edi+2],0x08       ; CODE_SEG 
     mov byte [edi+4],0
-    mov byte [edi+5],10001110b
-    shr eax,16
-    mov [edi+6],ax           ; high
-    add edi,8
+    mov byte [edi+5],10001110b  ; Present, Ring 0, 32-bit Interrupt Gate
+    shr eax, 16
+    mov [edi+6],ax              ; Offset high (16-31)
+    add edi, 8
     loop .fill
 
-    mov eax,page_fault_isr
-    mov ebx,14
-    mov edi,idt_start
+    mov eax, page_fault_isr
+    mov ebx, 14                 ; Page Fault vector index
+    mov edi, idt_start
     call set_idt_entry
     ret
 
 set_idt_entry:
-    ; eax = handler address
-    ; ebx = entry index
-    ; edi = idt base
-
+    ; Input: eax = handler address, ebx = entry index, edi = idt base
+    push eax
+    push edx                    ; Preserve edx so we don't clobber caller data
+    
     mov edx, eax
-    mov word [edi+ebx*8+0],dx        ; offset low
-    mov word [edi+ebx*8+2],0x80  ; selector
-    mov byte [edi+ebx*8+4],0
-    mov byte [edi+ebx*8+5],10001110b 
-    shr edx,16
-    mov word [edi+ebx*8+6],dx        ; offset high
+    mov word [edi+ebx*8+0], dx  ; offset low
+    mov word [edi+ebx*8+2], 0x08 ; SELECTOR FIX: Changed from 0x80 to 0x08
+    mov byte [edi+ebx*8+4], 0
+    mov byte [edi+ebx*8+5], 10001110b
+    shr edx, 16
+    mov word [edi+ebx*8+6], dx  ; offset high
+    
+    pop edx
+    pop eax                     ; Restore registers
     ret
+
 
 page_fault_isr:
     cli
@@ -2749,7 +2731,7 @@ sys_rmdir:
     mov eax,-1
     ret
 
-sys_ps_info:
+xsys_ps_info:
     cmp ebx,0 ; Basic sanity check
     je .error
     push edx
@@ -2768,6 +2750,33 @@ sys_ps_info:
     mov eax,-1  ; error
     ret
 
+sys_ps_info:
+    cmp ebx,0               ; Basic sanity check 
+    je .error
+    push edx
+
+    ; +0 : Currently running task ID
+    mov edx,[current_task] 
+    mov [ebx+0],edx
+
+    ; +4, +8, +12 : Base Stack pointers for core tasks
+    mov edx,[task0_esp]
+    mov [ebx+4],edx
+    mov edx,[task1_esp]
+    mov [ebx+8],edx
+    mov edx,[task2_esp]
+    mov [ebx+12],edx
+
+    ; +16 : Dynamic entry slot (The address of the running shell command!)
+    mov edx,[exec_vbase]    ; Grab the active virtual base layout pointer
+    mov [ebx+16],edx        ; Store it into the 5th dword slot
+
+    pop edx
+    mov eax, 5              ; RETURN VALUE: Tell the binary we filled 5 slots!
+    ret
+.error:
+    mov eax,-1              ; error
+    ret
 ;EDI
 ;ESI
 ;EBP
@@ -3023,6 +3032,7 @@ plot_chr:
     mov [edi],ax
     popa
     ret
+
 
 cls_chr:
     pusha
@@ -3400,10 +3410,16 @@ exec_bin:
     mov eax,[exec_vbase]
     mov ebx,[exec_pages]
     call register_allocation
+    
+
+    mov [exec_shell],esp  ; cmd_exit:
     ; --- call binary entry point ---
     mov eax, [exec_vbase]
     call eax
    
+.cmd_exit:
+    ; after ret OR calls sys_exit ebx=return code
+    
     ; --- free pages after return ---
     mov eax,[exec_vbase]
     mov ebx,[exec_pages]
@@ -3449,130 +3465,35 @@ exec_bin:
 .silent:
     ret
 
+sys_exit:
+    ; ebx = exit status code 
+    mov esp,[exec_shell]
+    sti
+    jmp exec_bin.cmd_exit
+
+
 ;------------------------------------
 irq0:
-    pushad            
-
-    ; --- 1. MASTER TICK UPDATE (Run this immediately) ---
-    inc dword [tick_count]
-
-    ; --- 2. CLOCK MATCH MATH ---
-    mov eax, [tick_count]
-    xor edx, edx
-    mov ebx, 100            ; 100Hz base
-    div ebx
-    test edx, edx           ; Is remainder 0?
-    jnz .skip_epoch
-    inc dword [boot_epoch]  ; Exactly 1 second ticks!
-
-.skip_epoch:
-    test dword [on_off], 1
-    jnz .paused 
-    call bounce_step
-.paused:
-
-    inc dword [tick_div]
-    test dword [tick_div], 1
-    jnz .no_flag
-    mov byte [tick_flag], 1
-.no_flag:
-
-    ; Select next task round-robin
-    mov eax, [current_task]
-    inc eax
-    cmp eax, 3
-    jb .save
-    xor eax, eax
-
-.save:
-    ; Save current ESP into the active slot
-    cmp dword [current_task], 0
-    je .was0
-    cmp dword [current_task], 1
-    je .was1
-    mov [task2_esp], esp
-    jmp .load
-.was0:
-    mov [task0_esp], esp
-    jmp .load
-.was1:
-    mov [task1_esp], esp
-
-.load:
-    mov [current_task], eax
-    cmp eax, 0
-    je .run0
-    cmp eax, 1
-    je .run1
-    mov esp, [task2_esp]   
-    jmp .done
-.run0:
-    mov esp, [task0_esp]
-    jmp .done
-.run1:
-    mov esp, [task1_esp]
-
-.done:
-    ; Send End-Of-Interrupt to the Master PIC
-    mov al, 0x20
-    out 0x20, al
-
-    popad               
-    iretd          
-
-irq330:
     pushad
-    test dword [on_off],1
-    jnz  .paused 
-    call bounce_step
-.paused:
-
-    mov eax,[timer_ticks]
+    inc dword [tick_count]
+    mov eax,[tick_count]
     xor edx,edx
+    ;mov ebx,100
     mov ebx,[hz]
     div ebx
     test edx,edx
-    jnz .noinc
-    inc dword [boot_epoch] ; Smooth, reliable 1-second ticks!
-.noinc:
-
-    inc dword [tick_count]
-    inc dword [tick_div]
-    test dword [tick_div],1
-    jnz .no_flag
-    mov byte [tick_flag],1
-.no_flag:
-    mov eax,[current_task]
-    inc eax
-    cmp eax,3
-    jb .save
-    xor eax,eax        ; wrap back to 0
-.save:
-    ; save current esp into correct slot
-    cmp dword [current_task], 0
-    je .was0
-    cmp dword [current_task], 1
-    je .was1
-    mov [task2_esp], esp
-    jmp .load
-.was0:
-    mov [task0_esp], esp
-    jmp .load
-.was1:
-    mov [task1_esp], esp
-.load:
-    mov [current_task], eax
-    cmp eax,0
-    je .run0
-    cmp eax,1
-    je .run1
-    mov esp,[task2_esp]    ; found it 
-    jmp .done
-.run0:
-    mov esp,[task0_esp]
-    jmp .done
-.run1:
-    mov esp,[task1_esp]
+    jnz .skip_epoch
+    inc dword [boot_epoch]
+.skip_epoch:
+    mov ecx,[current_task]
+    mov [task_esps+ecx*4],esp  
+    inc ecx                    
+    cmp ecx,3
+    jb .set_next
+    xor ecx,ecx              
+.set_next:
+    mov [current_task],ecx     
+    mov esp,[task_esps+ecx*4]  
 .done:
     mov al, 0x20
     out 0x20, al
@@ -3737,29 +3658,26 @@ kbd_head     dd 0
 kbd_tail     dd 0
 ; kbd_buf in .bss
 
-;--- cmd ---
-out_mem   db "OUT OF MEMORY - KEEP DREAMING",13,0
-alloc_mem db "heap pointer  : 0x",0
-no_arg    db 13,'usage: alloc <bytes>',13,0
-poke_msg  db 13,"usage: poke <hex addr> <hex value>",13,0
-peek_msg  db 13,"usage: peek <hex addr>",13,0
-plot_msg  db 13,"usage: plot x y (0-79 x 0-24)" ,13,0   
-;freq_msg  db " Hz."
-hz        dd 100,0
-
+out_mem         db "OUT OF MEMORY - KEEP DREAMING",13,0
+alloc_mem       db "heap pointer  : 0x",0
+no_arg          db 13,'usage: alloc <bytes>',13,0
+poke_msg        db 13,"usage: poke <hex addr> <hex value>",13,0
+peek_msg        db 13,"usage: peek <hex addr>",13,0
+plot_msg        db 13,"usage: plot x y (0-79 x 0-24)" ,13,0   
 in_bytes        db " bytes free",13,0
 free_usage_msg  db 13,"usage: free <hex addr>",13,0
 free_ok_msg     db "memory released",13,0
 bad_free_msg    db "invalid allocation",13,0
+pf_msg          db 13,"PAGE FAULT",13,0
+pf_addr         db "ADDRESS: 0x",0
+command_nf_msg   db 13,"command not found",13,0
 
-pf_msg db 13,"PAGE FAULT",13,0
-pf_addr db "ADDRESS: 0x",0
-
+hz                     dd 100,0
 kernel_phys_start_var: dd 0
 kernel_phys_end_var:   dd 0
 
-boot_epoch dd 0   ; true system baseline clock
-month_days: db 31,28,31,30,31,30,31,31,30,31,30,31
+boot_epoch             dd 0   ; system baseline clock
+month_days:            db 31,28,31,30,31,30,31,31,30,31,30,31
 sec     dd 0
 min     dd 0
 hour    dd 0
@@ -3767,34 +3685,39 @@ day     dd 0
 month   dd 0
 year    dd 0
 dec_buf times 11 db 0
-sec_lbl db " seconds",0
 
 bin_prefix   db "/bin/",0
 exec_vbase   dd 0
 exec_pages   dd 0
+exec_shell   dd 0
 
-argc        dd 0
-argv        times 16 dd 0
+argc         dd 0
+argv times 16 dd 0
 
-cmd_len     dd 0
-cmd_exec    dd 0
+cmd_len      dd 0
+cmd_exec     dd 0
 ; cmd_buf in .bss
 
-command_nf_msg   db 13,"command not found",13,0
+section .data
+current_task:  dd 0
+task_esps:
+    task0_esp: dd 0
+    task1_esp: dd 0
+    task2_esp: dd 0
 
 hist_count  dd 0
 hist_index  dd 0
 ; hist_buf in .bss
 
 ;---- INTERRUPT DESC TABLE ----
-; idt_start / idt_end in .bss
+; idt_start/idt_end -> .bss
 idt_descriptor:
-    dw idt_end-idt_start-1
-    dd idt_start
+            dw idt_end-idt_start-1
+            dd idt_start
 
 ;---- SYSCALL TABLE  (index = eax at int 0x80) ----
 syscall_table:
-    dd sys_putchar       ; 0 : ebx = char
+    dd sys_exit          ; 0 : eax = return code
     dd sys_print         ; 1 : esi = string ptr
     dd sys_print_cr      ; 2 : esi = string ptr (CR aware)
     dd sys_newline       ; 3
@@ -3833,6 +3756,7 @@ syscall_table:
     dd sys_tick          ; 36: print heartbeats
     dd sys_plot          ; 37: set block at ecx edx 
     dd sys_epoch         ; 38: out: ebx = seconds 
+    dd sys_putchar       ; 39: ebx = char
 SYSCALL_COUNT equ ($-syscall_table)/4
 
 ;---- Keycode -> ASCII Convertion ----
@@ -3886,7 +3810,7 @@ cmd_table:
     dd freq_cmd
     db "epoch",0
     dd epoch_cmd
-    db 0          ; end of Devops cmds
+    db 0          ; end of internals
 
 ;---- in-kernel virtual filesystem ----
 %include "fs.inc"
@@ -3898,25 +3822,19 @@ alignb 16
 tab_match_count  resd 1
 tab_single_ptr   resd 1
 
-task0_esp    resd 1
-task1_esp    resd 1
-task2_esp    resd 1
-current_task resd 1
-timer_ticks  resd 1
-
 alignb 4
-kbd_buf      resb 256
-cmd_buf      resb 64
-hist_buf     resb 32*64
-dir_buf      resb 512
+kbd_buf          resb 256
+cmd_buf          resb 64
+hist_buf         resb 32*64
+dir_buf          resb 512
 
 ;---- VFS state ----
-cwd_buf      resb 128
-resolve_buf  resb 128
-path_buf     resb 128
-tmp_dst      resd 1
-tmp_left     resd 1
-persist_buf  resb 1536    ; 3 sectors: metadata + 1024 B content
+cwd_buf          resb 128
+resolve_buf      resb 128
+path_buf         resb 128
+tmp_dst          resd 1
+tmp_left         resd 1
+persist_buf      resb 1536    ; 3 sectors: metadata+1024 B content
 
 alignb 8
 idt_start:
@@ -3938,7 +3856,6 @@ task2_stack:
     resb 4096
 task2_stack_top:
 
-;-------------------------------
 
 ;---- STACK ----
 alignb 16

@@ -10,11 +10,10 @@ _start:
 
     mov eax,23              ; sys_stack_dump
     int 0x80
-
-    lea esi,[ebp+cr_lbl] 
-    mov eax,2               ; sys_print_cr
+    
+    mov eax,3               ; sys_newline
     int 0x80
-    xor eax,eax
-    ret
 
-cr_lbl: db 13,0
+    mov ebx,0          ; Return code 0 (Success)
+    mov eax,0          ; System call number 0 (sys_exit)
+    int 0x80           ; Trigger kernel interrupt
