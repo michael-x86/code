@@ -1199,6 +1199,177 @@ du_walk:
     ret
 
 
+; -----------------------------------------------------------------------------
+; disk_cmd — enumerate ATA drives on the primary and secondary channels
+;
+; Probes all four slots (primary/secondary × master/slave) using the
+; IDENTIFY command (0xEC). Prints the model name and capacity for each
+; present ATA drive; ATAPI devices and absent slots are noted.
+; -----------------------------------------------------------------------------
+disk_cmd:
+    pushad
+    mov byte [disk_busy], 1
+    call newline
+
+    mov esi, disk_slot_tbl          ; slot descriptor table
+
+.slot_loop:
+    mov ebp, [esi]                  ; port base (0 = end of table)
+    test ebp, ebp
+    jz  .all_done
+
+    ; --- Print slot label ("Primary   Master : ", etc.) ---------------------
+    push esi
+    mov  esi, [esi + 4]
+    call print
+    pop  esi
+
+    ; --- Select drive --------------------------------------------------------
+    movzx eax, byte [esi + 8]       ; al = drive select (0xE0 master, 0xF0 slave)
+    mov   dx, bp
+    add   dx, ATA_OFF_DRV_HEAD      ; port+6
+    out   dx, al
+
+    ; 400 ns stabilisation — 4 status reads
+    mov dx, bp
+    add dx, ATA_OFF_STATUS          ; port+7
+    in  al, dx
+    in  al, dx
+    in  al, dx
+    in  al, dx
+
+    ; --- Zero sector-count and LBA registers before IDENTIFY ----------------
+    mov  dx, bp
+    add  dx, ATA_OFF_SECT_CNT       ; port+2
+    xor  al, al
+    out  dx, al
+    mov  dx, bp
+    add  dx, ATA_OFF_LBA_LOW        ; port+3
+    out  dx, al
+    mov  dx, bp
+    add  dx, ATA_OFF_LBA_MID        ; port+4
+    out  dx, al
+    mov  dx, bp
+    add  dx, ATA_OFF_LBA_HIGH       ; port+5
+    out  dx, al
+
+    ; --- Send IDENTIFY command -----------------------------------------------
+    mov  dx, bp
+    add  dx, ATA_OFF_STATUS         ; port+7 (command register on write)
+    mov  al, ATA_CMD_IDENTIFY       ; 0xEC
+    out  dx, al
+
+    ; status 0x00 or 0xFF means the slot is empty (no device / floating bus)
+    in   al, dx
+    test al, al
+    jz   .absent
+    cmp  al, 0xFF
+    je   .absent
+
+    ; --- Wait for BSY to clear -----------------------------------------------
+    mov ecx, 100000
+.bsy_wait:
+    in   al, dx
+    test al, 0x80
+    jz   .bsy_done
+    dec  ecx
+    jnz  .bsy_wait
+    jmp  .absent
+.bsy_done:
+
+    ; --- Check for ATAPI (LBA_MID and/or LBA_HIGH non-zero after IDENTIFY) --
+    mov  dx, bp
+    add  dx, ATA_OFF_LBA_MID        ; port+4
+    in   al, dx
+    mov  ah, al
+    mov  dx, bp
+    add  dx, ATA_OFF_LBA_HIGH       ; port+5
+    in   al, dx
+    or   al, ah
+    jnz  .is_atapi
+
+    ; --- Wait for DRQ --------------------------------------------------------
+    mov  dx, bp
+    add  dx, ATA_OFF_STATUS         ; port+7
+    mov  ecx, 100000
+.drq_wait:
+    in   al, dx
+    test al, 0x08                   ; DRQ — drive has data ready
+    jnz  .do_read
+    test al, 0x01                   ; ERR
+    jnz  .absent
+    dec  ecx
+    jnz  .drq_wait
+    jmp  .absent
+
+    ; --- Read 256 words (512 bytes) of IDENTIFY data -------------------------
+.do_read:
+    mov  dx, bp                     ; data port = port base + ATA_OFF_DATA (0)
+    push esi
+    mov  edi, disk_identify_buf
+    mov  ecx, 256
+    rep  insw
+    pop  esi
+
+    ; --- Print model name: words 27-46 = bytes 54-93, byte-swapped per word --
+    ; ATA stores each word with the first char in the high byte, so in
+    ; little-endian memory: byte[n+1] = char[k], byte[n] = char[k+1].
+    push esi
+    mov  edi, disk_identify_buf + 54
+    mov  ecx, 20                    ; 20 words = 40 characters
+.model_loop:
+    mov  al, [edi + 1]              ; high byte → first character of the pair
+    call putchar
+    mov  al, [edi]                  ; low byte  → second character of the pair
+    call putchar
+    add  edi, 2
+    dec  ecx
+    jnz  .model_loop
+    pop  esi
+
+    ; --- Print size: words 60-61 (bytes 120-123) = 32-bit LBA28 sector count -
+    push esi
+    mov  al, ' '
+    call putchar
+    mov  eax, [disk_identify_buf + 120]
+    mov  edx, 512
+    mul  edx                        ; edx:eax = size in bytes
+    test edx, edx
+    jz   .size_ok
+    mov  eax, 0xFFFFFFFF            ; cap at ~4 GB on overflow
+.size_ok:
+    call print_human
+    pop  esi
+
+    call newline
+    add  esi, 12
+    jmp  .slot_loop
+
+.is_atapi:
+    push esi
+    mov  esi, disk_msg_atapi
+    call print
+    pop  esi
+    call newline
+    add  esi, 12
+    jmp  .slot_loop
+
+.absent:
+    push esi
+    mov  esi, disk_msg_absent
+    call print
+    pop  esi
+    call newline
+    add  esi, 12
+    jmp  .slot_loop
+
+.all_done:
+    call newline
+    mov byte [disk_busy], 0
+    popad
+    ret
+
+
 section .rodata
 
 ; Magic bytes that peek_cmd reads from.
@@ -1219,6 +1390,7 @@ help_me:
     db  "df    -  show filesystem disk space", 13
     db  "du    -  show directory space usage", 13
     db  "cd    -  change directory", 13
+    db  "disk  -  list connected ATA drives", 13
     db  "exit  -  shutdown", 13, 13, 0
 
 ; Register-dump labels, used by show_regs.
@@ -1280,6 +1452,21 @@ du_nf             db "du: no such file or directory", 0
 du_notdir         db "du: not a directory", 0
 ls_unknown_cols   db "?          ", 0
 
+; disk_cmd slot descriptors (12 bytes each): port_base, label_ptr, drive_select
+disk_slot_tbl:
+    dd  0x1F0, disk_pm_lbl, 0x000000E0  ; primary master
+    dd  0x1F0, disk_ps_lbl, 0x000000F0  ; primary slave
+    dd  0x170, disk_sm_lbl, 0x000000E0  ; secondary master
+    dd  0x170, disk_ss_lbl, 0x000000F0  ; secondary slave
+    dd  0                               ; terminator
+
+disk_pm_lbl     db "Primary   Master : ", 0
+disk_ps_lbl     db "Primary   Slave  : ", 0
+disk_sm_lbl     db "Secondary Master : ", 0
+disk_ss_lbl     db "Secondary Slave  : ", 0
+disk_msg_absent db "not present", 0
+disk_msg_atapi  db "ATAPI device", 0
+
 
 ; -----------------------------------------------------------------------------
 ; cmd_table — null-terminated list of built-in commands
@@ -1327,4 +1514,6 @@ cmd_table:
     dd  du_cmd
     db  "cd",    0
     dd  cd_cmd
+    db  "disk",  0
+    dd  disk_cmd
     db  0
