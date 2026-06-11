@@ -393,6 +393,8 @@ class X86Machine {
             return this.keyboard.read(port);
         } else if (port >= 0x1F0 && port <= 0x1F7) {
             return this.ata.readPrimary(port);
+        } else if (port >= 0x170 && port <= 0x177) {
+            return this.ata.readSecondary(port);
         } else if (port === 0x3F8) {
             if (this.serialRxBuffer.length > 0) return this.serialRxBuffer.shift();
             return 0;
@@ -1253,6 +1255,25 @@ class ATADisk {
         }
     }
     
+    writeSecondary(port, value) {
+        // Secondary channel — no disk attached; silently ignore writes
+    }
+
+    readSecondary(port) {
+        const reg = port - 0x170;
+        switch (reg) {
+            case 0: return 0;          // data
+            case 1: return 0;          // error
+            case 2: return 0;          // sector count
+            case 3: return 0;          // LBA low
+            case 4: return 0;          // LBA mid
+            case 5: return 0;          // LBA high
+            case 6: return 0;          // drive/head
+            case 7: return 0;          // status (no device)
+            default: return 0;
+        }
+    }
+
     readPrimary(port) {
         const reg = port - 0x1F0;
         switch (reg) {
