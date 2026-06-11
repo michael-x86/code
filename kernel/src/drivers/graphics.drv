@@ -187,7 +187,7 @@ vbe_set_mode:
     call vbe_write
 
     mov ax, VBE_DISPI_INDEX_ENABLE
-    mov bx, VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED | VBE_DISPI_8BIT_DAC_ENABLED
+    mov bx, VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED
     call vbe_write
 
     popad
@@ -362,6 +362,42 @@ gfx_enter:
 
 
 ; -----------------------------------------------------------------------------
+; gfx_restore_text_palette — restore the first 16 DAC entries to the standard
+; VGA text-mode colours (overwritten by gfx_load_palette's 3-3-2 palette).
+; -----------------------------------------------------------------------------
+align 4
+text_palette:
+    db  0,  0,  0    ;  0 black
+    db  0,  0, 42    ;  1 blue
+    db  0, 42,  0    ;  2 green
+    db  0, 42, 42    ;  3 cyan
+    db 42,  0,  0    ;  4 red
+    db 42,  0, 42    ;  5 magenta
+    db 42, 21,  0    ;  6 brown
+    db 42, 42, 42    ;  7 white
+    db 21, 21, 21    ;  8 gray
+    db 21, 21, 63    ;  9 light blue
+    db 21, 63, 21    ; 10 light green
+    db 21, 63, 63    ; 11 light cyan
+    db 63, 21, 21    ; 12 light red
+    db 63, 21, 63    ; 13 light magenta
+    db 63, 63, 21    ; 14 yellow
+    db 63, 63, 63    ; 15 bright white
+
+gfx_restore_text_palette:
+    pushad
+    mov dx, 0x3C8
+    xor al, al
+    out dx, al                     ; DAC write index = 0
+    mov dx, 0x3C9
+    mov esi, text_palette
+    mov ecx, 16                    ; restore 16 colours × 3 bytes
+    rep outsb
+    popad
+    ret
+
+
+; -----------------------------------------------------------------------------
 ; gfx_exit — restore text mode 03h, reload the font, clear the text screen
 ; -----------------------------------------------------------------------------
 gfx_exit:
@@ -369,6 +405,7 @@ gfx_exit:
     call vbe_disable
     mov esi, text_regs
     call vga_write_regs
+    call gfx_restore_text_palette
     call gfx_load_font
     mov byte [gfx_mode], 0
     call cls

@@ -84,9 +84,14 @@ echo "[2/6] Generating filesystem image..."
 cd "$BUILD_DIR"
 python3 gen_fs.py "$BUILD_DIR" fs.bin | sed 's/^/  /'
 
+# Boot splash: convert voss-haas.png to raw 640x400 8-bit indexed pixel data
+echo "[+ ] Converting boot splash image..."
+python3 "${PROJECT_DIR}/build/convert_splash.py" "${PROJECT_DIR}"
+
 echo "[3/6] Assembling kernel..."
 nasm -f bin "$KERNEL_ASM" -o "${BUILD_DIR}/kernel.bin" \
     -l "${BUILD_DIR}/kernel.lst" \
+    -I "${BUILD_DIR}/" \
     -I "${KERNEL_INC_DIR}/" \
     -I "${KERNEL_INC_DIR}/drivers/" \
     -I "${PROJECT_DIR}/kernel/src/" \

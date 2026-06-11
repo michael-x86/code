@@ -475,4 +475,4 @@ reboot:
 
 section .rodata
 
-sys_msg  db  "ONO-SENDAI HosakaONE", 0
+sys_msg  db  "VOSS-HAAS INDUSTRIES S.A.", 0

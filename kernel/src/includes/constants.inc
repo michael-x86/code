@@ -91,6 +91,13 @@ SCROLLBACK_MAX     equ 50
 SCREEN_SIZE        equ VGA_COLS * VGA_ROWS * 2   ; 4000 bytes
 
 
+; --- Boot splash screen --------------------------------------------------------
+; Number of PIT ticks (at 100 Hz) to display the VOSS-HAAS boot splash image
+; before showing the banner and starting the shell.  300 ticks = 3 seconds.
+; Set to 0 to skip the splash entirely.
+SPLASH_DELAY       equ 300
+
+
 ; --- Graphics framebuffer -----------------------------------------------------
 ; QEMU/std VGA exposes a Bochs VBE dispi linear framebuffer. We use the
 ; 640x400x256 mode and map its LFB at a fixed higher-half alias.

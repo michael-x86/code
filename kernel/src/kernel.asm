@@ -159,6 +159,10 @@ kernel_main:
     call gfx_save_font
     call mouse_init
 
+    ; Boot splash: switch to VBE graphics, show the VOSS-HAAS image for
+    ; SPLASH_DELAY ticks, then return to text mode.
+    call splash_display
+
     ; Initialize cwd_buf to "/".
     mov edi, cwd_buf
     mov ecx, CWD_BUF_SIZE
@@ -229,6 +233,7 @@ kernel_main:
 %include "syscall.inc"
 
 %include "drivers/graphics.drv"
+%include "splash.inc"
 
 %include "task.inc"
 %include "exec.inc"
