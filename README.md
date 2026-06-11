@@ -31,8 +31,8 @@ flags          : learning infiltration phased-plasma
   
 - **Task Scheduling**: Three round-robin tasks driven by IRQ0 (PIT at configurable frequency)
   - **Task 0**: Interactive shell (polling-based input)
-  - **Task 1**: Ticker task (half-speed tick generator)
-  - **Task 2**: Bounce animation (bouncing sprite on VGA)
+  - **Task 1**: Ticker task (tick generator)
+  - **Task 2**: Bounce animation (bouncing)
 
 - **VGA Text Shell** (80×25)
   - Line history with arrow keys (up/down)
@@ -50,7 +50,7 @@ flags          : learning infiltration phased-plasma
   - Persistence to disk via **PIO ATA** (LBA 256+) — files survive reboot AND kernel rebuilds
   - Build script automatically backs up and restores the FS region
 
-- **Linux-Style int 0x80 Syscall Interface** (37+ syscalls)
+- **Linux-Style int 0x80 Syscall Interface** (39+ syscalls)
   - Text output: `putchar`, `print`, `print_n`, `newline`, `cls`
   - Input: `get_key`, `get_tick`
   - Filesystem: `stat`, `list_dir`, `create`, `write`, `unlink`, `mkdir`, `rmdir`
@@ -66,7 +66,7 @@ flags          : learning infiltration phased-plasma
   - Communicate with kernel only via `int 0x80`
 
 - **Minimal Modal vi Editor**
-  - `hjkl` movement, `i` insert, `ESC` exit insert, `x` delete, `w` save, `q` quit
+  - `löäp` movement, `i` insert, `ESC` exit insert, `x` delete, `w` save, `q` quit
   - Single-buffer editing (no scroll; 24-line display limit)
 
 ## Quick Start
@@ -150,7 +150,6 @@ Requires: `nasm`, `python3`, `qemu-system-i386`
 - Maximum 4 KB (rest zero-filled)
 - Compiled into `bin/<name>` at build time
 - Loaded into memory on first invocation, executed with `call` gate
-- Exit via `ret` (returns to shell)
 
 ## File Layout
 
@@ -171,8 +170,6 @@ Requires: `nasm`, `python3`, `qemu-system-i386`
 └── etc/                     # content mirror (host-side)
 ```
 
-Anything in `bin/`, `proc/`, `var/log/`, `etc/` on the host is mirrored into the OS at build time. Changes are picked up on rebuild.
-
 ## Adding a Program
 
 1. Write `commands/<name>.asm`:
@@ -183,7 +180,8 @@ Anything in `bin/`, `proc/`, `var/log/`, `etc/` on the host is mirrored into the
    ; your code here
    ; use only int 0x80 to communicate with kernel
    
-   ret
+   mov eax,0
+   int 0x80
    ```
 
 2. Append `<name>` to the `COMMANDS=(…)` array in the `asm` script.
@@ -200,7 +198,7 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 
 | # | Name | Args | Returns |
 |----|------|------|---------|
-| 0 | putchar | ebx = char | 0 |
+| 0 | exit |  | eax |
 | 1 | print | esi = ptr (null-term) | 0 |
 | 2 | print_cr | esi = ptr (CR=13 → newline) | 0 |
 | 3 | newline | — | 0 |
@@ -238,6 +236,8 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | 35 | hertz | — | print CPU Hz in banner |
 | 36 | tick | — | print heartbeat tick |
 | 37 | plot | ebx = x, ecx = y | plot at (x, y) on 80×25 grid |
+| 38 | epoch |                 | ebx=seconds |
+| 39 | putchar | ebx = char | print char|
 
 ## Memory Map (After Paging Active)
 
@@ -256,11 +256,8 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | Command | Description |
 |---------|-------------|
 | `heap` | show allocated memory pointers |
-| `exit` | shutdown kernel |
-| `help` | print help |
-| `dump` | dump stack + registers |
-| `ps` | snapshot of current processes |
-
+| `frequency` | set/reset frequency |
+| `epoch`     | print epoch time |
 ## Userland Programs (`/bin/`)
 
 | Program | Description |
