@@ -21,7 +21,7 @@ warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 fail() { echo -e "${RED}[✗]${NC} $1"; }
 info() { echo -e "${CYAN}[i]${NC} $1"; }
 
-# ── Argument parsing ──────────────────────────────────────────────
+# ── Argument parsing ─────────────────────────────────────────────
 DO_BUILD=false
 DO_RUN=false
 DO_DEBUG=false
