@@ -25,7 +25,7 @@ SPARE     = 16   # free slots for runtime-created files
 default_dirs = ["/", "/bin", "/proc", "/var", "/var/log", "/etc"]
 scan = [("bin", "exec"), ("proc", "file"), ("var/log", "file"), ("etc","file")]
 
-entries = []   # (vpath, kind, host_path|None)
+entries = []   
 for d in default_dirs:
     entries.append((d, "dir", None))
 
