@@ -53,9 +53,9 @@ flags          : learning infiltration phased-plasma
 - **Linux-Style int 0x80 Syscall Interface** (39+ syscalls)
   - Text output: `putchar`, `print`, `print_n`, `newline`, `cls`
   - Input: `get_key`, `get_tick`
-  - Filesystem: `stat`, `list_dir`, `create`, `write`, `unlink`, `mkdir`, `rmdir`
+  - Filesystem: `stat`, `create`, `write`, `unlink`, `mkdir`, `rmdir`
   - Memory: `alloc`, `dealloc`, `peek`, `poke`, `read_mem`
-  - Process: `getcwd`, `chdir`, `get_arg`, `ps`, `dump`
+  - Process: `getcwd`, `chdir`, `get_arg`, `ps`, `regdump`
   - Utilities: `hex2int`, `bin2hex`, `asc2int`, `memdump`, `plot`
   - Display: `print_hex`, `print_int`, `banner`, `tick`, `hertz`, `bounce`
   - System: `shutdown`
@@ -219,7 +219,7 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | 20 | mkdir | esi = path | 0 / -1 |
 | 21 | rmdir | esi = path | 0 / -1 |
 | 22 | ps | — | current processes |
-| 23 | dump | — | stack and registers |
+| 23 | regdump | — | stack and registers |
 | 24 | alloc | ecx = bytes (+4096) | ptr → heap memory |
 | 25 | dealloc | ebx = ptr | 0 / -1 |
 | 26 | peek | ebx = addr | dword at [addr] |
