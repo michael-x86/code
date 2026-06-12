@@ -228,7 +228,7 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | 29 | banner | — | print banner |
 | 30 | bounce | — | toggle bounce animation |
 | 31 | bin2hex | filename  | out: HEX |
-| 32 | memdump | ebx = addr, ecx = bytes | print memory |
+| 32 | memdump | esi = addr | out: 64 bytes  |
 | 33 | hexbyte | ebx = byte | print BYTE as hex |
 | 34 | asc2int | esi → string | eax = integer (atoi) |
 | 35 | hertz | — | print CPU Hz in banner |
