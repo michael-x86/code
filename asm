@@ -6,9 +6,9 @@ KERNEL_ASM="kernel.asm"
 IMG="os.img"
 
 # Programs to compile
-COMMANDS=(bounce cursor plot cls up exit help alloc dealloc rm
-          poke peek ps vi pwd ls cd ping cat touch write verify
-          rm rmdir mkdir cp mv bindump regdump memdump)
+COMMANDS=(plot up memdump regdump bin2hex bounce vi pi
+          poke peek pwd ls cd cat touch write verify cls
+          exit help rm rmdir mkdir cp mv alloc dealloc)
 
 RUN_QEMU=false
 FULLSCREEN=false
@@ -32,7 +32,6 @@ EOF
     esac
 done
 
-rm -f bin/* 
 mkdir -p etc bin proc var/log
 echo "root:x:0:0:root:/root:/bin/bash" > etc/passwd
 echo "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin" >> etc/passwd

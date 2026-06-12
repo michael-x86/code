@@ -11,4 +11,8 @@ _start:
     mov eax,30
     int 0x80   
     popad
-    ret
+    mov ebx,0          ; Return code 0 (Success)
+    mov eax,0          ; System call number 0 (sys_exit)
+    int 0x80           ; Trigger kernel interrupt
+
+    ;ret

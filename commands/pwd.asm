@@ -4,14 +4,14 @@
 
 
 _start:
-    mov edi, buf
-    mov eax, 11              ; sys_getcwd(edi)
+    mov edi,buf
+    mov eax,11              ; sys_getcwd(edi)
     int 0x80
 
-    mov esi, buf
-    mov eax, 1               ; sys_print
+    mov esi,buf
+    mov eax,1               ; sys_print
     int 0x80
-    mov eax, 3               ; sys_newline
+    mov eax,3               ; sys_newline
     int 0x80
     ret
 

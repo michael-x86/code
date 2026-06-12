@@ -20,7 +20,6 @@ _start:
     int 0x80
     cmp eax, -1
     je .usage
-
     ; --- Stat the file ---
     lea esi, [ebp + filename_buf]
     lea edi, [ebp + info_buf]
@@ -92,7 +91,6 @@ _start:
     jz .loop
     dec eax
     mov [ebp + cursor_var], eax
-
     jmp .loop
 .kl:
     mov eax, [ebp + cursor_var]
