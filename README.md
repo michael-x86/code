@@ -7,7 +7,29 @@ If you want to see what the machine is actually doing — instruction by instruc
 A small 32-bit operating system written entirely in NASM assembly. Boots from BIOS, switches to protected mode with paging, runs three round-robin tasks driven by the PIT, and gives you a green-on-black VGA shell with persistent filesystem.
 
 Built from scratch on Linux with no libc, no runtime, and no external abstractions.
+```
+                ┌──────────────────────────────────────────────────┐
+                │          Higher-Half Kernel Space (0xC0000000+)  │
+                └─────────────────────────┬────────────────────────┘
+                                          │
+             ┌────────────────────────────┼────────────────────────────┐
+             ▼                            ▼                            ▼
+   ┌──────────────────────┐     ┌──────────────────────┐     ┌──────────────────────┐
+   │  Task 0 (OS Shell)   │     │ Task 1 (Timekeeper)  │     │ Task 2 (Background)  │
+   │  • Interactive CLI   │     │  • 100Hz PIT Tick    │     │  • Bouncing Sprite   │
+   │  • Dynamic Binary    │     │  • Track Boot Epoch  │     │  • Independent State │
+   │    Execution Engine  │     │  • Flip Sync Flags   │     │    Execution Loop    │
+   └──────────┬───────────┘     └──────────┬───────────┘     └──────────┬───────────┘
+              │                            │                            │
+              └────────────────────────────┼────────────────────────────┘
+                                           │
+                                           ▼
+                                ┌──────────────────────┐
+                                │ Array-Based TCB /    │
+                                │   Stack Swapper      │
+                                └──────────────────────┘
 
+```
 ```
 $ ls
 bin/  proc/  var/  etc/
