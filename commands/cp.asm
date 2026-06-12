@@ -2,54 +2,60 @@
 [org 0x00000000]
 
 _start:
-    mov ebx, 1
-    mov edi, src
-    mov eax, 14
+    call .get_base
+.get_base:
+    pop ebp
+    sub ebp,.get_base
+
+    mov ebx,1
+    mov edi,src
+    mov eax,14
     int 0x80
-    cmp eax, -1
+    cmp eax,-1
     je .usage
 
-    mov ebx, 2
-    mov edi, dst
-    mov eax, 14
+    mov ebx,2
+    mov edi,dst
+    mov eax,14
     int 0x80
-    cmp eax, -1
+    cmp eax,-1
     je .usage
 
     ; stat src
-    mov esi, src
-    mov edi, src_stat
-    mov eax, 15
+    mov esi,src
+    mov edi,src_stat
+    mov eax,15
     int 0x80
-    cmp eax, -1
+    cmp eax,-1
     je .src_noent
-    cmp dword [src_stat], 1     ; must be regular file
+    cmp dword [src_stat],1     ; must be regular file
     jne .src_notfile
 
-    ; create dst (fails if exists â€” intentional, like cp without -f)
-    mov esi, dst
-    mov eax, 17
+    ; create dst (fails if exists - intentional, like cp without -f)
+    mov esi,dst
+    mov eax,17
     int 0x80
-    cmp eax, -1
+    cmp eax,-1
     je .dst_err
-    ; src_stat+4 = data pointer (kernel virt addr of content buffer)
+    ; src_stat+4 = data pointer 
     ; src_stat+8 = size
-    mov esi, src
-    mov ebx, [src_stat + 4]    ; data ptr from stat
-    mov ecx, [src_stat + 8]    ; size
+    mov esi,src
+    mov ebx,[src_stat + 4]    ; data ptr from stat
+    mov ecx,[src_stat + 8]    ; size
     test ecx, ecx
-    jz .done                    ; empty file â€” create was enough
+    jz .done                   ; empty file - create was enough
 
-    mov eax, 18                 ; sys_write(dst, src_data_ptr, size)
-    mov esi, dst
+    mov eax,18                 ; sys_write(dst, src_data_ptr, size)
+    mov esi,dst
     int 0x80
-    cmp eax, -1
+    cmp eax,-1
     jne .done
 
-    mov esi, err_write
-    mov eax, 2
+    mov esi,err_write
+    mov eax,2
     int 0x80
-    ret
+    mov eax,0
+    int 0x80
 
 .src_noent:
     mov esi, err_src_noent

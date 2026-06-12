@@ -3718,7 +3718,7 @@ syscall_table:
     dd sys_dealloc       ; 25: in = <page ptr> 
     dd sys_peek          ; 26: in = <address> 
     dd sys_poke          ; 27: in = <address> <value> 
-    dd sys_hex2int       ; 28: in = esi->string out=eax
+    dd sys_hex2int       ; 28: in = esi out = eax
     dd sys_banner        ; 29: print banner
     dd sys_bounce        ; 30: funtime
     dd sys_bin2hex       ; 31: in = /bin/file out=hex

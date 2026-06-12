@@ -7,10 +7,7 @@ _start:
     pop ebp           
     sub ebp,.get_base     
 
-    mov eax,26              
+    mov eax,26         ; peek 
     int 0x80
-    mov eax,28              
+    mov eax,0          ; exit   
     int 0x80
-    mov eax,2           
-    int 0x80
-    ret

@@ -11,7 +11,4 @@ _start:
     
     mov eax,24               ; sys_alloc
     int 0x80
-    mov ebx,0          ; Return code 0 (Success)
-    mov eax,0          ; System call number 0 (sys_exit)
-    int 0x80           ; Trigger kernel interrupt
-
+    ret

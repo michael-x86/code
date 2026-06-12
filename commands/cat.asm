@@ -1,9 +1,13 @@
-; cat - print file contents.  usage:  cat <path>
 [bits 32]
 [org 0x00000000]            ; Base is relative to whatever exec_bin allocates
 
 
 _start:
+    call .get_base
+.get_base:
+    pop ebp
+    sub ebp,.get_base
+
     mov ebx,1
     mov edi,arg
     mov eax,14              ; sys_get_arg
@@ -15,10 +19,10 @@ _start:
     mov edi,info
     mov eax,15              ; sys_stat -> info: dword type, data, size
     int 0x80
-    cmp eax, -1
+    cmp eax,-1
     je .nf
 
-    cmp dword [info],0      ; type 0 = directory
+    cmp dword [info], 0      ; type 0 = directory
     je .isdir
 
     mov esi,[info+4]
@@ -27,7 +31,6 @@ _start:
     jz .empty
     mov eax,16              ; sys_print_n
     int 0x80
-    ; ensure cursor sits at start of next line if file didn't end with \n
     mov eax,3
     int 0x80
     ret

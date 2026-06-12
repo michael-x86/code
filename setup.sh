@@ -21,7 +21,7 @@ warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 fail() { echo -e "${RED}[✗]${NC} $1"; }
 info() { echo -e "${CYAN}[i]${NC} $1"; }
 
-# ── Argument parsing ─────────────────────────────────────────────
+# ── Argument parsing ──────────────────────────────────────────────
 DO_BUILD=false
 DO_RUN=false
 DO_DEBUG=false
@@ -104,7 +104,7 @@ info "NASM version: $NASM_VERSION"
 # ── 3. Scaffold directory structure ──────────────────────────────
 info "Scaffolding directory structure..."
 
-DIRS=(commands kernel)
+DIRS=(commands)
 for d in "${DIRS[@]}"; do
     if [[ ! -d "$PROJECT_DIR/$d" ]]; then
         mkdir -p "$PROJECT_DIR/$d"
@@ -162,48 +162,17 @@ echo ""
 
 if [[ "$ALL_PRESENT" == false ]]; then
     fail "Some key files are missing."
-    echo "  Expected: asm (root), build/gen_fs.py,"
-    echo "             kernel/bootloader.asm, kernel/kernel.asm"
+    echo "  Expected: asm gen_fs.py,"
+    echo "  bootloader.asm, kernel.asm"
     exit 1
 fi
 
 # ── 5. Check for userland command sources ────────────────────────
 info "Checking userland command sources..."
 
-COMMANDS=(ps pwd ls cd ping cat touch write rm rmdir mkdir cp mv)
-FOUND=0
-MISSING_CMDS=()
-for cmd in "${COMMANDS[@]}"; do
-    if [[ -f "$PROJECT_DIR/commands/${cmd}.asm" ]]; then
-        FOUND=$((FOUND + 1))
-    else
-        MISSING_CMDS+=("$cmd")
-    fi
-done
-
-ok "Found $FOUND/${#COMMANDS[@]} command sources in commands/"
-if [[ ${#MISSING_CMDS[@]} -gt 0 ]]; then
-    warn "Missing commands: ${MISSING_CMDS[*]}"
-fi
-
 echo ""
 
-# ── 6. Check content directories (inside build/) ─────────────────
-info "Checking content directories..."
-
-CONTENT_DIRS=(proc etc var/log)
-for d in "${CONTENT_DIRS[@]}"; do
-    COUNT=$(find "$PROJECT_DIR/build/$d" -maxdepth 1 -type f 2>/dev/null | wc -l)
-    if [[ $COUNT -gt 0 ]]; then
-        ok "build/$d/  ($COUNT file(s))"
-    else
-        warn "build/$d/  (empty — the filesystem will have no content here)"
-    fi
-done
-
-echo ""
-
-# ── 7. Summary ───────────────────────────────────────────────────
+# ── 6. Summary ───────────────────────────────────────────────────
 echo "═══════════════════════════════════════════"
 ok "Setup complete!"
 echo "═══════════════════════════════════════════"
@@ -220,7 +189,7 @@ if [[ "$DO_BUILD" == false ]]; then
     echo ""
 fi
 
-# ── 8. Optional: build ───────────────────────────────────────────
+# ── 7. Optional: build ───────────────────────────────────────────
 if [[ "$DO_BUILD" == true ]]; then
     info "Building the kernel..."
     echo ""
@@ -237,7 +206,7 @@ if [[ "$DO_BUILD" == true ]]; then
     echo ""
 fi
 
-# ── 9. Optional: run in QEMU ─────────────────────────────────────
+# ── 8. Optional: run in QEMU ─────────────────────────────────────
 if [[ "$DO_RUN" == true ]]; then
     info "Launching in QEMU (windowed)..."
     echo ""
