@@ -6,9 +6,9 @@ KERNEL_ASM="kernel.asm"
 IMG="os.img"
 
 # Programs to compile
-COMMANDS=(plot up memdump regdump bin2hex bounce vi pi
-          poke peek pwd ls cd cat touch write verify cls
-          exit help rm rmdir mkdir cp mv alloc dealloc)
+COMMANDS=(plot up memdump bounce cls exit help ps vi
+          poke peek pwd ls cd cat touch write verify
+          rm rmdir mkdir cp mv bin2hex alloc dealloc)
 
 RUN_QEMU=false
 FULLSCREEN=false
@@ -31,6 +31,9 @@ EOF
         *) echo "Unknown option: $1"; exit 1;;
     esac
 done
+
+echo "rm -f bin/*"
+rm -f  bin/*
 
 mkdir -p etc bin proc var/log
 echo "root:x:0:0:root:/root:/bin/bash" > etc/passwd
@@ -67,6 +70,7 @@ echo "2026-05-18T19:41:00 SunOS SysV[1]: Starting There-can-be-only-one...
 2026-05-18T19:41:20 SunOS Macleod-[1592]: [SysV] Successfully activated" > var/log/syslog
 echo "[1/6] Building commands..."
 for p in "${COMMANDS[@]}"; do
+    cntr=$((cntr + 1))
     src="./commands/${p}.asm"
     #echo "$src"
     out="bin/${p}"
@@ -82,6 +86,10 @@ for p in "${COMMANDS[@]}"; do
     fi
     echo "  + bin/$p ($sz bytes)"
 done
+
+if [ "${#COMMANDS[@]}" -ne "$cntr" ]; then
+  echo "Missing commands"
+fi
 
 echo "[2/6] Scanning filesystem (bin/ proc/ var/log/ ..."
 python3 gen_fs.py . fs.inc | sed 's/^/  /'
@@ -127,9 +135,11 @@ fi
 echo ""
 echo "Build complete: $IMG ($(stat -c%s "$IMG") bytes)"
 echo ""
+echo "KERNEL_SECTORS equ $KERNEL_SECTORS -> bootloader.asm"
+echo ""
 rm -f kernel.bin bootloader.bin
 rm -f  fs.inc
-rm -rf var proc etc/
+rm -rf var proc etc
 if [[ "$RUN_QEMU" == true ]]; then
     QEMU_ARGS=(
         -drive format=raw,file="$IMG",index=0,if=ide
