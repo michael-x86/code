@@ -192,53 +192,6 @@ Requires: `nasm`, `python3`, `qemu-system-i386`
 
 ## int 0x80 Syscall Table
 
-<<<<<<< HEAD
-| #  | name      | args                       | returns                          |
-|----|-----------|----------------------------|----------------------------------|
-| 0  | putchar   | ebx = char                 | 0                                |
-| 1  | print     | esi = ptr (null-term)      | 0                                |
-| 2  | print_cr  | esi = ptr (CR=13 → newline)| 0                                |
-| 3  | newline   | —                          | 0                                |
-| 4  | cls       | —                          | Cleared VGA buffer               |
-| 5  | print_hex | ebx                        | 0                                |
-| 6  | print_int | ebx (decimal)              | 0                                |
-| 7  | get_key   | —                          | ASCII (0 if empty)               |
-| 8  | get_tick  | —                          | PIT tick count (100 Hz)          |
-| 9  | shutdown  | —                          | (does not return)                |
-| 10 | read_mem  | ebx = addr                 | dword at [addr]                  |
-| 11 | getcwd    | edi = dst                  | 0                                |
-| 12 | chdir     | esi = path                 | 0 / -1                           |
-| 13 | list_dir  | ebx = idx, edi = dst       | type / -1 (writes basename)      |
-| 14 | get_arg   | ebx = idx, edi = dst       | 0 / -1 (writes argv[i])          |
-| 15 | stat      | esi = path, edi = info(12B)| 0 / -1                           |
-| 16 | print_n   | esi = ptr, ecx = n         | 0 (`\n`→newline, `\t`→space)     |
-| 17 | create    | esi = path                 | 0 / -1                           |
-| 18 | write     | esi = path, ebx = buf      | 0 / -1                           |
-| 19 | unlink    | esi = path                 | 0 / -1                           |
-| 20 | mkdir     | esi = path                 | 0 / -1                           |
-| 21 | rmdir     | esi = path                 | 0 / -1                           |
-| 22 | ps_info   |                            |                                  |
-| 23 | stack_dump|                            |                                  |
-| 24 | alloc     |                            | <bytes> -> page ptr              |
-| 25 | dealloc   |                            | <page ptr>                       |
-| 26 | peek      |                            | <address>                        |
-| 27 | poke      |                            | <address> <value>                |
-| 28 | hex2int   |                            | esi->string out=eax              |
-| 29 | banner    |                            | print banner                     |
-| 30 | bounce    |                            | C64 oldie                        |
-| 31 | bin2hex   |                            | /bin/file out=hex                |
-| 32 | mem_dump  |                            | esi -> address                   |
-| 33 | hex_byte  |                            | print hexbyte                    |
-| 34 | empty     |                            | not in use                       |
-| 35 | hertz     |                            | print current hertz              |
-| 36 | tick      |                            | print heartbeats                 |
-| 37 | plot      |                            | put a block at ecx edx           |
-| 38 | atoi      |                            | string=esi integer=eax           |
-Syscalls run with interrupts off (interrupt gate), so the PIT cannot preempt them.
-=======
-`eax` = syscall number, arguments in `ebx/ecx/edx/esi/edi`, return in `eax`. Invalid syscall → `-1`.
->>>>>>> 7c89c844afb2de76ae4cc52a8e2b7c6e13016d33
-
 Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 
 | # | Name | Args | Returns |
