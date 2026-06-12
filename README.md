@@ -249,7 +249,7 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | 28 | hex2int | esi → string | eax = integer |
 | 29 | banner | — | print banner |
 | 30 | bounce | — | toggle bounce animation |
-| 31 | bin2hex | filename  | out: HEX |
+| 31 | bin2hex | eax = integer  | out: HEX |
 | 32 | memdump | esi = addr | out: 64 bytes  |
 | 33 | hexbyte | ebx = byte | print BYTE as hex |
 | 34 | asc2int | esi → string | eax = integer (atoi) |
