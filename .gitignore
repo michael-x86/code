@@ -1,6 +1,0 @@
-os.img
-bin/*
-var
-var/log
-proc
-etc
