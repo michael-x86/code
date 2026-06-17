@@ -4,6 +4,11 @@
 
 
 _start:
+    call .get_base
+.get_base:
+    pop ebp                 ; ebp = absolute runtime address of .get_base
+    sub ebp, .get_base      ; ebp = runtime delta address
+
     mov edi, buf
     mov eax, 11              ; sys_getcwd(edi)
     int 0x80
