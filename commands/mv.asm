@@ -7,7 +7,8 @@ _start:
 .get_base:
     pop ebp                 ; ebp = absolute runtime address of .get_base
     sub ebp, .get_base      ; ebp = runtime delta address
-
+    
+    mov ebx, 1
     mov edi, src
     mov eax, 14
     int 0x80
