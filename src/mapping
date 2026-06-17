@@ -1,0 +1,106 @@
+higher_half:
+    ; Paging is now active!
+    ; We are now in virtual memory space.
+    ; (Aren't we living in a virtual reality anyway?)
+
+    mov ebp,[esp+32]
+    lea eax,[start+ebp]
+    mov [kernel_phys_start_var],eax
+    lea eax,[page_bitmap+32768+ebp]
+    mov [kernel_phys_end_var],eax
+
+    call reserve_kernel_pages
+
+    popad
+    add esp,4
+    mov esp,stack_top
+    mov ebp,esp
+    jmp kernel_main
+
+; -----------------------------------------
+; page directory entries
+; -----------------------------------------
+page_mapping:
+    lea edi,[page_directory+ebp]
+    xor eax,eax
+    mov ecx,1024
+.clear_pd:
+    mov [edi],eax
+    add edi,4
+    loop .clear_pd
+
+; -----------------------------------------
+; kernel_low_page_table
+; physical 0x00400000 - 0x007FFFFF
+; -----------------------------------------
+    lea edi,[kernel_low_page_table+ebp]
+    mov eax,0x00400000
+    mov ecx,1024
+.fill_kernel:
+    mov ebx,eax
+    or ebx,3
+    mov [edi],ebx
+    add eax,0x1000
+    add edi,4
+    loop .fill_kernel
+
+; ------------------------------------------
+; identity map first 4MB
+; ------------------------------------------
+    lea edi,[identity_page_table+ebp]
+    xor ebx,ebx
+    mov ecx,1024
+.make_identity:
+    mov eax,ebx
+    or eax,3
+    mov [edi],eax
+    add ebx,4096
+    add edi,4
+    loop .make_identity
+
+; ------------------------------------------
+; heap_page_table_0
+; physical 0x00800000-0x00BFFFFF
+; ------------------------------------------
+    lea edi,[heap_page_table_0+ebp]
+    mov eax,0x00800000
+    mov ecx,1024
+.fill_heap0:
+    mov ebx,eax
+    or ebx,3
+    mov [edi],ebx
+    add eax,4096
+    add edi,4
+    loop .fill_heap0
+
+; ------------------------------------------
+; heap_page_table_1
+; physical 0x00C00000-0x00FFFFFF
+; ------------------------------------------
+    lea edi,[heap_page_table_1+ebp]
+    mov eax,0x00C00000
+    mov ecx,1024
+.fill_heap1:
+    mov ebx,eax
+    or ebx,3
+    mov [edi],ebx
+    add eax,4096
+    add edi,4
+    loop .fill_heap1
+
+; ------------------------------------------
+; heap_page_table_2
+; physical 0x01000000-0x013FFFFF
+; ------------------------------------------
+    lea edi,[heap_page_table_2+ebp]
+    mov eax,0x01000000
+    mov ecx,1024
+.fill_heap2:
+    mov ebx,eax
+    or ebx,3
+    mov [edi],ebx
+    add eax,4096
+    add edi,4
+    loop .fill_heap2
+
+

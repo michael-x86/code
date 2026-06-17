@@ -1,0 +1,173 @@
+sys_hertz:
+    push eax
+    push edi
+    mov eax,[hz]
+    mov edi,0xC00B8000+(1*80+59)*2
+    call int2str
+    mov byte [edi],' '
+    add edi,2
+    mov byte [edi],'H'
+    mov byte [edi+1],0x0C
+    add edi,2
+    mov byte [edi],'z'
+    mov byte [edi+1],0x0C
+    add edi,2
+    mov byte [edi],' '
+    mov byte [edi+1],0x00
+    add edi,2
+    mov byte [edi],' '
+    mov byte [edi+1],0x00
+    add edi,2
+
+    pop edi
+    pop eax
+    ret
+
+wclock:
+wait_cmos:
+    mov al,0x0A
+    out 0x70,al
+    in  al,0x71
+    test al,0x80
+    jnz wait_cmos
+
+    ; Years since 1970 * 365
+    mov eax,[year]
+    sub eax,1970
+    mov ebx,365
+    mul ebx
+    mov esi,eax
+
+    ; Leap years since 1970
+    mov eax,[year]
+    sub eax,1969
+    xor edx,edx
+    mov ebx,4
+    div ebx
+    add esi,eax
+
+    mov eax,[year]
+    sub eax,1901
+    xor edx,edx
+    mov ebx,100
+    div ebx
+    sub esi,eax
+
+    mov eax,[year]
+    sub eax,1601
+    xor edx,edx
+    mov ebx,400
+    div ebx
+    add esi,eax
+
+    mov ecx,[month]
+    cmp ecx,1
+    jle .months_done
+    dec ecx
+    mov ebx,month_days
+    .mloop:
+    movzx eax,byte [ebx]
+    add esi,eax
+    inc ebx
+    dec ecx
+    jnz .mloop
+
+.months_done:
+    mov eax,[day]
+    dec eax
+    add esi,eax
+    mov eax,esi
+    mov ebx,86400
+    mul ebx
+    mov esi,eax
+    mov eax,[hour]
+    mov ebx,3600
+    mul ebx
+    add esi,eax
+    mov eax,[min]
+    mov ebx,60
+    mul ebx
+    add esi,eax
+    mov eax,[sec]
+    add esi,eax
+    mov [boot_epoch], esi
+    ret
+
+bcd2bin:               ; currently not in use
+    push ebx
+    mov bl,al
+    shr al,4
+    mov bh,10
+    mul bh             ; AL=tens*10
+    and bl,0x0F        ; BL=ones
+    add al,bl          ; AL=binary result
+    pop ebx
+    ret
+
+int2str:
+    push ebx
+    push ecx
+    push edx
+    push esi
+    mov ebx,10
+    xor ecx,ecx
+    test eax,eax
+    jnz .convert
+    mov byte [edi],'0'
+    add edi,2
+    jmp .done
+.convert:
+.repeat:
+    xor edx,edx
+    div ebx             ; EAX=quotient EDX=remainder
+    add dl,'0'
+    push edx
+    inc ecx
+    test eax,eax
+    jnz .repeat
+.print:
+    pop edx
+    mov [edi],dl
+    add edi,1
+    mov byte [edi],0x0C
+    add edi,1
+    loop .print
+.done:
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    ret
+
+parse_args:
+    mov esi,cmd_buf
+    xor ecx,ecx
+    mov edi,argv
+.skip_spaces:
+    mov al,[esi]
+    cmp al,' '
+    jne .check
+    inc esi
+    jmp .skip_spaces
+.check:
+    test al,al
+    jz .done
+    mov [edi],esi
+    add edi,4
+    inc ecx
+.scan:
+    mov al,[esi]
+    test al,al
+    jz .done
+    cmp al,' '
+    je .term
+    inc esi
+    jmp .scan
+.term:
+    mov byte [esi],0
+    inc esi
+    jmp .skip_spaces
+.done:
+    mov [argc],ecx    ;out
+    ret
+

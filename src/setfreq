@@ -1,0 +1,10 @@
+
+set_freq:
+    mov al,0x36
+    out 0x43,al
+    mov ax,11931        ; al=0x9B (LSB),ah=0x2E (MSB)
+    out 0x40,al
+    mov al,ah
+    out 0x40,al
+    ret
+

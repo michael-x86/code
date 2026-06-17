@@ -1,0 +1,104 @@
+; -------------------------------------------
+; All work and no play makes Jack a dull boy
+; -------------------------------------------
+sys_bounce:
+    xor dword [on_off],1
+    ret
+
+init_bounce:
+    pusha
+    mov word [on_off],1
+    mov byte [xpos],40
+    mov byte [ypos],12
+    mov byte [dltx],1
+    mov byte [dlty],1
+    popa
+    ret
+
+;backagin:
+    ret
+
+bounce_step:
+    call cls_chr
+    call update_chr
+    call plot_chr
+    ret
+
+plot_chr:
+    pusha
+    mov al,[xpos]
+    mov ah,[ypos]
+    call calc_offset
+    mov ah,0x04
+    mov al,0x07
+    mov [edi],ax
+    popa
+    ret
+
+
+cls_chr:
+    pusha
+    mov al,[xpos]
+    mov ah,[ypos]
+    call calc_offset
+    mov word [edi],0x0720
+    popa
+    ret
+
+update_chr:
+    pusha
+    mov al,[xpos]
+    add al,[dltx]
+    cmp al,79
+    jg .x_right
+    cmp al,0
+    jl .x_left
+    jmp .store_x
+.x_right:
+    mov al,79
+    neg byte [dltx]
+    jmp .store_x
+.x_left:
+    mov al,0
+    neg byte [dltx]
+.store_x:
+    mov [xpos], al
+    mov al,[ypos]
+    add al,[dlty]
+    cmp al,24
+    jg .y_bottom
+    cmp al,0
+    jl .y_top
+    jmp .store_y
+.y_bottom:
+    mov al,24
+    neg byte [dlty]
+    jmp .store_y
+.y_top:
+    mov al,0
+    neg byte [dlty]
+.store_y:
+    mov [ypos],al
+    popa
+    ret
+
+calc_offset:
+    push ebx
+    movzx ebx,ah
+    imul ebx,160        ; y*80*2
+    movzx eax,al
+    shl eax,1           ; x*2
+    add ebx,eax
+    mov edi,0xC00B8000
+    add edi,ebx         ; gotcha
+    pop ebx
+    ret
+
+
+on_off: dd 0
+xpos    db 40
+ypos    db 12
+dltx    db 1
+dlty    db 1
+
+

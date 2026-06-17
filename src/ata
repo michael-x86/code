@@ -1,0 +1,121 @@
+;-----------------------------------------------------
+; Persistence layout: FS region starts at LBA 256.
+; Each spare slot occupies SECTORS_PER_SLOT sectors.
+;   sector 0 — 68-byte fs_entry record, zero-padded
+;   sectors 1..2 — FS_CAPACITY (1024) bytes of content
+;-----------------------------------------------------
+FS_BASE_LBA       equ 256
+SECTORS_PER_SLOT  equ 3
+
+; ata_read - PIO read of ecx sectors from LBA eax into [edi]
+ata_read:
+    pushad
+    mov ebx,eax                  ; LBA
+    mov ebp,ecx                  ; sector count
+    mov dx,0x1F7
+.wb:
+    in al,dx
+    test al,0x80
+    jnz .wb
+    mov dx,0x1F6
+    mov eax,ebx
+    shr eax,24
+    and al,0x0F
+    or  al,0xE0
+    out dx,al
+    mov dx,0x1F2
+    mov eax,ebp
+    out dx,al
+    mov dx,0x1F3
+    mov eax,ebx
+    out dx,al
+    mov dx,0x1F4
+    mov eax,ebx
+    shr eax,8
+    out dx,al
+    mov dx,0x1F5
+    mov eax,ebx
+    shr eax,16
+    out dx,al
+    mov dx,0x1F7
+    mov al,0x20                  ; READ SECTORS
+    out dx,al
+    mov ecx,ebp
+.nxs:
+    mov dx,0x1F7
+.wd:
+    in al,dx
+    test al,0x80
+    jnz .wd
+    test al,0x08
+    jz .wd
+    mov dx,0x1F0
+    push ecx
+    mov ecx,256
+    rep insw
+    pop ecx
+    dec ecx
+    jnz .nxs
+    popad
+    ret
+
+; ata_write - PIO write of ecx sectors to LBA eax from [esi]
+ata_write:
+    pushad
+    mov ebx,eax
+    mov ebp,ecx
+    mov dx,0x1F7
+.wb:
+    in al,dx
+    test al,0x80
+    jnz .wb
+    mov dx,0x1F6
+    mov eax,ebx
+    shr eax,24
+    and al,0x0F
+    or  al,0xE0
+    out dx,al
+    mov dx,0x1F2
+    mov eax,ebp
+    out dx,al
+    mov dx,0x1F3
+    mov eax,ebx
+    out dx,al
+    mov dx,0x1F4
+    mov eax,ebx
+    shr eax,8
+    out dx,al
+    mov dx,0x1F5
+    mov eax,ebx
+    shr eax,16
+    out dx,al
+    mov dx,0x1F7
+    mov al,0x30                  ; WRITE SECTORS
+    out dx,al
+    mov ecx,ebp
+.nxs:
+    mov dx,0x1F7
+.wd:
+    in al,dx
+    test al,0x80
+    jnz .wd
+    test al,0x08
+    jz .wd
+    mov dx,0x1F0
+    push ecx
+    mov ecx,256
+    rep outsw
+    pop ecx
+    dec ecx
+    jnz .nxs
+    ; flush cache
+    mov dx,0x1F7
+    mov al,0xE7
+    out dx,al
+.wf:
+     in al,dx
+    test al,0x80
+    jnz .wf
+    popad
+    ret
+
