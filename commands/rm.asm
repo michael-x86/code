@@ -3,6 +3,11 @@
 
 
 _start:
+    call .get_base
+.get_base:
+    pop ebp                 ; ebp = absolute runtime address of .get_base
+    sub ebp, .get_base      ; ebp = runtime delta address
+
     mov ebx, 1
     mov edi, arg
     mov eax, 14

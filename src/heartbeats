@@ -1,0 +1,28 @@
+; --- print 8 hex digits at top-right ----
+; Counting heartbeats of the system clock
+sys_tick:
+    pushad
+    mov eax,[tick_count]
+    mov edi,0xC00B8000+(1*80+71)*2
+    mov ecx,8
+.next:
+    mov edx,eax
+    shr edx,28
+    and dl,0x0F
+    add dl,'0'
+    cmp dl,'9'
+    jbe .store
+    add dl,7
+.store:
+    mov dh,0x07
+    mov dh,0x0C
+    mov dh,0x07
+    mov [edi],dx
+    shl eax,4
+    add edi,2
+    dec ecx
+    jnz .next
+    popad
+    ret
+
+

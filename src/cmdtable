@@ -1,0 +1,15 @@
+; --------------------------------------------------
+; format: db "command",0
+;         dd address
+; final   db 0
+; --------------------------------------------------
+cmd_table:
+    db "heap",0
+    dd heap_cmd
+    db "frequency",0
+    dd freq_cmd
+    db "epoch",0
+    dd epoch_cmd
+    db 0          ; end of internals
+
+

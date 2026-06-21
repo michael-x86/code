@@ -1,0 +1,41 @@
+page_fault_isr:
+    cli
+    pushad
+    mov eax,[esp+36]    ; 36=EIP ADDRESS  32=error
+    push eax
+    call page_fault_handler
+    add esp,4
+.hang:
+    hlt
+    jmp .hang
+
+page_fault_handler:
+    push ebp
+    mov ebp,esp
+    mov esi,pf_msg
+    call print_cr    ;CR2
+    mov esi,pf_addr
+    call print
+    ;mov eax,cr2
+    call print_hex_dword
+    call newline
+
+    mov edx,0x3333       ; outer loop (adjust for time)
+.outer:
+    mov ecx,0xFFFF        ; inner loop
+.inner:
+    dec ecx
+    jnz .inner
+    dec edx
+    jnz .outer
+
+    pop ebp
+    iret
+
+isr_default:
+    pushad
+    mov al,0x20
+    out 0x20,al
+    popad
+    iretd
+

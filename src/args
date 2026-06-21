@@ -1,0 +1,32 @@
+parse_args:
+    mov esi,cmd_buf
+    xor ecx,ecx
+    mov edi,argv
+.skip_spaces:
+    mov al,[esi]
+    cmp al,' '
+    jne .check
+    inc esi
+    jmp .skip_spaces
+.check:
+    test al,al
+    jz .done
+    mov [edi],esi
+    add edi,4
+    inc ecx
+.scan:
+    mov al,[esi]
+    test al,al
+    jz .done
+    cmp al,' '
+    je .term
+    inc esi
+    jmp .scan
+.term:
+    mov byte [esi],0
+    inc esi
+    jmp .skip_spaces
+.done:
+    mov [argc],ecx    ;out
+    ret
+

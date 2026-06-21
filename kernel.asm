@@ -53,7 +53,7 @@ higher_half:
     mov [kernel_phys_end_var],eax
 
     call reserve_kernel_pages
-    
+
     popad
     add esp,4             
     mov esp,stack_top
