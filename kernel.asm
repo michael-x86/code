@@ -1,14 +1,21 @@
 [org 0xC0100000]
 
-; I would be happy if you allowed my contact details to remain.
-; Best regards,
-; michael@nordstedt.eu
-
 global start
 
 bits 32
 
+MAX_PROC equ 8        ; process-table: slots 0-2 base tasks, 3+ spawned
+PROC_NAME_LEN equ 16  ; per-process command name (snapshot for ps)
+PS_REC equ 24         ; sys_ps_info record size: state+vbase+esp+name[16]
+
 start:
+    jmp short .init_runtime
+    nop
+
+    db "KERN"       
+    dd (kern_end-start) 
+
+.init_runtime:
     cli
     mov ax,0x10     ; DATA_SEG (GDT)
     mov ds,ax
@@ -19,8 +26,8 @@ start:
 
     call .get_pc
 .get_pc:
-    pop ebp            
-    sub ebp,.get_pc  
+    pop ebp
+    sub ebp,.get_pc
 
     ; --- physical stack ---
     lea esp,[stack_top+ebp] 
@@ -53,7 +60,7 @@ higher_half:
     mov [kernel_phys_end_var],eax
 
     call reserve_kernel_pages
-
+    
     popad
     add esp,4             
     mov esp,stack_top
@@ -216,7 +223,7 @@ kernel_main:
     lidt [idt_descriptor]
     call pic_remap
     call set_freq       
-    call init_bounce 
+    call dydx_init
     call hwclock
 
     mov edi,cwd_buf
@@ -270,6 +277,7 @@ kernel_main:
     call newline
     call save_history
     call parse_args
+    call check_bg
     call dispatch_command
     mov dword [cmd_len],0     ;reset buffer
     mov byte [cmd_buf],0
@@ -301,7 +309,7 @@ task1_entry:
 task2_entry:  
     test dword [on_off],1
     jnz .paused
-    call bounce_step
+    call dydx_step
 .paused:
     hlt      ; run when state changes
     jmp task2_entry
@@ -478,7 +486,43 @@ parse_args:
     inc esi
     jmp .skip_spaces
 .done:
-    mov [argc],ecx    ;out 
+    mov [argc],ecx    ;out
+    ret
+
+;--- "cmd &" or "cmd&" ---
+; clears the '&' from argv and sets bg_flag.
+check_bg:
+    mov dword [bg_flag],0
+    mov ecx,[argc]
+    test ecx,ecx
+    jz .ret
+    mov eax,ecx
+    dec eax
+    mov esi,[argv+eax*4]       ; last argument
+    cmp byte [esi],'&'
+    jne .check_suffix
+    cmp byte [esi+1],0
+    jne .check_suffix
+    mov dword [bg_flag],1
+    dec dword [argc]           ; drop the &
+    ret
+.check_suffix:
+    ; cmd&
+    mov edi,esi
+.find_end:
+    mov al,[edi]
+    test al,al
+    jz .test_amp
+    inc edi
+    jmp .find_end
+.test_amp:
+    cmp edi,esi                
+    je .ret
+    cmp byte [edi-1],'&'
+    jne .ret
+    mov byte [edi-1],0          ; strip the '&'
+    mov dword [bg_flag],1
+.ret:
     ret
 
 ; ---------------------------
@@ -853,6 +897,15 @@ get_key:
     ;int 0x80
 
     ; -------------------------
+    ; Back
+    ; -------------------------
+    cmp al,75
+    jne .check_up
+    dec word [cursor_pos]
+    call cursor
+
+.check_up:
+    ; -------------------------
     ; arrow up
     ; -------------------------
     cmp al,0x48
@@ -873,8 +926,8 @@ get_key:
     ;cmp al,0x01          ; breaks vi
     ;je  shutdown         ;escape key
     ; reject invalid scancodes
-    cmp al,128
-    jae .invalid   ; Work to be done...
+    ;cmp al,128
+    ;jae .invalid   ; Work to be done...
     movzx eax,al
     ; -------------------------
     ; choose keymap
@@ -932,40 +985,14 @@ sys_tick:
     ret
 
 init_tasks:
-    ; task1 
     mov eax,task1_stack_top
-    sub eax,4
-    mov dword [eax],0x202
-    sub eax,4
-    mov dword [eax],0x08
-    sub eax,4
-    mov dword [eax],task1_entry
-    sub eax,32
-    mov edi,eax
-    mov ecx,8
-    xor ebx,ebx
-.clear1:
-    mov [edi],ebx
-    add edi,4
-    loop .clear1
+    mov edx,task1_entry
+    call seed_frame
     mov [task1_esp],eax
 
-    ; task2 main
     mov eax,task2_stack_top
-    sub eax,4
-    mov dword [eax],0x202
-    sub eax,4
-    mov dword [eax],0x08
-    sub eax, 4
-    mov dword [eax],task2_entry ; entry point
-    sub eax,32
-    mov edi,eax
-    mov ecx,8
-    xor ebx,ebx
-.clear2:
-    mov [edi],ebx
-    add edi,4
-    loop .clear2
+    mov edx,task2_entry
+    call seed_frame
     mov [task2_esp],eax
     ret
 
@@ -984,44 +1011,71 @@ find_free_virt:
     push edx
     push esi
     push edi
-    mov ebx,heap_start
-.try_base:
-    mov eax,ecx
-    shl eax,12
-    add eax,ebx               ; our_end
-    cmp eax,heap_end
-    ja .fail
-    mov edx,eax               ; edx = our_end
-    mov esi,alloc_table
-    mov edi,alloc_table_count
-.check:
-    mov eax,[esi]
-    test eax,eax
-    jz .next_entry            ; empty slot
-    push eax                  ; save entry.base
-    mov eax,[esi+4]
-    shl eax,12
-    add eax,[esi]             ; eax = entry_end
-    cmp ebx,eax
-    pop eax                   ; eax = entry.base
-    jae .next_entry           ; ebx >= entry_end, no overlap
-    cmp eax,edx
-    jae .next_entry           ; entry.base >= our_end, no overlap
-    add ebx,4096              ; overlap → advance candidate
-    jmp .try_base
+    
+    mov ebx, heap_start       ; Start searching from the beginning of the heap
+
+.restart_search:
+    ; Calculate what our proposed end address would be
+    mov eax, ecx              ; ecx = requested page count
+    shl eax, 12               ; Convert pages to bytes
+    add eax, ebx              ; eax = proposed our_end
+    
+    cmp eax, heap_end
+    ja .fail                  ; Out of memory!
+    mov edx, eax              ; edx = proposed our_end
+
+    ; Set up the loop to scan EVERY single slot in the table
+    mov esi, alloc_table
+    mov edi, alloc_table_count
+
+.check_loop:
+    mov eax, [esi]            ; Get the base address of this table entry
+    test eax, eax
+    jz .next_entry            ; If it's 0, the slot is empty, skip it
+
+    ; Calculate the end address of this table entry
+    push ecx                  ; Preserve our requested page count
+    mov ecx, [esi+4]          ; ecx = page count of this entry
+    shl ecx, 12               ; Convert pages to bytes
+    add ecx, eax              ; ecx = entry_end (base + size)
+
+    ; (base <= ebx < entry_end)
+    cmp ebx, eax
+    jb .check_condition_2
+    cmp ebx, ecx
+    jb .overlap_found_pop
+
+.check_condition_2:
+    ; start (eax) inside our region? (ebx <= base < our_end)
+    cmp eax, ebx
+    jb .no_overlap
+    cmp eax, edx
+    jb .overlap_found_pop
+
+.no_overlap:
+    pop ecx                 
+
 .next_entry:
-    add esi,8
+    add esi, 8                ; Move to next entry slot
     dec edi
-    jnz .check
-    mov eax,ebx
-    clc
+    jnz .check_loop           ; Keep checking until EVERY slot is verified
+
+    ; IF WE REACH HERE, THE ENTIRE TABLE IS CLEAN!
+    mov eax, ebx              ; Return the safe virtual base address in eax
+    clc                       ; Clear carry flag (Success)
     pop edi
     pop esi
     pop edx
     pop ebx
     ret
+
+.overlap_found_pop:
+    pop ecx                   ; Clean the stack before restarting
+    add ebx, 4096             ; Advance candidate by exactly 1 page
+    jmp .restart_search       ; Start a completely fresh, clean scan of the whole table
+
 .fail:
-    stc
+    stc                       ; Set carry flag (Failure)
     pop edi
     pop esi
     pop edx
@@ -1229,7 +1283,7 @@ set_page_free:
     pop ebx
     ret
 
-; -----------------------------
+; ------------------------------
 ; out:
 ;   eax = page address
 ;   CF=0 success CF=1 fail
@@ -1238,7 +1292,10 @@ set_page_free:
 ;  each bit tracks one 4 KB page
 ;  8192*32 bits = 262144 pages
 ;  262144*4096  = 1 GB 
-; -----------------------------
+; ------------------------------
+; -- Another page in my diary --
+; --      6502 memories       --
+; ------------------------------
 alloc_page:
     push ebx
     push ecx
@@ -1382,7 +1439,7 @@ print_hex_dword:
     pop eax
     ret
 
-sys_bin2hex:
+sys_out_hex:
     push eax
     push ecx
     mov ecx,8
@@ -1460,7 +1517,7 @@ print_int_decimal:
     ret
 
 
-show_regs:
+sys_reg_dump:
     pushad
     mov ebp,esp
     call newline
@@ -1523,56 +1580,51 @@ echo_cmd:
     call newline
     ret
 
-sys_cmd:
-    mov eax,3                ; sys_newline
-    int 0x80
-    mov ebx,sys_cmd
-    mov eax,10               ; sys_read_mem
-    int 0x80
-    mov ebx,eax
-    mov eax,5
-    int 0x80
-    mov eax,3
-    int 0x80
-    ret
-
 ;------------------------------------
 ; out:     
 ;  pointers to malloc street
 ;------------------------------------
 ; Real estate agent for malloc street
 ;------------------------------------
-heap_cmd:
-    push eax
+; sys_heap_info: snapshot the heap allocation table for the userland `heap`.
+;   ebx = dst buffer (needs 8 + alloc_table_count*4 bytes)
+;   [dst+0]        = free heap bytes
+;   [dst+4]        = number of active allocations (n)
+;   [dst+8 + i*4]  = base address of each active allocation (i = 0..n-1)
+;   returns eax = n, or -1 if ebx is null
+sys_heap_info:
+    test ebx,ebx
+    je .err
     push ecx
+    push edx
     push esi
-    call newline
+    push edi
+    call calc_free_heap              ; eax = free bytes
+    mov [ebx],eax
     mov esi,alloc_table
     mov ecx,alloc_table_count
+    xor edx,edx                      ; active-entry count
+    lea edi,[ebx+8]
 .loop:
     mov eax,[esi]
     test eax,eax
     jz .next
-    push eax
-    mov al,'0'
-    call putchar
-    mov al,'x'
-    call putchar
-    pop eax
-    call print_hex_dword
-    call newline
+    mov [edi],eax                    ; record this base address
+    add edi,4
+    inc edx
 .next:
     add esi,8
     dec ecx
     jnz .loop
-
-    call calc_free_heap
-    call print_int_decimal 
-    mov esi,in_bytes
-    call print_cr 
+    mov [ebx+4],edx
+    mov eax,edx
+    pop edi
     pop esi
+    pop edx
     pop ecx
-    pop eax
+    ret
+.err:
+    mov eax,-1
     ret
 
 epoch_cmd:
@@ -2055,7 +2107,7 @@ tab_print_all_matches:
     mov esi, cmd_table
 .pbi_loop:
     cmp byte [esi],0
-    jmp .pbi_done          ;NORD
+    ;jmp .pbi_done          ;NORD
     je .pbi_done
     push esi
     call tab_prefix_match
@@ -2732,49 +2784,73 @@ sys_rmdir:
     ret
 
 sys_ps_info:
-    cmp ebx,0               ; Basic sanity check 
+    test ebx,ebx
     je .error
+    push ecx
     push edx
+    push esi
+    push edi
 
-    ; +0 : Currently running task ID
-    mov edx,[current_task] 
+    mov edx,[current_task]
     mov [ebx+0],edx
+    mov dword [ebx+4],MAX_PROC
 
-    ; +4, +8, +12 : Base Stack pointers for core tasks
-    mov edx,[task0_esp]
-    mov [ebx+4],edx
-    mov edx,[task1_esp]
-    mov [ebx+8],edx
-    mov edx,[task2_esp]
-    mov [ebx+12],edx
-
-    ; +16 : Dynamic entry slot (The address of the running shell command!)
-    mov edx,[exec_vbase]    ; Grab the active virtual base layout pointer
-    mov [ebx+16],edx        ; Store it into the 5th dword slot
-
+    xor ecx,ecx                 ; slot index
+.slot:
+    cmp ecx,MAX_PROC
+    jae .done
+    ; edi = record base = ebx + 8 + slot*PS_REC
+    mov eax,ecx
+    imul eax,PS_REC
+    lea edi,[ebx+8]
+    add edi,eax
+    mov edx,[proc_state+ecx*4]
+    mov [edi+0],edx
+    mov edx,[proc_vbase+ecx*4]
+    mov [edi+4],edx
+    mov edx,[task_esps+ecx*4]
+    mov [edi+8],edx
+    ; copy name (PROC_NAME_LEN bytes)
+    mov eax,ecx
+    shl eax,4                   ; *PROC_NAME_LEN (16)
+    lea esi,[proc_name+eax]
+    add edi,12
+    push ecx
+    mov ecx,PROC_NAME_LEN
+.cpname:
+    mov al,[esi]
+    mov [edi],al
+    inc esi
+    inc edi
+    loop .cpname
+    pop ecx
+    inc ecx
+    jmp .slot
+.done:
+    pop edi
+    pop esi
     pop edx
-    mov eax,5           ; RETURN VALUE: filled 5 slots!
+    pop ecx
+    mov eax,MAX_PROC
     ret
 .error:
-    mov eax,-1            
+    mov eax,-1
     ret
 
 sys_stack_dump:
-    call show_regs
     pushad
-    mov esi,esp
-    call newline
-    mov ecx,8
     mov edi,esp
+    add edi,32           ; Skip past the 32 bytes of PUSHAD registers!
+    mov ecx,8
 .loop:
-    mov eax,[edi]
+    mov eax, [edi]       
     call print_hex_dword
     call newline
     add edi,4
-    dec ecx
-    jnz .loop
+    loop .loop
     popad
-    ret
+    ret             
+
 
 ; ---------------------------------------------
 ;  Memory dealer - handing out 4KB crack rocks
@@ -2951,7 +3027,6 @@ sys_plot:
     imul ecx,80         
     add ecx,edx   
     shl ecx,1            
-    call show_regs  
     mov edi,0xC00B8000
     add edi,ecx
     mov byte [edi],0xDB
@@ -2969,14 +3044,85 @@ sys_epoch:
     mov ebx,[boot_epoch]
     ret
  
+;---------------------------------------------------------------------------
+; in: 
+;     ebx = target PID to terminate
+; out: 
+;     eax = 0 on success, -1 on failure
+;---------------------------------------------------------------------------
+sys_kill:
+    push ecx
+    push edx
+    push esi
+    push edi
+
+    mov edx, ebx             ; edx = target PID from user space
+    cmp edx, MAX_PROC
+    jae .failed
+    
+    cmp dword [proc_state + edx*4], 0
+    je .failed               ; Process is already dead or empty
+    
+    cmp edx, 0
+    je .failed
+
+    cli                      ; Clear interrupts while rewriting page tables
+
+    ; ---- AUTOMATIC MEMORY CLEANUP CORE ----
+    mov ebx, [proc_pages + edx*4]  
+    test ebx, ebx
+    jz .clear_structures        
+
+    ; Clean up the page table mappings and free physical frames
+    mov eax, [proc_vbase + edx*4]  ;
+    push edx
+    call free_pages                ; Unmaps and frees physical frames
+    pop edx
+
+    ; ---- AUTOMATIC ALLOC_TABLE REMOVAL ----
+    mov ecx, alloc_table_count
+    mov edi, alloc_table
+    mov esi, [proc_vbase + edx*4]  
+.find_slot:
+    cmp [edi], esi
+    je .clear_slot
+    add edi, 8
+    loop .find_slot
+    jmp .clear_structures
+
+.clear_slot:
+    mov dword [edi], 0             ; Erase address entry from heap table
+    mov dword [edi+4], 0           ; Erase page count entry from heap table
+
+.clear_structures:
+    mov dword [proc_vbase + edx*4],0
+    mov dword [proc_pages + edx*4],0
+    mov dword [proc_state + edx*4],0   
+
+    sti                      
+    mov eax,0          
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    ret
+
+.failed:
+    mov eax,-1       
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    ret
+
 ; -------------------------------------------
 ; All work and no play makes Jack a dull boy
 ; -------------------------------------------
-sys_bounce:
+sys_dydx:
     xor dword [on_off],1
     ret
 
-init_bounce:
+dydx_init:
     pusha
     mov word [on_off],1
     mov byte [xpos],40
@@ -2986,20 +3132,17 @@ init_bounce:
     popa
     ret
 
-;backagin:
+dydx_step: 
+    call dydx_cls 
+    call dydx_update
+    call dydx_plot
     ret
 
-bounce_step: 
-    call cls_chr 
-    call update_chr
-    call plot_chr
-    ret
-
-plot_chr:
+dydx_plot:
     pusha
     mov al,[xpos]
     mov ah,[ypos]
-    call calc_offset
+    call dydx_calc_offset
     mov ah,0x04
     mov al,0x07 
     mov [edi],ax
@@ -3007,16 +3150,16 @@ plot_chr:
     ret
 
 
-cls_chr:
+dydx_cls:
     pusha
     mov al,[xpos]
     mov ah,[ypos]
-    call calc_offset
+    call dydx_calc_offset
     mov word [edi],0x0720  
     popa
     ret
 
-update_chr:
+dydx_update:
     pusha
     mov al,[xpos]
     add al,[dltx]
@@ -3053,7 +3196,7 @@ update_chr:
     popa
     ret
 
-calc_offset:
+dydx_calc_offset:
     push ebx
     movzx ebx,ah        
     imul ebx,160        ; y*80*2
@@ -3287,9 +3430,8 @@ fs_resolve:
     pop eax
     ret
 
-; ------------------------------
-;  fallback from temp commands
-; ------------------------------
+; -------------------------
+; ----- spawn process -----
 exec_bin: 
     cmp dword [argc], 0
     je .silent
@@ -3385,37 +3527,87 @@ exec_bin:
     call register_allocation
     
 
-    mov [exec_shell],esp  ; cmd_exit:
-    ; --- call binary entry point ---
-    mov eax, [exec_vbase]
-    call eax
-   
-.cmd_exit:
-    ; after ret OR calls sys_exit ebx=return code
-    
-    ; --- free pages after return ---
+    ; --- spawn a process: find a free table slot (3..MAX_PROC-1) ---
+    mov ecx,3
+.find_proc:
+    cmp ecx,MAX_PROC
+    jae .too_many
+    cmp dword [proc_state+ecx*4],0
+    je .got_proc
+    inc ecx
+    jmp .find_proc
+.got_proc:
+    ; --- snapshot argv[0] into proc_name[slot] so ps can name the process ---
+    push esi
+    push edi
+    push edx
+    mov eax,ecx
+    shl eax,4                        ; * PROC_NAME_LEN (16)
+    lea edi,[proc_name+eax]
+    mov esi,[argv]                   ; argv[0] = command
+    mov edx,PROC_NAME_LEN-1
+.cp_name:
+    mov al,[esi]
+    test al,al
+    jz .cp_name_done
+    mov [edi],al
+    inc esi
+    inc edi
+    dec edx
+    jnz .cp_name
+.cp_name_done:
+    mov byte [edi],0
+    pop edx
+    pop edi
+    pop esi
+
+    ; --- kernel stack top for this slot = proc_stacks + (slot-2)*4096 ---
+    mov eax,ecx
+    sub eax,2
+    shl eax,12
+    add eax,proc_stacks              ; eax = stack top
+    mov edx,proc_trampoline          ; entry point
+    push ecx
+    call seed_frame                  ; eax = task ESP
+    pop ecx
+
+    ; --- fill the process table; activate last so the scheduler
+    ;     never sees a half-built slot ---
+    mov [task_esps+ecx*4],eax
+    mov ebx,[exec_vbase]
+    mov [proc_vbase+ecx*4],ebx
+    mov ebx,[exec_pages]
+    mov [proc_pages+ecx*4],ebx
+    mov dword [proc_state+ecx*4],1
+
+    ; --- background (trailing '&'): announce the job id and return now ---
+    cmp dword [bg_flag],0
+    je .wait_proc
+    mov esi,bg_lbl
+    call print
+    mov eax,ecx
+    call print_int_decimal
+    mov esi,bg_lbl2
+    call print_cr
+    ret
+
+    ; --- foreground: yield until the process exits and frees its slot, so
+    ;     the shell only redraws the prompt afterward.
+    ;     (ecx survives the timer IRQ, which saves/restores via pushad.) ---
+.wait_proc:
+    sti
+    hlt
+    cmp dword [proc_state+ecx*4],0
+    jne .wait_proc
+    ret
+
+.too_many:
+    ; no free slot: undo the mapping/registration we just made
     mov eax,[exec_vbase]
     mov ebx,[exec_pages]
-    call free_pages
-
-    ; --- clear alloc_table entry ---
-    push eax
-    push ecx
-    mov ecx,alloc_table_count
-    mov edi,alloc_table
-    mov eax,[exec_vbase]
-.find_slot:
-    cmp [edi],eax
-    je .clear_slot
-    add edi,8
-    loop .find_slot
-    jmp .cleanup_done
-.clear_slot:
-    mov dword [edi],0
-    mov dword [edi+4],0
-.cleanup_done:
-    pop ecx
-    pop eax
+    call release_region
+    mov esi,too_many_msg
+    call print_cr
     ret
 
 .oom_mapped:
@@ -3439,11 +3631,113 @@ exec_bin:
     ret
 
 sys_exit:
-    ; ebx = exit status code 
-    mov esp,[exec_shell]
-    sti
-    jmp exec_bin.cmd_exit
+    ; ebx = exit status code (currently ignored) — terminate the running process
+    jmp proc_exit
 
+;------------------------------------
+; Process-management helpers
+;------------------------------------
+
+;   Lay a fake interrupt frame (popad+iretd compatible) at a new
+;   task's stack top, so the scheduler can start it like any preempted task.
+;   in:  
+;      eax = stack top 
+;      edx = entry point
+;   out: 
+;      eax = task ESP 
+seed_frame:
+    sub eax,4
+    mov dword [eax],0x202            ; EFLAGS (IF set)
+    sub eax,4
+    mov dword [eax],0x08             ; CS
+    sub eax,4
+    mov [eax],edx                    ; EIP
+    sub eax,32                       ; 8 dwords for popad
+    mov edi,eax
+    mov ecx,8
+    xor ebx,ebx
+.zero:
+    mov [edi],ebx
+    add edi,4
+    loop .zero
+    ret
+
+; advance to the next active slot, round-robin.
+;   in:  
+;      ecx = current slot
+;   out: 
+;      ecx = next active slot (slot 0 is always active, so this terminates)
+next_task:
+.scan:
+    inc ecx
+    cmp ecx,MAX_PROC
+    jb .nw
+    xor ecx,ecx
+.nw:
+    cmp dword [proc_state+ecx*4],0
+    je .scan
+    ret
+
+; free a binary's pages and drop its alloc_table entry.
+;   in:  
+;      eax = virtual base, ebx = page count
+release_region:
+    push ecx
+    push edx
+    push edi
+    push eax               
+    call free_pages
+    pop edx                 
+    mov edi,alloc_table
+    mov ecx,alloc_table_count
+.find:
+    cmp [edi],edx
+    je .clear
+    add edi,8
+    loop .find
+    jmp .done
+.clear:
+    mov dword [edi],0
+    mov dword [edi+4],0
+.done:
+    pop edi
+    pop edx
+    pop ecx
+    ret
+
+;------------------------------------
+; First thing a spawned process runs (via the scheduler's iretd).
+; Calls the binary at its virtual base, then tears the process down.
+;------------------------------------
+proc_trampoline:
+    sti                             
+    mov eax,[current_task]
+    mov eax,[proc_vbase+eax*4]
+    call eax                         ; run binary (ret/int 0x80 -> sys_exit)
+
+;------------------------------------
+; Tear down the current process give CPU to the next ready task.
+; Not in use, (test for kill [PID])
+;------------------------------------
+proc_exit:
+    cli
+    mov ecx,[current_task]           
+    mov ebx,[proc_pages+ecx*4]
+    test ebx,ebx
+    jz .freed                       
+    mov eax,[proc_vbase+ecx*4]
+    call release_region              
+.freed:
+    mov dword [proc_vbase+ecx*4],0
+    mov dword [proc_pages+ecx*4],0
+    mov dword [proc_state+ecx*4],0   
+
+    ; --- switch to the next ready task (mirrors irq0's tail) ---
+    call next_task
+    mov [current_task],ecx
+    mov esp,[task_esps+ecx*4]
+    popad
+    iretd
 
 ;------------------------------------
 irq0:
@@ -3459,14 +3753,10 @@ irq0:
     inc dword [boot_epoch]
 .skip_epoch:
     mov ecx,[current_task]
-    mov [task_esps+ecx*4],esp  
-    inc ecx                    
-    cmp ecx,3
-    jb .set_next
-    xor ecx,ecx              
-.set_next:
-    mov [current_task],ecx     
-    mov esp,[task_esps+ecx*4]  
+    mov [task_esps+ecx*4],esp  ; save outgoing task
+    call next_task             ; ecx -> next active slot
+    mov [current_task],ecx
+    mov esp,[task_esps+ecx*4]  ; load incoming task
 .done:
     mov al, 0x20
     out 0x20, al
@@ -3632,12 +3922,14 @@ kbd_tail     dd 0
 ; kbd_buf in .bss
 
 out_mem         db "OUT OF MEMORY - KEEP DREAMING",13,0
+too_many_msg    db 13,"too many processes",13,0
+bg_lbl          db "[bg pid ",0
+bg_lbl2         db "]",13,0
 alloc_mem       db "heap pointer  : 0x",0
 no_arg          db 13,'usage: alloc <bytes>',13,0
 poke_msg        db 13,"usage: poke <hex addr> <hex value>",13,0
 peek_msg        db 13,"usage: peek <hex addr>",13,0
 plot_msg        db 13,"usage: plot x y (0-79 x 0-24)" ,13,0   
-in_bytes        db " bytes free",13,0
 free_usage_msg  db 13,"usage: free <hex addr>",13,0
 free_ok_msg     db "memory released",13,0
 bad_free_msg    db "invalid allocation",13,0
@@ -3662,10 +3954,10 @@ dec_buf times 11 db 0
 bin_prefix   db "/bin/",0
 exec_vbase   dd 0
 exec_pages   dd 0
-exec_shell   dd 0
 
 argc         dd 0
 argv times 16 dd 0
+bg_flag      dd 0          ; 1 = exec_bin in background (trailing '&')
 
 cmd_len      dd 0
 cmd_exec     dd 0
@@ -3673,10 +3965,20 @@ cmd_exec     dd 0
 
 section .data
 current_task:  dd 0
-task_esps:
+; --- process table (slot 0-2 = base tasks, 3+ = spawned /bin binaries) ---
+task_esps:                           ; saved kernel ESP per process
     task0_esp: dd 0
     task1_esp: dd 0
     task2_esp: dd 0
+    dd 0, 0, 0, 0, 0                 ; slots 3..MAX_PROC-1
+proc_state:                          ; 0 = free, 1 = active (schedulable)
+    dd 1, 1, 1, 0, 0, 0, 0, 0
+proc_vbase:                          ; binary virtual base, for cleanup (0 = none)
+    dd 0, 0, 0, 0, 0, 0, 0, 0
+proc_pages:                          ; binary page count, for cleanup (0 = none)
+    dd 0, 0, 0, 0, 0, 0, 0, 0
+proc_name:                           ; snapshot of argv[0] per slot (for ps)
+    times MAX_PROC*PROC_NAME_LEN db 0
 
 hist_count  dd 0
 hist_index  dd 0
@@ -3720,8 +4022,8 @@ syscall_table:
     dd sys_poke          ; 27: in = <address> <value> 
     dd sys_hex2int       ; 28: in = esi out = eax
     dd sys_banner        ; 29: print banner
-    dd sys_bounce        ; 30: funtime
-    dd sys_bin2hex       ; 31: in = /bin/file out=hex
+    dd sys_dydx          ; 30: ?
+    dd sys_out_hex       ; 31: in = eax out=print hex word 
     dd sys_mem_dump      ; 32: in = esi -> address. out: print 64 bytes 
     dd sys_hex_byte      ; 33: print hex byte
     dd sys_asc2int       ; 34: in = esi->string out=edx
@@ -3730,6 +4032,9 @@ syscall_table:
     dd sys_plot          ; 37: set block at ecx edx 
     dd sys_epoch         ; 38: out: ebx = seconds 
     dd sys_putchar       ; 39: ebx = char
+    dd sys_kill          ; 40: ebx = PID to terminate
+    dd sys_reg_dump      ; 41: print regs
+    dd sys_heap_info     ; 42: ebx = dst -> heap alloc table snapshot
 SYSCALL_COUNT equ ($-syscall_table)/4
 
 ;---- Keycode -> ASCII Convertion ----
@@ -3748,9 +4053,9 @@ keymap:
     db 'a','s','d','f','g','h','j','k'
     db 'l',';',39,'`',0,'\'
     db 'z','x','c','v','b','n','m'
-    db ',','.','/',0,'*',0,' '
-    times 0x3B-($-keymap) db 0     ; F1
-    db '<'
+    db ',','.',';',0,'*',0,' '
+    times 0x56-($-keymap) db 0     
+    db ':'
     times 256-($-keymap) db 0
 
 
@@ -3759,16 +4064,16 @@ keymap:
 ; -----------------------------------------
 
 keymap_shift:
-    db 0,27,'!','@','#','$','%','^','&','*'
-    db '(' ,')','_','+',8,9
+    db 0,27,'!','@','#','$','%','&','/','('
+    db ')','=','+','|',8,9
     db 'Q','W','E','R','T','Y','U','I'
     db 'O','P','{','}',13,0
     db 'A','S','D','F','G','H','J','K'
-    db 'L',':','"', '~',0,'|'
+    db 'L','<','>','~',0,'*'
     db 'Z','X','C','V','B','N','M'
-    db '<','>','?',0,'*',0,' '
-    times 0x3B-($-keymap_shift) db 0     ; F1
-    db '<'
+    db '<','>',':',0,'*',0,' '
+    times 0x56-($-keymap_shift) db 0    
+    db ':'
     times 256-($-keymap_shift) db 0
 
 ; --------------------------------------------------
@@ -3776,9 +4081,7 @@ keymap_shift:
 ;         dd address 
 ; final   db 0
 ; --------------------------------------------------
-cmd_table:            
-    db "heap",0
-    dd heap_cmd
+cmd_table:
     db "frequency",0
     dd freq_cmd
     db "epoch",0
@@ -3787,6 +4090,8 @@ cmd_table:
 
 ;---- in-kernel virtual filesystem ----
 %include "fs.inc"
+
+kern_end:
 
 section .bss
 ;----------------------------
@@ -3828,6 +4133,11 @@ alignb 16
 task2_stack:
     resb 4096
 task2_stack_top:
+
+alignb 16
+proc_stacks:                 ; stacks for spawned processes (slots 3..MAX_PROC-1)
+    resb (MAX_PROC-3)*4096
+proc_stacks_top:
 
 
 ;---- STACK ----
