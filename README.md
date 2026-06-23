@@ -255,7 +255,7 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | 27 | poke | ebx = addr, ecx = value | 0 |
 | 28 | hex2int | esi → string | eax = integer |
 | 29 | banner | — | print banner |
-| 30 | bounce | — | toggle bounce animation |
+| 30 | dydx | — | toggle dydx animation |
 | 31 | bin2hex | eax = integer  | out: HEX |
 | 32 | memdump | esi = addr | out: 64 bytes  |
 | 33 | hexbyte | ebx = byte | print BYTE as hex |
@@ -310,6 +310,8 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | `dealloc <addr>` | release allocated memory |
 | `peek <addr>` | read 32-bit value from memory |
 | `poke <addr> <value>` | write 32-bit value to memory |
+| `bounce &` | loop4ever, kill pid (ps) |
+
 
 ## Debugging with GDB
 
