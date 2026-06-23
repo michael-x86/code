@@ -6,9 +6,10 @@ KERNEL_ASM="kernel.asm"
 IMG="os.img"
 
 # Programs to compile
-COMMANDS=(plot up memdump regdump bin2hex bounce vi pi
-          poke peek pwd ls cd cat touch write verify cls
-          exit help rm rmdir mkdir cp mv alloc dealloc)
+COMMANDS=(plot up memdump regdump stackdump bin2hex bounce dydx
+          ps kill poke peek pwd ls cd cat touch write help cls
+          verify exit rm rmdir mkdir cp mv vi alloc dealloc heap
+         )
 
 RUN_QEMU=false
 FULLSCREEN=false
@@ -66,6 +67,7 @@ echo "2026-05-18T19:41:00 SunOS SysV[1]: Starting There-can-be-only-one...
 2026-05-18T19:41:10 SunOS /usr/highlander: [session uid=400 pid=1]
 2026-05-18T19:41:20 SunOS Macleod-[1592]: [SysV] Successfully activated" > var/log/syslog
 echo "[1/6] Building commands..."
+rm -f bin/*
 for p in "${COMMANDS[@]}"; do
     src="./commands/${p}.asm"
     #echo "$src"
@@ -93,8 +95,8 @@ KERNEL_SIZE=$(stat -c%s kernel.bin)
 KERNEL_SECTORS=$(((KERNEL_SIZE + 511) / 512))
 KERNEL_BYTES=$((KERNEL_SECTORS * 512))
 echo "[4/6] Kernel size: $KERNEL_SIZE bytes ($KERNEL_SECTORS sectors)"
-sed -i "s/^KERNEL_SECTORS.*/KERNEL_SECTORS  equ 0x$(printf '%02X' $KERNEL_SECTORS)/" bootloader.asm
-
+echo $KERNEL_SECTORS
+sed -i "s/^KERNEL_SECTORS[[:space:]]\+equ.*/KERNEL_SECTORS equ $KERNEL_SECTORS/" bootloader.asm
 echo "[5/6] Assembling bootloader..."
 nasm -f bin "$BOOT_ASM" -o bootloader.bin
 
