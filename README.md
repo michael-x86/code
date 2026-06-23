@@ -327,11 +327,10 @@ No debug symbols (flat binary). Use raw addresses: `0x7C00` (bootloader), `0xC01
 
 ## Known Limitations
 
-- **Ring 0 only** — no userspace memory protection. Buggy programs can corrupt the kernel.
 - **Path resolution** handles absolute paths, `.`, `..`, and single relative names only. `cd foo/bar` not supported.
 - **File content** capped at 1024 bytes (`FS_CAPACITY`).
 - **Runtime files** limited to 16 spare slots (`FS_SPARE_COUNT`).
-- **BIOS boot** reads kernel in one call; assumes contiguous sectors.
+- **BIOS boot** reads kernel; assumes contiguous sectors.
 - **ls** ignores arguments — always lists current directory.
 - **vi** has no scroll; files longer than 24 lines get truncated on display.
 - **ATA persistence** assumes primary IDE master is the boot disk.
@@ -368,8 +367,9 @@ The goal is not convenience. The goal is understanding:
 - How context switching happens
 - How hardware is programmed directly
 - How operating systems function beneath modern tooling
-- How the CPU executes machine code, cycle by cycle
-
+- How the CPU executes machine code, cycle by cycle.
+- How process works
+- How Memory (De)allocation works
 ---
 
 Best regards,
