@@ -255,7 +255,7 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | 27 | poke | ebx = addr, ecx = value | 0 |
 | 28 | hex2int | esi → string | eax = integer |
 | 29 | banner | — | print banner |
-| 30 | bounce | — | toggle bounce animation |
+| 30 | dydx | — | toggle dydx animation |
 | 31 | bin2hex | eax = integer  | out: HEX |
 | 32 | memdump | esi = addr | out: 64 bytes  |
 | 33 | hexbyte | ebx = byte | print BYTE as hex |
@@ -286,9 +286,9 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 
 | Command | Description |
 |---------|-------------|
-| `heap` | show allocated memory pointers |
 | `frequency` | set/reset frequency |
 | `epoch`     | print epoch time |
+
 ## Userland Programs (`/bin/`)
 
 | Program | Description |
@@ -310,6 +310,8 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | `dealloc <addr>` | release allocated memory |
 | `peek <addr>` | read 32-bit value from memory |
 | `poke <addr> <value>` | write 32-bit value to memory |
+| `bounce &` | loop4ever, kill pid (ps) |
+
 
 ## Debugging with GDB
 
@@ -325,11 +327,10 @@ No debug symbols (flat binary). Use raw addresses: `0x7C00` (bootloader), `0xC01
 
 ## Known Limitations
 
-- **Ring 0 only** — no userspace memory protection. Buggy programs can corrupt the kernel.
 - **Path resolution** handles absolute paths, `.`, `..`, and single relative names only. `cd foo/bar` not supported.
 - **File content** capped at 1024 bytes (`FS_CAPACITY`).
 - **Runtime files** limited to 16 spare slots (`FS_SPARE_COUNT`).
-- **BIOS boot** reads kernel in one call; assumes contiguous sectors.
+- **BIOS boot** reads kernel; assumes contiguous sectors.
 - **ls** ignores arguments — always lists current directory.
 - **vi** has no scroll; files longer than 24 lines get truncated on display.
 - **ATA persistence** assumes primary IDE master is the boot disk.
@@ -366,8 +367,9 @@ The goal is not convenience. The goal is understanding:
 - How context switching happens
 - How hardware is programmed directly
 - How operating systems function beneath modern tooling
-- How the CPU executes machine code, cycle by cycle
-
+- How the CPU executes machine code, cycle by cycle.
+- How process works
+- How Memory (De)allocation works
 ---
 
 Best regards,
