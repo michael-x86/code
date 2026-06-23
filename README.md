@@ -105,11 +105,18 @@ Requires: `nasm`, `python3`, `qemu-system-i386`
 ## Architecture at a Glance
 
 ### **Bootloader** (`bootloader.asm`)
-- Loads kernel from disk into linear memory
-- Sets up a flat 4 GB GDT with CODE_SEG (0x08) and DATA_SEG (0x10)
-- Enters protected mode (CR0.PE = 1)
-- Copies kernel to its final load address (`0xC0100000`)
-- Jumps to kernel entry point
+- Starts in 16-bit real mode.
+- Initializes the stack and segment registers.
+- Enables the A20 line.
+- Using BIOS INT 13h Extensions (AH=42h).
+- Loads the kernel sequentially into a temporary buffer at physical address `0x00020000`.
+- Installs a flat 4 GB Global Descriptor Table (GDT):
+  - CODE_SEG = 0x08
+  - DATA_SEG = 0x10
+- Switches to 32-bit protected mode by setting CR0.PE.
+- Initializes all segment registers and the protected-mode stack.
+- Copies the kernel from the temporary buffer to its final physical load address (`0x00100000`).
+- Transfers execution to the kernel entry point.
 
 ### **Kernel** (`kernel.asm`)
 - **Paging Setup** (`page_mapping`)
