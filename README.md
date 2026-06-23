@@ -286,9 +286,9 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 
 | Command | Description |
 |---------|-------------|
-| `heap` | show allocated memory pointers |
 | `frequency` | set/reset frequency |
 | `epoch`     | print epoch time |
+
 ## Userland Programs (`/bin/`)
 
 | Program | Description |
