@@ -8,7 +8,7 @@ _start:
     pop ebp
     sub ebp,.get_base      
 
-    mov eax,41              ; sys_reg_dump
+    mov eax,23              ; sys_stack_dump
     int 0x80
 
     lea esi,[ebp+cr_lbl] 

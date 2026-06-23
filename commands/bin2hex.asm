@@ -34,7 +34,7 @@ _start:
     test ecx,ecx
     jz .empty
 
-    mov eax,32
+    mov eax,32  ; mem_dump at  esi
     int 0x80
     ret
 

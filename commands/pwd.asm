@@ -1,13 +1,11 @@
-; pwd - print working directory
 [bits 32]
 [org 0x00000000]
-
 
 _start:
     call .get_base
 .get_base:
-    pop ebp                 ; ebp = absolute runtime address of .get_base
-    sub ebp, .get_base      ; ebp = runtime delta address
+    pop ebp
+    sub ebp, .get_base      
 
     mov edi, buf
     mov eax, 11              ; sys_getcwd(edi)

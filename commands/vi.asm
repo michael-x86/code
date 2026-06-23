@@ -7,13 +7,11 @@
 %define VGA_BASE        0xC00B8000+(80*2)*3
 
 _start:
-    ; --- Calculate our Dynamic Base Offset ---
     call .get_base
 .get_base:
-    pop ebp                 ; ebp = absolute runtime address of .get_base
-    sub ebp, .get_base      ; ebp = runtime delta address
+    pop ebp                 ;
+    sub ebp, .get_base     
 
-    ; --- Fetch global command-line argument ---
     mov ebx, 1
     lea edi, [ebp + filename_buf]
     mov eax, 14             ; sys_get_arg
