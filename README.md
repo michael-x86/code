@@ -265,6 +265,10 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | 37 | plot | ebx = x, ecx = y | plot at (x, y) on 80×25 grid |
 | 38 | epoch |                 | ebx=seconds |
 | 39 | putchar | ebx = char | print char|
+| 40 | kill | ebx = pid  | |
+| 41 | regdump |  |print regs||
+| 42 | heap |  |print heap table||
+
 
 ## Memory Map (After Paging Active)
 
