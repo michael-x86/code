@@ -223,7 +223,7 @@ kernel_main:
     lidt [idt_descriptor]
     call pic_remap
     call set_freq       
-    call dydx_init
+    call bounce_init
     call hwclock
 
     mov edi,cwd_buf
@@ -309,7 +309,7 @@ task1_entry:
 task2_entry:  
     test dword [on_off],1
     jnz .paused
-    call dydx_step
+    call bounce_step
 .paused:
     hlt      ; run when state changes
     jmp task2_entry
@@ -1656,7 +1656,7 @@ print_dec:
     test al,al
     jz .done
     movzx ebx,al
-    mov eax,39      ; sys_putchar
+    mov eax,39     
     int 0x80
     inc edi
     jmp .print
@@ -2107,7 +2107,6 @@ tab_print_all_matches:
     mov esi, cmd_table
 .pbi_loop:
     cmp byte [esi],0
-    ;jmp .pbi_done          ;NORD
     je .pbi_done
     push esi
     call tab_prefix_match
@@ -3118,11 +3117,11 @@ sys_kill:
 ; -------------------------------------------
 ; All work and no play makes Jack a dull boy
 ; -------------------------------------------
-sys_dydx:
+sys_bounce:
     xor dword [on_off],1
     ret
 
-dydx_init:
+bounce_init:
     pusha
     mov word [on_off],1
     mov byte [xpos],40
@@ -3132,34 +3131,33 @@ dydx_init:
     popa
     ret
 
-dydx_step: 
-    call dydx_cls 
-    call dydx_update
-    call dydx_plot
+bounce_step: 
+    call bounce_cls 
+    call bounce_update
+    call bounce_plot
     ret
 
-dydx_plot:
+bounce_plot:
     pusha
     mov al,[xpos]
     mov ah,[ypos]
-    call dydx_calc_offset
+    call bounce_calc_offset
     mov ah,0x04
     mov al,0x07 
     mov [edi],ax
     popa
     ret
 
-
-dydx_cls:
+bounce_cls:
     pusha
     mov al,[xpos]
     mov ah,[ypos]
-    call dydx_calc_offset
+    call bounce_calc_offset
     mov word [edi],0x0720  
     popa
     ret
 
-dydx_update:
+bounce_update:
     pusha
     mov al,[xpos]
     add al,[dltx]
@@ -3176,12 +3174,12 @@ dydx_update:
     mov al,0 
     neg byte [dltx]
 .store_x:
-    mov [xpos], al
+    mov [xpos],al
     mov al,[ypos]
     add al,[dlty]
     cmp al,24
     jg .y_bottom
-    cmp al,0
+    cmp al,2     
     jl .y_top
     jmp .store_y
 .y_bottom:
@@ -3189,14 +3187,14 @@ dydx_update:
     neg byte [dlty]
     jmp .store_y
 .y_top:
-    mov al,0
+    mov al,2 
     neg byte [dlty]
 .store_y:
     mov [ypos],al
     popa
     ret
 
-dydx_calc_offset:
+bounce_calc_offset:
     push ebx
     movzx ebx,ah        
     imul ebx,160        ; y*80*2
@@ -4022,7 +4020,7 @@ syscall_table:
     dd sys_poke          ; 27: in = <address> <value> 
     dd sys_hex2int       ; 28: in = esi out = eax
     dd sys_banner        ; 29: print banner
-    dd sys_dydx          ; 30: ?
+    dd sys_bounce        ; 30: c64 style.
     dd sys_out_hex       ; 31: in = eax out=print hex word 
     dd sys_mem_dump      ; 32: in = esi -> address. out: print 64 bytes 
     dd sys_hex_byte      ; 33: print hex byte

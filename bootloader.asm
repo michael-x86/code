@@ -1,6 +1,6 @@
 [org 0x7C00]
 
-KERNEL_SECTORS equ 132
+KERNEL_SECTORS equ 131
 BUFFER_SEG       equ 0x2000     ; Safe buffer zone (0x20000 linear), far above bootloader (0x7C00)
 KERNEL_LOAD_ADDR equ 0x00100000 ; Final destination (1 MB)
 

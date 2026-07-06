@@ -87,10 +87,6 @@ flags          : learning infiltration phased-plasma
   - ≤4 KB flat binaries, assembled separately
   - Communicate with kernel only via `int 0x80`
 
-- **Minimal Modal vi Editor**
-  - `löäp` movement, `i` insert, `ESC` exit insert, `x` delete, `w` save, `q` quit
-  - Single-buffer editing (no scroll; 24-line display limit)
-
 ## Quick Start
 
 Requires: `nasm`, `python3`, `qemu-system-i386`

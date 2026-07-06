@@ -6,7 +6,7 @@ KERNEL_ASM="kernel.asm"
 IMG="os.img"
 
 # Programs to compile
-COMMANDS=(plot up memdump regdump stackdump bin2hex bounce dydx
+COMMANDS=(plot up memdump regdump stackdump bin2hex bounce 
           ps kill poke peek pwd ls cd cat touch write help cls
           verify exit rm rmdir mkdir cp mv vi alloc dealloc heap
          )
