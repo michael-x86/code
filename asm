@@ -8,7 +8,7 @@ IMG="os.img"
 # Programs to compile
 COMMANDS=(plot up memdump regdump stackdump bin2hex bounce 
           ps kill poke peek pwd ls cd cat touch write help cls
-          verify exit rm rmdir mkdir cp mv vi alloc dealloc heap
+          verify exit rm rmdir mkdir cp mv alloc dealloc heap
          )
 
 RUN_QEMU=false
