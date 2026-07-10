@@ -187,7 +187,7 @@ Requires: `nasm`, `python3`, `qemu-system-i386`
 ├── commands/                # userland program sources
 │   ├── pwd.asm ls.asm cd.asm cat.asm
 │   ├── touch.asm write.asm rm.asm
-│   ├── vi.asm mkdir.asm
+│   ├── mkdir.asm
 │   └── (and more...)
 ├── bin/                     # compiled userland binaries
 ├── proc/                    # content mirror (host-side)
@@ -300,7 +300,6 @@ Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
 | `cp <src> <dest>` | copy file |
 | `mv <src> <dest>` | move/rename file |
 | `rm <file>` | delete file |
-| `vi <file>` | minimal editor (hjkl, i, ESC, x, w, q) |
 | `ping` | int 0x80 liveness test |
 | `alloc <bytes>` | allocate heap memory (min 4 KB) |
 | `dealloc <addr>` | release allocated memory |
@@ -328,7 +327,7 @@ No debug symbols (flat binary). Use raw addresses: `0x7C00` (bootloader), `0xC01
 - **Runtime files** limited to 16 spare slots (`FS_SPARE_COUNT`).
 - **BIOS boot** reads kernel; assumes contiguous sectors.
 - **ls** ignores arguments — always lists current directory.
-- **vi** has no scroll; files longer than 24 lines get truncated on display.
+- files longer than 24 lines get truncated on display.
 - **ATA persistence** assumes primary IDE master is the boot disk.
 - **I/O is synchronous** — ATA is PIO polling, keyboard uses IRQ-fed ring buffer (no interrupt-driven I/O).
 - **Paging tables** are fixed at assembly time; no dynamic table allocation.
