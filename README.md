@@ -1,40 +1,18 @@
 If you are looking for clean APIs and high-level comfort, this is not it.
 
 If you want to see what the machine is actually doing — instruction by instruction — you're in the right place.
-
 # x86 Assembly Kernel
 
-A small 32-bit operating system written entirely in NASM assembly. Boots from BIOS, switches to protected mode with paging, runs three round-robin tasks driven by the PIT, and gives you a green-on-black VGA shell with persistent filesystem.
+A small 32-bit operating system written entirely in NASM assembly. Boots from BIOS, switches to protected mode with paging, gates on a login prompt, and gives you a green-on-black shell over a round-robin process scheduler and an in-kernel filesystem you can edit and persist to disk. It can also flip the display into 800x600 VBE graphics or classic VGA mode 13h.
 
 Built from scratch on Linux with no libc, no runtime, and no external abstractions.
-```
-                ┌──────────────────────────────────────────────────┐
-                │          Higher-Half Kernel Space (0xC0000000+)  │
-                └─────────────────────────┬────────────────────────┘
-                                          │
-             ┌────────────────────────────┼────────────────────────────┐
-             ▼                            ▼                            ▼
-   ┌──────────────────────┐     ┌──────────────────────┐     ┌──────────────────────┐
-   │  Task 0 (OS Shell)   │     │ Task 1 (Timekeeper)  │     │ Task 2 (Background)  │
-   │  • Interactive CLI   │     │  • 100Hz PIT Tick    │     │  • Bouncing Sprite   │
-   │  • Dynamic Binary    │     │  • Track Boot Epoch  │     │  • Independent State │
-   │    Execution Engine  │     │  • Flip Sync Flags   │     │    Execution Loop    │
-   └──────────┬───────────┘     └──────────┬───────────┘     └──────────┬───────────┘
-              │                            │                            │
-              └────────────────────────────┼────────────────────────────┘
-                                           │
-                                           ▼
-                                ┌──────────────────────┐
-                                │ Array-Based TCB /    │
-                                │   Stack Swapper      │
-                                └──────────────────────┘
 
 ```
-```
+Login: root
+Password: ********
 $ ls
-bin/  proc/  var/  etc/
-$ cd /proc
-$ cat cpuinfo
+bin  proc  var  etc
+$ cat /proc/cpuinfo
 processor      : 0
 vendor_id      : Cyberdyne Systems
 cpu family     : Neural-Net Processor
@@ -46,274 +24,111 @@ flags          : learning infiltration phased-plasma
 
 ## Features
 
-- **x86 Bootloader** → **32-bit Protected Mode** → **Paging** → Higher-half kernel at `0xC0100000`
-  - Identity mapping of first 4 MB + kernel low page table (0x00400000–0x007FFFFF)
-  - Heap page tables (3 tables covering 0x00800000–0x013FFFFF)
-  - Virtual memory split: identity map at PDE[0] and higher-half at PDE[768+]
-  
-- **Task Scheduling**: Three round-robin tasks driven by IRQ0 (PIT at configurable frequency)
-  - **Task 0**: Interactive shell (polling-based input)
-  - **Task 1**: Ticker task (tick generator)
-  - **Task 2**: Bounce animation (bouncing)
+- x86 boot sector → 32-bit protected mode → paging → higher-half kernel at `0xC0100000`
+- USB-bootable under a legacy BIOS / CSM — loads via LBA (`int 13h AH=42h`), one sector per call, no CHS geometry guessing
+- Login gate (`root` / `deadbeef`) before the shell starts
+- Round-robin process table (8 slots) scheduled by IRQ0 (100 Hz PIT); background with `&`, list with `ps`, terminate with `kill`
+- VGA text shell at 80×25 with in-line editing, command history, and tab completion
+- Read/write in-kernel filesystem — `touch`, `write`, `rm`, `mkdir`, `cp`, `mv` from the prompt
+- Persistence to disk — runtime files survive reboots **and** kernel rebuilds
+- Linux-style `int 0x80` syscall interface (50 syscalls)
+- Userland binaries assembled into `/bin` and spawned on demand
+- Graphics: **ESC** toggles 800x600 VBE; `mode13` enters VGA mode 13h (320x200x256) with `setpixel` / `clearpixel` / `clear`, **F5** returns to text
 
-- **VGA Text Shell** (80×25)
-  - Line history with arrow keys (up/down)
-  - Tab completion for commands
-  - Real-time hardware clock display (Hz, tick count) in banner
+## Quick start
 
-- **In-Kernel Virtual Filesystem**
-  - Generated at build time from project directory by `gen_fs.py`
-  - 68-byte fixed-size file records embedded in kernel image
-  - 1024-byte mutable buffers for runtime content
-  - 16 "spare slots" for runtime-created files
-
-- **Persistent Filesystem**
-  - Read/write via `touch`, `write`, `rm`, `mkdir`, `rmdir` commands
-  - Persistence to disk via **PIO ATA** (LBA 256+) — files survive reboot AND kernel rebuilds
-  - Build script automatically backs up and restores the FS region
-
-- **Linux-Style int 0x80 Syscall Interface** (39+ syscalls)
-  - Text output: `putchar`, `print`, `print_n`, `newline`, `cls`
-  - Input: `get_key`, `get_tick`
-  - Filesystem: `stat`, `create`, `write`, `unlink`, `mkdir`, `rmdir`
-  - Memory: `alloc`, `dealloc`, `peek`, `poke`, `read_mem`
-  - Process: `getcwd`, `chdir`, `get_arg`, `ps`, `regdump`
-  - Utilities: `hex2int`, `bin2hex`, `asc2int`, `memdump`, `plot`
-  - Display: `print_hex`, `print_int`, `banner`, `tick`, `hertz`, `bounce`
-  - System: `shutdown`
-
-- **Userland Binaries**
-  - Linked into `/bin` and loaded on demand
-  - ≤4 KB flat binaries, assembled separately
-  - Communicate with kernel only via `int 0x80`
-
-## Quick Start
-
-Requires: `nasm`, `python3`, `qemu-system-i386`
+Requires `nasm`, `python3`, `qemu-system-i386`.
 
 ```bash
-./asm -r          # build + run in QEMU window
-./asm -f          # fullscreen mode
-./asm -d          # GDB server on localhost:1234, halts at start
-./asm             # build only
+make run         # build + run in a QEMU window
+make fullscreen  # fullscreen
+make debug       # GDB server on localhost:1234, halts at start
+make             # build only (os.img)
+make clean       # remove build artifacts
 ```
 
-## Architecture at a Glance
+Log in with `root` / `deadbeef`.
 
-### **Bootloader** (`bootloader.asm`)
-- Starts in 16-bit real mode.
-- Initializes the stack and segment registers.
-- Enables the A20 line.
-- Using BIOS INT 13h Extensions (AH=42h).
-- Loads the kernel sequentially into a temporary buffer at physical address `0x00020000`.
-- Installs a flat 4 GB Global Descriptor Table (GDT):
-  - CODE_SEG = 0x08
-  - DATA_SEG = 0x10
-- Switches to 32-bit protected mode by setting CR0.PE.
-- Initializes all segment registers and the protected-mode stack.
-- Copies the kernel from the temporary buffer to its final physical load address (`0x00100000`).
-- Transfers execution to the kernel entry point.
+## Boot it from a USB stick
 
-### **Kernel** (`kernel.asm`)
-- **Paging Setup** (`page_mapping`)
-  - Identity-maps first 4 MB (PDE[0] → `identity_page_table`)
-  - Maps kernel code+data (PDE[1] → `kernel_low_page_table`, phys 0x00400000–0x007FFFFF)
-  - Sets up 3 heap page tables (PDEs 2–4, PDE[770–772]) for on-demand allocation
-  - Dual-maps kernel in higher half (PDE[768–772]) for virtual addressing
-  - Page directory at `0xC0000000`, page tables follow
-  - All PTE entries OR'd with 0x3 (present | writable)
+Write the whole image to the raw device (not a partition), and boot with **Legacy / CSM** enabled — it is a BIOS boot sector, not UEFI:
 
-- **Memory Bitmap** (`page_bitmap`)
-  - 32 KB bitmap tracking 1 GB of 4 KB physical frames
-  - `reserve_kernel_pages()` protects kernel's own pages from allocation
-  - Page-on-demand allocation via `alloc()` syscall
-
-- **Interrupt Handlers**
-  - `build_idt`: Constructs 256-entry IDT
-  - `set_irq0`: PIT timer interrupt (configurable frequency)
-  - `set_irq1`: Keyboard IRQ, feeds into ring buffer (`kbd_buf`)
-  - `set_syscall`: INT 0x80 handler for userland
-  - `pic_remap`: Remaps PIC IRQs to INT 32–47
-
-- **Task Switching** (called on each IRQ0)
-  - Round-robin through 3 tasks
-  - Each task has its own stack (`task0_esp`, `task1_esp`, `task2_esp`)
-  - Context saved/restored via `pushad`/`popad`
-
-- **Shell** (Task 0, `kernel_main` / `.task0_entry`)
-  - Polls for keyboard input
-  - Parses arguments into `argv[]` / `argc`
-  - Dispatches builtin commands or loads userland binaries
-  - Banner shows Hz, tick count, system message
-
-- **Display**
-  - VGA framebuffer at `0xC00B8000` (80×25 text cells, 2 bytes each: char + color)
-  - Cursor position tracked in `cursor_pos`
-  - Hardware cursor updated via I/O ports 0x3D4–0x3D5 (CRT controller)
-  - Scrolling when bottom of screen is exceeded
-
-- **Clock** (`hwclock`)
-  - Reads CMOS RTC (port 0x70/0x71)
-  - Computes Unix epoch timestamp
-  - Accounts for leap years (divisible by 4, except centuries unless divisible by 400)
-
-### **Filesystem** (`fs.inc` — auto-generated by `gen_fs.py`)
-- 68-byte fixed-size file records embedded in kernel image
-- Each record: inode number, mode (dir/file), size, name, content pointer
-- 1024-byte mutable content buffers for each file
-- 16 "spare slots" at end for runtime-created files
-- All pointers are embedded offsets (flat, no indirection)
-
-### **Persistence**
-- Modified spare-slot files are written to fixed region at **LBA 256** (`3 sectors per file = 16 × 3 = 48 sectors`)
-- At boot, `load_fs_persist` replays the on-disk files into the spare slots
-- Build script (`./asm`) backs up FS region before reassembly, restores after
-- Survives both reboots and kernel rebuilds
-
-### **Userland**
-- Programs assembled as `[bits 32]`, `[org 0x00000000]`, flat binaries
-- Maximum 4 KB (rest zero-filled)
-- Compiled into `bin/<name>` at build time
-- Loaded into memory on first invocation, executed with `call` gate
-
-## File Layout
-
-```
-├── bootloader.asm           # 16→32 bit boot stub
-├── kernel.asm               # kernel + paging + tasks + shell + 37+ syscalls
-├── fs.inc                   # auto-generated: embedded filesystem records
-├── gen_fs.py                # walks project dir, emits fs.inc
-├── asm                      # build script
-├── commands/                # userland program sources
-│   ├── pwd.asm ls.asm cd.asm cat.asm
-│   ├── touch.asm write.asm rm.asm
-│   ├── vi.asm mkdir.asm
-│   └── (and more...)
-├── bin/                     # compiled userland binaries
-├── proc/                    # content mirror (host-side)
-├── var/log/                 # content mirror (host-side)
-└── etc/                     # content mirror (host-side)
+```bash
+sudo dd if=os.img of=/dev/sdX bs=1M conv=fsync status=progress   # /dev/sdX = your stick — double-check it
 ```
 
-## Adding a Program
+The bootloader uses the BIOS-provided boot drive and LBA extended reads, and verifies `int 13h` extension support before loading (printing a clear error if the firmware lacks it).
 
-1. Write `commands/<name>.asm`:
-   ```asm
-   [bits 32]
-   [org 0x00000000]
-   
-   ; your code here
-   ; use only int 0x80 to communicate with kernel
-   
-   mov eax,0
-   int 0x80
-   ```
+## Architecture at a glance
 
-2. Append `<name>` to the `COMMANDS=(…)` array in the `asm` script.
+- **Bootloader** (`bootloader.asm`) — enables A20, checks for `int 13h` LBA support, loads the kernel one sector at a time into a buffer, enters protected mode, relocates the kernel to `0x00100000`, and jumps to it.
+- **Kernel** (`kernel.asm`) — paging identity-maps the first 4 MB **and** maps it at `0xC0000000+`. Installs IDT/PIC/PIT/keyboard/syscall handlers, loads the persisted filesystem, runs the login gate, then schedules processes; slot 2 is the shell.
+- **Filesystem** (`fs.inc`, auto-generated by `gen_fs.py`) — embedded as fixed-size 68-byte records inside the kernel image, each non-dir entry backed by a 2048-byte mutable buffer. 32 "spare slots" for runtime-created files.
+- **Persistence** — modified spare slots are written through to a fixed region on the disk image (starting at LBA 512, 5 sectors per slot). A boot-time loader replays them into RAM.
+- **Userland** — programs are assembled separately into ≤4 KB flat binaries (`[org 0x00000000]`), embedded in `/bin` at build time, and spawned into a process slot when invoked. They talk to the kernel only via `int 0x80`.
 
-3. Run `./asm`. Binary lands at `bin/<name>` and is callable by typing `<name>` at the shell prompt.
-
-**Constraints**: Max 4 KB per program (rest zero-filled in flat-binary mode).
-
-## int 0x80 Syscall Table
-
-Syscalls run with interrupts off (interrupt gate), so PIT cannot preempt them.
-
-| # | Name | Args | Returns |
-|----|------|------|---------|
-| 0 | exit |  | eax |
-| 1 | print | esi = ptr (null-term) | 0 |
-| 2 | print_cr | esi = ptr (CR=13 → newline) | 0 |
-| 3 | newline | — | 0 |
-| 4 | cls | — | VGA cleared |
-| 5 | print_hex | ebx | 0 |
-| 6 | print_int | ebx (decimal) | 0 |
-| 7 | get_key | — | ASCII (0 if empty) |
-| 8 | get_tick | — | PIT tick count (100 Hz) |
-| 9 | shutdown | — | (does not return) |
-| 10 | read_mem | ebx = addr | dword at [addr] |
-| 11 | getcwd | edi = dst | 0 |
-| 12 | chdir | esi = path | 0 / -1 |
-| 13 | list_dir | ebx = idx, edi = dst | type / -1 (writes basename) |
-| 14 | get_arg | ebx = idx, edi = dst | 0 / -1 (writes argv[i]) |
-| 15 | stat | esi = path, edi = info(12B) | 0 / -1 |
-| 16 | print_n | esi = ptr, ecx = n | 0 (`\n`→newline, `\t`→space) |
-| 17 | create | esi = path | 0 / -1 |
-| 18 | write | esi = path, ebx = buf | 0 / -1 |
-| 19 | unlink | esi = path | 0 / -1 |
-| 20 | mkdir | esi = path | 0 / -1 |
-| 21 | rmdir | esi = path | 0 / -1 |
-| 22 | ps | — | current processes |
-| 23 | regdump | — | stack and registers |
-| 24 | alloc | ecx = bytes (+4096) | ptr → heap memory |
-| 25 | dealloc | ebx = ptr | 0 / -1 |
-| 26 | peek | ebx = addr | dword at [addr] |
-| 27 | poke | ebx = addr, ecx = value | 0 |
-| 28 | hex2int | esi → string | eax = integer |
-| 29 | banner | — | print banner |
-| 30 | dydx | — | toggle dydx animation |
-| 31 | bin2hex | eax = integer  | out: HEX |
-| 32 | memdump | esi = addr | out: 64 bytes  |
-| 33 | hexbyte | ebx = byte | print BYTE as hex |
-| 34 | asc2int | esi → string | eax = integer (atoi) |
-| 35 | hertz | — | print CPU Hz in banner |
-| 36 | tick | — | print heartbeat tick |
-| 37 | plot | ebx = x, ecx = y | plot at (x, y) on 80×25 grid |
-| 38 | epoch |                 | ebx=seconds |
-| 39 | putchar | ebx = char | print char|
-| 40 | kill | ebx = pid  | |
-| 41 | regdump |  |print regs||
-| 42 | heap |  |print heap table||
-
-
-## Memory Map (After Paging Active)
+## Layout
 
 ```
-0x00000000 – 0x003FFFFF   Physical identity-map (first 4 MB)
-0xC00B8000 – 0xC00B8FA0   VGA text framebuffer (80×25 cells, 2 bytes each)
-0xC0000000 – 0xC03FFFFF   Higher-half identity-map (mirrors physical 0x00000000–0x003FFFFF)
-0xC0400000 – 0xC07FFFFF   Kernel code+data+bss+embedded FS
-0xC0800000 – 0xC1000000   Heap (on-demand paging via alloc)
+.
+├── bootloader.asm     # 16→32 bit boot stub (A20, LBA load, protected mode)
+├── kernel.asm         # the kernel
+├── gen_fs.py          # walks build dir, emits fs.inc
+├── Makefile           # build entry point
+├── commands/          # userland program sources (*.asm)
+├── bin/               # compiled userland (no extension)
+├── proc/  var/log/    # host-side content mirrored into the FS
 ```
 
-**Page Bitmap**: 32 KB at end of kernel, tracks ownership of 1 GB of 4 KB frames.
+Whatever sits in `bin/`, `proc/`, `var/log/` on the host shows up at the matching path inside the OS. Rebuilding picks up changes automatically.
 
-## Built-In Shell Commands
+## Adding a program
 
-| Command | Description |
-|---------|-------------|
-| `frequency` | set/reset frequency |
-| `epoch`     | print epoch time |
+1. Write `commands/<name>.asm` starting with `[bits 32]` / `[org 0x00000000]` and ending in `ret`.
+2. Use only `int 0x80` to talk to the kernel.
+3. Append `<name>` to the `COMMANDS` list in the `Makefile`.
+4. `make`. The binary lands at `/bin/<name>` and is callable by typing `<name>` at the prompt.
 
-## Userland Programs (`/bin/`)
+Programs are capped at 4 KB. Read arguments with `sys_get_arg` (syscall 14); use the position-independent `call .base / pop ebp / sub ebp,.base` idiom for local data (see `commands/kill.asm`).
 
-| Program | Description |
-|---------|-------------|
-| `pwd` | print working directory |
-| `ls` | list current directory |
-| `cd <path>` | change directory (absolute, `.`, `..`, or single relative name) |
-| `cat <file>` | print file contents (renders `\n` and `\t`) |
-| `touch <file>` | create empty file |
-| `write <file> <text...>` | append text to file |
-| `mkdir <name>` | create directory |
-| `rmdir <name>` | remove empty directory |
-| `cp <src> <dest>` | copy file |
-| `mv <src> <dest>` | move/rename file |
-| `rm <file>` | delete file |
-| `vi <file>` | minimal editor (hjkl, i, ESC, x, w, q) |
-| `ping` | int 0x80 liveness test |
-| `alloc <bytes>` | allocate heap memory (min 4 KB) |
-| `dealloc <addr>` | release allocated memory |
-| `peek <addr>` | read 32-bit value from memory |
-| `poke <addr> <value>` | write 32-bit value to memory |
-| `bounce &` | loop4ever, kill pid (ps) |
+## int 0x80 syscalls
 
+`eax` = syscall number, args in `ebx / ecx / edx / esi / edi`, return in `eax`. Bad number → `-1`. There are 50 syscalls spanning:
+
+- **Console** — print, print_cr, newline, cls, print_hex/int, putchar, banner
+- **Input / time** — get_key, get_tick, hertz, tick, epoch
+- **Filesystem** — getcwd, chdir, list_dir, stat, create, write, unlink, mkdir, rmdir
+- **Memory** — read_mem, alloc, dealloc, peek, poke, mem_dump, heap_info
+- **Processes** — ps_info, kill, detach (self-background), exit
+- **Graphics** — mode13, setpixel (`ebx=x ecx=y edx=colour`), clearpixel (`ebx=x ecx=y`), gclear
+- **Misc** — get_arg, hex2int, asc2int, setfreq (PIT rate), reg_dump, stack_dump
+
+Syscalls run with interrupts off (interrupt gate), so the PIT cannot preempt them.
+
+## Userland programs (`/bin/`)
+
+`pwd ls cd cat touch write rm rmdir mkdir cp mv` (files) ·
+`ps kill` (processes) · `alloc dealloc heap` (memory) ·
+`peek poke memdump regdump stackdump bin2hex` (inspection) ·
+`mode13 setpixel clearpixel clear plot bounce dydx up` (graphics/demos) ·
+`frequency epoch banner help cls verify exit`
+
+## How persistence works ;-)
+
+Each runtime-created file lives in two places: a 2048-byte buffer in RAM, and a fixed slot on disk (LBA 512 + slot × 5 sectors). The mapping never moves. On `create` / `write` / `unlink`, the kernel updates RAM and writes that slot's sectors to disk. On boot, `load_fs_persist` reads each slot back and replays it into RAM.
+
+Build-seeded files (everything under `/proc`, `/etc`, `/var/log`) live inside the kernel image and reset to their build-time content on every boot — only the 32 spare slots persist. The Makefile backs up the FS region before reassembling the kernel and restores it after, so persisted files survive rebuilds too.
+
+## Graphics modes
+
+- **800x600 VBE** — press **ESC** to toggle between text and a linear-framebuffer graphics mode.
+- **VGA mode 13h (320x200x256)** — run `mode13`. The shell keeps running (typed blind over the graphics screen), so you can `setpixel <x> <y> <colour>`, `clearpixel <x> <y>`, and `clear`. Press **F5** to return to text. Entering saves the font and DAC palette; exiting restores both, so text colours come back intact. Colours are RGB332 palette indices (`0xE0` red, `0x1C` green, `0x03` blue, `0xFF` white).
 
 ## Debugging with GDB
 
 ```bash
-./asm -d                              # Start with GDB server
-gdb                                   # In another terminal
+make debug
+gdb
 (gdb) target remote localhost:1234
 (gdb) set architecture i386
 (gdb) continue
@@ -321,55 +136,40 @@ gdb                                   # In another terminal
 
 No debug symbols (flat binary). Use raw addresses: `0x7C00` (bootloader), `0xC0100000` (kernel).
 
-## Known Limitations
+## Known limitations
 
-- **Path resolution** handles absolute paths, `.`, `..`, and single relative names only. `cd foo/bar` not supported.
-- **File content** capped at 1024 bytes (`FS_CAPACITY`).
-- **Runtime files** limited to 16 spare slots (`FS_SPARE_COUNT`).
-- **BIOS boot** reads kernel; assumes contiguous sectors.
-- **ls** ignores arguments — always lists current directory.
-- **vi** has no scroll; files longer than 24 lines get truncated on display.
-- **ATA persistence** assumes primary IDE master is the boot disk.
-- **I/O is synchronous** — ATA is PIO polling, keyboard uses IRQ-fed ring buffer (no interrupt-driven I/O).
-- **Paging tables** are fixed at assembly time; no dynamic table allocation.
+- Ring 0 only — no userspace memory protection. A buggy program can corrupt the kernel.
+- The login password is stored in plaintext in the kernel image — a gate, not a security boundary.
+- Path resolver handles absolute paths, `.`, `..`, and a single relative name. `cd foo/bar` is not supported.
+- File content capped at 2048 bytes (`FS_CAPACITY`); 32 runtime-creatable files (`FS_SPARE_COUNT`).
+- No interrupt-driven I/O — the keyboard is IRQ-fed into a ring buffer; disk is PIO.
 
-## Design Philosophy
+---
 
-### Zero Abstraction
+# Design Philosophy
+
+## Zero Abstraction
+
 If it is not explicitly written, it does not exist.
 
-### Instruction-Level Control
-Every register, flag, interrupt frame, and memory mapping is visible and direct.
+## Instruction-Level Control
 
-### Hardware-First Engineering
-The kernel is designed around CPU behavior and hardware constraints, not software convention.
+Every register, flag, interrupt frame, and memory mapping might be intentional.
 
----
+## Hardware-First Engineering
 
-## Development Status
-
-In irregular development cycles. The project is experimental and intentionally low-level.
+The kernel is designed around CPU behavior and hardware constraints rather than high-level software conventions.
 
 ---
 
-## Why This Exists
+# Why This Exists
 
 Modern systems hide the machine behind layers of abstraction. This project removes those layers completely.
 
 The goal is not convenience. The goal is understanding:
 
-- How interrupts actually work
-- How paging behaves
-- How context switching happens
-- How hardware is programmed directly
-- How operating systems function beneath modern tooling
-- How the CPU executes machine code, cycle by cycle.
-- How process works
-- How Memory (De)allocation works
----
-
-Best regards,
-
-**Michael Nordstedt**
-
-michael@nordstedt.eu
+- how interrupts actually work
+- how paging behaves
+- how context switching happens
+- how hardware is programmed directly
+- how operating systems function beneath modern tooling
