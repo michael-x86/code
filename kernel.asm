@@ -4,6 +4,10 @@ global start
 
 bits 32
 
+
+; This version does not completely reflect the README.md file. 
+; If you are interested, please contact me at michael@nordstedt.eu.
+
 MAX_PROC equ 8        ; process-table: slots 0-2 base tasks, 3+ spawned
 PROC_NAME_LEN equ 16  ; per-process command name (snapshot for ps)
 PS_REC equ 24         ; sys_ps_info record size: state+vbase+esp+name[16]
