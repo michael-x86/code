@@ -20,21 +20,12 @@ You'll need:
 
 ## Building and Testing
 
-```bash
-# Build and run in QEMU
-./asm -r
-
+```bash 
 # Build only (no run)
-./asm
-
-# Run with GDB server on localhost:1234
-./asm -d
-
+make
 # Fullscreen mode
-./asm -f
+make fullscreen
 ```
-
-**Every change must be tested with `./asm -r`** to ensure the kernel still boots and behaves as expected.
 
 ## Code Style Guide
 
@@ -119,7 +110,7 @@ Before submitting:
 - [ ] Code tested with `./asm -r` (kernel boots, basic functionality works)
 - [ ] New assembly includes `in:` / `out:` comments for functions
 - [ ] Commit messages follow the style guide
-- [ ] No unrelated changes mixed in
+- [ ] Unrelated changes mixed in? Could be useful...
 - [ ] README/CONTRIBUTING updated if needed
 - [ ] Explain *why* the change was needed (not just what changed)
 
