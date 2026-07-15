@@ -120,20 +120,6 @@ The bootloader uses the BIOS-provided boot drive and LBA extended reads, and ver
 - **Persistence** — modified spare slots are written through to a fixed region on the disk image (starting at LBA 512, 5 sectors per slot). A boot-time loader replays them into RAM.
 - **Userland** — programs are assembled separately into ≤4 KB flat binaries (`[org 0x00000000]`), embedded in `/bin` at build time, and spawned into a process slot when invoked. They talk to the kernel only via `int 0x80`.
 
-## Layout
-
-```
-.
-├── bootloader.asm     # 16→32 bit boot stub (A20, LBA load, protected mode)
-├── kernel.asm         # the kernel
-├── gen_fs.py          # walks build dir, emits fs.inc
-├── Makefile           # build entry point
-├── commands/          # userland program sources (*.asm)
-├── bin/               # compiled userland (no extension)
-├── proc/  var/log/    # host-side content mirrored into the FS
-```
-
-Whatever sits in `bin/`, `proc/`, `var/log/` on the host shows up at the matching path inside the OS. Rebuilding picks up changes automatically.
 
 ## Adding a program
 
