@@ -1,127 +1,302 @@
-# Contributing to x86 Kernel
+# Contributing to the x86 Kernel
 
-Thanks for your interest in contributing! This is a low-level, instruction-centric x86 kernel project. Contributions are welcome — whether fixes, optimizations, new syscalls, or documentation.
+First of all: thanks for stopping by.
 
-## Getting Started
+Whether you're fixing a typo, optimizing a few instructions, adding a new syscall, or making the scheduler slightly less angry, contributions are welcome.
 
-1. **Fork** the repository
-2. **Clone** your fork: `git clone https://github.com/michael-x86/code.git`
-3. **Create a branch** for your change: `git checkout -b feature/my-feature` or `git checkout -b fix/my-bug`
-4. **Make your changes**
-5. **Test thoroughly** (see below)
-6. **Push** to your fork and open a pull request
-
-## Development Setup
-
-You'll need:
-- `nasm` — NASM assembler
-- `python3` — for filesystem generation (`gen_fs.py`)
-- `qemu-system-i386` — to run the kernel
-
-## Building and Testing
-
-```bash 
-# Build only (no run)
-make
-# Fullscreen mode
-make fullscreen
-```
-
-## Code Style Guide
-
-### Assembly (NASM)
-
-- **Labels:** lowercase with underscores (e.g., `setup_paging`, `.check_loop`)
-- **Constants:** UPPERCASE with underscores (e.g., `CODE_SEG`, `DATA_SEG`)
-- **Registers:** Use meaningful register names in comments
-- **Comments:** 
-  - Document non-obvious logic
-  - Explain hardware assumptions and side effects
-  - Mark sections clearly with `; --- Section Name ---`
-- **Indentation:** Use spaces (match surrounding code)
-- **Function structure:**
-  ```asm
-  ; --- Brief description of what this does ---
-  ; in:  eax = description
-  ;      ebx = description
-  ; out: eax = description
-  ;      CF = 1 on failure, 0 on success
-  my_function:
-      push ebx
-      ; ... code ...
-      pop ebx
-      ret
-  ```
-
-### Python (gen_fs.py)
-
-- Follow PEP 8
-- Comment non-obvious filesystem serialization logic
-- Document any changes to the 68-byte record format
-
-### Commit Messages
-
-- **First line:** imperative mood, ≤50 characters
-  - ✅ `Fix paging setup for >20MB kernels`
-  - ✅ `Add sys_read syscall`
-  - ❌ `Fixed stuff`
-- **Body:** explain *why*, not *what* (the code shows what)
-- **Reference issues:** `Fixes #42`
-
-Example:
-```
-Add higher-half kernel mapping for task isolation
-
-Previously all tasks shared the lower 4 MB. This change adds
-separate page table entries at 0xC0400000+ to support future
-ring-3 userspace with separate memory contexts.
-
-Fixes #18
-```
-
-## Types of Contributions
-
-### Bug Fixes
-- Are they reproducible? Include steps
-- Does the fix break anything else? Test thoroughly
-- Document the root cause in the PR
-
-### New Syscalls
-- **Update the README table** (`int 0x80 syscall table`)
-- **Add kernel handler** in `kernel.asm` (with `in:/out:` comments)
-- **Add test program** in `commands/` if user-visible
-- **Update CONTRIBUTING.md** if changing the calling convention
-
-### New Commands
-- Create a new file in `commands/` following the template
-- Add the command name to `COMMANDS=()` in the `asm` script
-- Size limit: **4 KB** (use `resb` for larger buffers at fixed vaddrs)
-- Only use `int 0x80` to interact with the kernel
-- Update README with usage and syscall list
-
-### Documentation
-- Fixes to README or CONTRIBUTING are always welcome
-- Explain architecture decisions (not just syntax)
-- Include examples where helpful
-
-## Pull Request Checklist
-
-Before submitting:
-- [ ] Code tested with `./asm -r` (kernel boots, basic functionality works)
-- [ ] New assembly includes `in:` / `out:` comments for functions
-- [ ] Commit messages follow the style guide
-- [ ] Unrelated changes mixed in? Could be useful...
-- [ ] README/CONTRIBUTING updated if needed
-- [ ] Explain *why* the change was needed (not just what changed)
-
-## Questions?
-
-Open an **issue** with the `question` label.
-
-## License
-
-All contributions are licensed under the MIT License (see `LICENSE`).
+This project is intentionally low-level. Most of the code is written in NASM, runs without an operating system, and occasionally reminds you that the CPU does exactly what you told it to do—not what you meant.
 
 ---
 
-**Happy coding!** Remember: Comments that explain hardware behavior are worth their weight in silicon.
+# Getting Started
+
+1. Fork the repository.
+2. Clone your fork.
+
+```bash
+git clone https://github.com/michael-x86/code.git
+cd code
+```
+
+3. Create a branch.
+
+```bash
+git checkout -b feature/my-awesome-feature
+```
+
+or
+
+```bash
+git checkout -b fix/my-bug
+```
+
+4. Make your changes.
+5. Build and test.
+6. Push your branch.
+7. Open a Pull Request.
+
+---
+
+# Development Environment
+
+You'll need:
+
+* **NASM** — assembler
+* **Python 3** — used by `gen_fs.py`
+* **QEMU (qemu-system-i386)** — because rebooting a real machine 400 times gets old
+
+---
+
+# Building
+
+Build only:
+
+```bash
+make
+```
+
+Run in fullscreen:
+
+```bash
+make fullscreen
+```
+
+If QEMU immediately triple-faults, congratulations—you've discovered another exciting debugging session.
+
+---
+
+# Coding Style
+
+## NASM Assembly
+
+Keep things consistent.
+
+### Labels
+
+Use lowercase with underscores.
+
+```asm
+setup_paging
+.next_page
+copy_kernel
+```
+
+### Constants
+
+Use uppercase with underscores.
+
+```asm
+CODE_SEG
+DATA_SEG
+PAGE_PRESENT
+```
+
+### Comments
+
+Document things that aren't immediately obvious.
+
+Good comments explain:
+
+* hardware assumptions
+* register usage
+* side effects
+* why something exists
+
+Bad comments explain that:
+
+```asm
+inc eax ; increment eax
+```
+
+We know.
+
+Separate major sections with:
+
+```asm
+; ------------------------------------------------------------
+; Paging initialization
+; ------------------------------------------------------------
+```
+
+### Function Documentation
+
+Every non-trivial function should describe its interface.
+
+```asm
+; ------------------------------------------------------------
+; Allocate one physical page
+;
+; in:
+;   none
+;
+; out:
+;   eax = physical address
+;   CF  = 0 success
+;   CF  = 1 no free pages
+; ------------------------------------------------------------
+alloc_page:
+```
+
+Preserve registers whenever appropriate and match the surrounding code style.
+
+---
+
+## Python (`gen_fs.py`)
+
+* Follow PEP 8.
+* Comment serialization logic.
+* Document any changes to the filesystem layout.
+* If you modify the 68-byte record format, update the documentation.
+
+Future you will appreciate it.
+
+---
+
+# Testing
+
+Before opening a Pull Request:
+
+* Build successfully.
+* Boot successfully.
+* Test the feature you changed.
+* Verify you didn't accidentally break something unrelated.
+
+If your change affects:
+
+* paging
+* interrupts
+* task switching
+* ATA
+* memory allocation
+
+please test those paths carefully.
+
+"Compiles" is not the same thing as "works."
+
+---
+
+# Commit Messages
+
+Keep the first line short (50 characters or fewer).
+
+Good:
+
+```
+Add sys_read syscall
+```
+
+```
+Fix page allocator overflow
+```
+
+```
+Improve ATA sector validation
+```
+
+Less good:  
+
+```
+Fixed some stuff 
+```
+
+```
+Update
+```
+
+The commit body should explain **why** the change exists.
+
+Example:
+
+```text
+Add higher-half task mapping
+
+Future user-mode processes require isolated address spaces.
+This introduces separate page table entries that prepare the
+scheduler for per-task virtual memory.
+```
+
+Reference issues when appropriate.
+
+---
+
+# What Can I Contribute?
+
+Pretty much anything.
+
+Ideas include:
+
+* Bug fixes
+* Performance improvements
+* Documentation
+* New shell commands
+* New syscalls
+* Memory management improvements
+* Better debugging tools
+* Scheduler improvements
+* Filesystem enhancements
+* Keyboard or ATA improvements
+* New examples
+
+If it makes the kernel smaller, faster, cleaner, or easier to understand, it's probably welcome.
+
+---
+
+# Pull Request Checklist
+
+Before clicking **Create Pull Request**:
+
+* [ ] Code builds successfully.
+* [ ] Kernel still boots.
+* [ ] New assembly functions include `in:` / `out:` documentation.
+* [ ] Comments explain *why*, not just *what*.
+* [ ] Commit messages are meaningful.
+* [ ] Documentation was updated if necessary.
+* [ ] No unrelated changes accidentally slipped in.
+* [ ] You resisted the urge to `jmp $` as a permanent solution.
+
+---
+
+# Debugging Wisdom
+
+A few timeless observations:
+
+* If everything suddenly stops working, check the stack.
+* If the stack looks fine, check your segment registers.
+* If those look fine, it's probably paging.
+* If it isn't paging... it will be eventually.
+* Undefined behavior is just undocumented creativity.
+* There are only two hard problems in kernel development:
+
+  1. Interrupts
+  2. Paging
+  3. Counting
+
+---
+
+# Questions?
+
+Open an issue using the **question** label.
+
+Bug reports are most useful when they include:
+
+* what happened
+* what you expected
+* how to reproduce it
+* emulator or hardware used
+* screenshots if applicable
+
+Bonus points if you've already narrowed the problem down.
+
+---
+
+# License
+
+By contributing, you agree that your contributions are licensed under the MIT License.
+
+---
+
+Happy hacking.
+
+And remember:
+
+> Every kernel eventually reaches a point where adding one `push` fixes everything... until the next reboot.
