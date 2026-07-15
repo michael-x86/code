@@ -927,11 +927,6 @@ get_key:
     xor al,al
     ret
 .translate:
-    ;cmp al,0x01          ; breaks vi
-    ;je  shutdown         ;escape key
-    ; reject invalid scancodes
-    ;cmp al,128
-    ;jae .invalid   ; Work to be done...
     movzx eax,al
     ; -------------------------
     ; choose keymap
@@ -1016,19 +1011,17 @@ find_free_virt:
     push esi
     push edi
     
-    mov ebx, heap_start       ; Start searching from the beginning of the heap
+    mov ebx, heap_start       ; Start searching the heap
 
 .restart_search:
-    ; Calculate what our proposed end address would be
     mov eax, ecx              ; ecx = requested page count
     shl eax, 12               ; Convert pages to bytes
-    add eax, ebx              ; eax = proposed our_end
+    add eax, ebx           
     
     cmp eax, heap_end
     ja .fail                  ; Out of memory!
-    mov edx, eax              ; edx = proposed our_end
+    mov edx, eax              
 
-    ; Set up the loop to scan EVERY single slot in the table
     mov esi, alloc_table
     mov edi, alloc_table_count
 
@@ -1038,9 +1031,9 @@ find_free_virt:
     jz .next_entry            ; If it's 0, the slot is empty, skip it
 
     ; Calculate the end address of this table entry
-    push ecx                  ; Preserve our requested page count
-    mov ecx, [esi+4]          ; ecx = page count of this entry
-    shl ecx, 12               ; Convert pages to bytes
+    push ecx                  
+    mov ecx, [esi+4]          
+    shl ecx, 12          
     add ecx, eax              ; ecx = entry_end (base + size)
 
     ; (base <= ebx < entry_end)
@@ -1050,7 +1043,6 @@ find_free_virt:
     jb .overlap_found_pop
 
 .check_condition_2:
-    ; start (eax) inside our region? (ebx <= base < our_end)
     cmp eax, ebx
     jb .no_overlap
     cmp eax, edx
@@ -1066,7 +1058,7 @@ find_free_virt:
 
     ; IF WE REACH HERE, THE ENTIRE TABLE IS CLEAN!
     mov eax, ebx              ; Return the safe virtual base address in eax
-    clc                       ; Clear carry flag (Success)
+    clc                    
     pop edi
     pop esi
     pop edx
@@ -1074,12 +1066,12 @@ find_free_virt:
     ret
 
 .overlap_found_pop:
-    pop ecx                   ; Clean the stack before restarting
+    pop ecx                 
     add ebx, 4096             ; Advance candidate by exactly 1 page
-    jmp .restart_search       ; Start a completely fresh, clean scan of the whole table
+    jmp .restart_search      
 
 .fail:
-    stc                       ; Set carry flag (Failure)
+    stc             
     pop edi
     pop esi
     pop edx
@@ -1484,7 +1476,6 @@ sys_mem_dump:
     ret
 
 ;----------------------------
-;----------------------------
 ; in:  
 ;  eax=unsigned 32-bit 
 ;----------------------------      
@@ -1590,7 +1581,7 @@ echo_cmd:
 ;------------------------------------
 ; Real estate agent for malloc street
 ;------------------------------------
-; sys_heap_info: snapshot the heap allocation table for the userland `heap`.
+;  snapshot the heap allocation table for the userland `heap`.
 ;   ebx = dst buffer (needs 8 + alloc_table_count*4 bytes)
 ;   [dst+0]        = free heap bytes
 ;   [dst+4]        = number of active allocations (n)
@@ -1899,13 +1890,11 @@ load_fs_persist:
     popad
     ret
 
-; --------------------------------
 tab_complete:
     pushad
     mov ecx, [cmd_len]
     test ecx, ecx
     jz .out           
-    ; ---- first pass: count matches, remember last one ----
     xor edx, edx                  ; edx = match counter
     mov dword [tab_match_count],0
     mov dword [tab_single_ptr],0
@@ -3047,29 +3036,29 @@ sys_epoch:
     mov ebx,[boot_epoch]
     ret
  
-;---------------------------------------------------------------------------
+;-----------------------------------------------
 ; in: 
 ;     ebx = target PID to terminate
 ; out: 
 ;     eax = 0 on success, -1 on failure
-;---------------------------------------------------------------------------
+;-----------------------------------------------
 sys_kill:
     push ecx
     push edx
     push esi
     push edi
 
-    mov edx, ebx             ; edx = target PID from user space
-    cmp edx, MAX_PROC
+    mov edx,ebx       ; edx = target PID from user space
+    cmp edx,MAX_PROC
     jae .failed
     
-    cmp dword [proc_state + edx*4], 0
-    je .failed               ; Process is already dead or empty
+    cmp dword [proc_state + edx*4],0
+    je .failed        ; Process is already dead or empty
     
     cmp edx, 0
     je .failed
 
-    cli                      ; Clear interrupts while rewriting page tables
+    cli              
 
     ; ---- AUTOMATIC MEMORY CLEANUP CORE ----
     mov ebx, [proc_pages + edx*4]  
@@ -3079,7 +3068,7 @@ sys_kill:
     ; Clean up the page table mappings and free physical frames
     mov eax, [proc_vbase + edx*4]  ;
     push edx
-    call free_pages                ; Unmaps and frees physical frames
+    call free_pages    
     pop edx
 
     ; ---- AUTOMATIC ALLOC_TABLE REMOVAL ----
@@ -3432,7 +3421,6 @@ fs_resolve:
     pop eax
     ret
 
-; -------------------------
 ; ----- spawn process -----
 exec_bin: 
     cmp dword [argc], 0
@@ -3633,7 +3621,7 @@ exec_bin:
     ret
 
 sys_exit:
-    ; ebx = exit status code (currently ignored) — terminate the running process
+    ; ebx = exit status code (currently ignored)
     jmp proc_exit
 
 ;------------------------------------
@@ -3649,12 +3637,12 @@ sys_exit:
 ;      eax = task ESP 
 seed_frame:
     sub eax,4
-    mov dword [eax],0x202            ; EFLAGS (IF set)
+    mov dword [eax],0x202        
     sub eax,4
-    mov dword [eax],0x08             ; CS
+    mov dword [eax],0x08           
     sub eax,4
-    mov [eax],edx                    ; EIP
-    sub eax,32                       ; 8 dwords for popad
+    mov [eax],edx                   
+    sub eax,32                    
     mov edi,eax
     mov ecx,8
     xor ebx,ebx
@@ -3829,7 +3817,7 @@ pic_remap:
     out 0x21,al
     out 0xA1,al
 
-    pop ax               ; AL = Slave mask, AH = Master mask
+    pop ax              ; AL = Slave mask, AH = Master mask
     out 0xA1,al         ; Restore Slave mask
     mov al,ah           ; Put Master mask back into AL
     out 0x21,al         ; Restore Master mask
@@ -4083,12 +4071,12 @@ keymap_shift:
 ;         dd address 
 ; final   db 0
 ; --------------------------------------------------
-cmd_table:
+cmd_table:              ; Moved to userland in v.0xdeadbeef
     db "frequency",0
     dd freq_cmd
     db "epoch",0
     dd epoch_cmd
-    db 0          ; end of internals
+    db 0          
 
 ;---- in-kernel virtual filesystem ----
 %include "fs.inc"
