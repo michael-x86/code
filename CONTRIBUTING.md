@@ -102,14 +102,6 @@ Good comments explain:
 * side effects
 * why something exists
 
-Bad comments explain that:
-
-```asm
-inc eax ; increment eax
-```
-
-We know.
-
 Separate major sections with:
 
 ```asm
@@ -196,7 +188,7 @@ Improve ATA sector validation
 Less good:  
 
 ```
-Fixed some stuff 
+Fixed some stuff  (well...well)
 ```
 
 ```
