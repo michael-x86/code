@@ -18,10 +18,9 @@ KERNEL     := kernel.asm
 BOOTLOADER := bootloader.asm
 
 # User programs compiled from commands/<name>.asm into bin/<name>.
-COMMANDS := plot up memdump regdump stackdump bin2hex bounce dydx \
+COMMANDS := plot up memdump regdump stackdump bin2hex bounce \
             ps kill poke peek pwd ls cd cat touch write help cls \
             verify exit rm rmdir mkdir cp mv alloc dealloc heap \
-            frequency epoch banner mode13 setpixel clearpixel clear
 
 BINS     := $(addprefix bin/,$(COMMANDS))
 
