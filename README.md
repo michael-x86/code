@@ -64,13 +64,13 @@ Requirements:
 Build and run:
 
 ```bash
-make run         # build + boot in QEMU
-make fullscreen  # fullscreen mode
-make debug       # start GDB server on :1234
-make             # build only
-make grub-iso    # create Multiboot GRUB ISO
-make grub-run    # boot via GRUB
-make clean       # remove build files
+make run
+make fullscreen
+make debug
+make
+make grub-iso
+make grub-run
+make clean
 ```
 
 ## Boot methods
@@ -155,8 +155,6 @@ Works on BIOS and UEFI systems with CSM/Legacy enabled.
 Pure UEFI is not supported because the kernel uses VGA text memory (0xB8000). 
 Also, filesystem persistence is tied to the disk image it boots from.
 
-# Architecture
-
 ## bootloader.asm
 
 BIOS boot sector
@@ -191,13 +189,13 @@ Communicate only through int 0x80
 
 # Layout
 ```
-├── bootloader.asm # BIOS boot + protected mode loader
-├── kernel.asm # kernel
-├── gen_fs.py # filesystem generator
-├── Makefile # build system
-├── commands/ # user programs (*.asm)
-├── bin/ # compiled userland binaries
-└── proc/ var/log/ # files mirrored into the OS
+├── bootloader.asm
+├── kernel.asm
+├── gen_fs.py
+├── Makefile
+├── commands/
+├── bin/
+└── proc/ var/log/
 ``` 
 
 Files placed in `bin/`, `proc/`, and `var/log/` 
@@ -276,7 +274,7 @@ frequency epoch banner help cls verify exit
 
 - Everything else is a bug waiting for a debugger.
 
-## Persistence ;-)
+## Persistence
 
 Runtime-created files are stored in:
 
@@ -314,12 +312,6 @@ Start:
 mode13
 ``` 
 
-# Available commands:
-
-setpixel <x> <y> <colour>
-clearpixel <x> <y>
-clear
-
 Return to text mode:
 
 F5
@@ -356,10 +348,8 @@ For debugging, use raw addresses:
 
 This is a learning kernel, not a production OS.
 
-- Ring 0 only — no user/kernel memory protection
-- Programs can crash the kernel
-- Login is a gate, not security (password lives in the kernel image)
-- Limited path handling (`/`, `.`, `..`, simple relative names)
+- Ring 0 only — no user/kernel memory protection (poke the kernel)
+- Programs can crash the kernel 
 - Files limited to 2048 bytes
 - 32 persistent runtime file slots
 - Keyboard uses IRQ buffering; disk access is PIO based
