@@ -1,7 +1,7 @@
 [org 0x7C00]
 
 ; Max kernel_sectors = 1024 (512 KB kernel)
-KERNEL_SECTORS equ 335
+KERNEL_SECTORS equ 129
 BUFFER_SEG       equ 0x2000     ; Safe buffer zone (0x20000 linear)
 KERNEL_LOAD_ADDR equ 0x00100000 ; Final destination (1 MB)
 
