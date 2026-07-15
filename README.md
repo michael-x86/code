@@ -110,26 +110,6 @@ sudo dd if=os.img of=/dev/sdX bs=1M conv=fsync status=progress   # /dev/sdX = yo
 - Compiled into `bin/<name>` at build time
 - Loaded into memory on first invocation, executed with `call` gate
 
-## File Layout
-
-```
-├── bootloader.asm           # 16→32 bit boot stub
-├── kernel.asm               # kernel + paging + tasks + shell + 37+ syscalls
-├── fs.inc                   # auto-generated: embedded filesystem records
-├── gen_fs.py                # walks project dir, emits fs.inc
-├── asm                      # build script
-├── commands/                # userland program sources
-│   ├── pwd.asm ls.asm cd.asm cat.asm
-│   ├── touch.asm write.asm rm.asm
-│   ├── mkdir.asm
-│   └── (and more...)
-├── bin/                     # compiled userland binaries
-├── proc/                    # content mirror (host-side)
-├── var/log/                 # content mirror (host-side)
-└── etc/                     # content mirror (host-side)
->>>>>>> 736ae76ddacb427bd96e58c93bfc04fc1a6cca9d
-```
-
 The bootloader uses the BIOS-provided boot drive and LBA extended reads, and verifies `int 13h` extension support before loading (printing a clear error if the firmware lacks it).
 
 ## Architecture at a glance
