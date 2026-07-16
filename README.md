@@ -259,9 +259,9 @@ pwd ls cd cat touch write rm rmdir mkdir cp mv
 
 ps kill
 
-Memory / Debug
+# Memory / Debug
 
-# alloc dealloc heap
+alloc dealloc heap
 peek poke memdump regdump stackdump bin2hex
 
 # Graphics / Demos
