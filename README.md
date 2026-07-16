@@ -136,7 +136,7 @@ make grub-run
 - mtools
 - grub-pc-bin
 
-# Add it to your machine's GRUB menu:
+## Add it to your machine's GRUB menu:
 
 - sudo cp kernel.bin /boot/mykernel.bin
 - sudo update-grub
