@@ -81,7 +81,11 @@ The bootloader uses the BIOS-provided boot drive and LBA extended reads, and ver
 
 ## Boot it from GRUB (Multiboot)
 
+<<<<<<< HEAD
 The kernel carries a Multiboot v1 header, so GRUB can load `kernel.bin` directly — `bootloader.asm` is bypassed entirely, and the kernel installs its own GDT on entry (GRUB's segment selectors differ from the bootloader's). `entry_addr` matches the load address the bootloader uses, so **both boot paths keep working from the same binary**.
+=======
+## Add it to your machine's GRUB menu:
+>>>>>>> ac9c2e173b1fc3ebd6977ee9be71dbb86cc48fd0
 
 Test it locally with a rescue ISO (needs `grub-mkrescue`, plus `xorriso`, `mtools`, and `grub-pc-bin`):
 
@@ -169,7 +173,72 @@ run                         # runs pwd, epoch, ls in order
 
 Each runtime-created file lives in two places: a 2048-byte buffer in RAM, and a fixed slot on disk (LBA 512 + slot × 5 sectors). The mapping never moves. On `create` / `write` / `unlink`, the kernel updates RAM and writes that slot's sectors to disk. On boot, `load_fs_persist` reads each slot back and replays it into RAM.
 
+<<<<<<< HEAD
 Build-seeded files (everything under `/proc`, `/etc`, `/var/log`) live inside the kernel image and reset to their build-time content on every boot — only the 32 spare slots persist. The Makefile backs up the FS region before reassembling the kernel and restores it after, so persisted files survive rebuilds too.
+=======
+- eax = syscall number
+- ebx/ecx/edx/esi/edi = arguments
+- eax = return value
+
+# Available syscall groups:
+
+- Console output
+- Keyboard and timing
+- Filesystem operations
+- Memory management
+- Process control
+- Graphics
+- Debugging tools
+
+Syscalls execute through interrupt gates, 
+
+with interrupts disabled during handling.
+
+## Included programs
+
+# Filesystem
+
+pwd ls cd cat touch write rm rmdir mkdir cp mv
+
+# Processes
+
+ps kill
+
+# Memory / Debug
+
+alloc dealloc heap
+peek poke memdump regdump stackdump bin2hex
+
+# Graphics / Demos
+
+mode13 setpixel clearpixel clear plot bounce dydx up
+
+# Utilities
+
+frequency epoch banner help cls verify exit
+
+- Everything else is a bug waiting for a debugger.
+
+## Persistence
+
+Runtime-created files are stored in:
+
+- RAM (active filesystem state)
+- Fixed disk slots (persistent storage)
+
+Each slot has a permanent location, so files survive:
+
+- Reboots
+- Kernel rebuilds
+- Minor chaos
+
+Build-time files (`/proc`, `/etc`, `/var/log`) 
+are embedded into the kernel image and reset on rebuild. 
+Runtime-created files use the persistent storage area.
+
+The build system preserves the filesystem region while rebuilding, 
+so your carefully created files do not disappear into the void.
+>>>>>>> ac9c2e173b1fc3ebd6977ee9be71dbb86cc48fd0
 
 ## Graphics modes
 
