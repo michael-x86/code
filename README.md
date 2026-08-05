@@ -1,0 +1,301 @@
+If you are looking for clean APIs and high-level comfort, this is not it.
+
+If you want to see what the machine is actually doing — instruction by instruction — you're in the right place.
+
+# x86 Assembly Kernel
+
+A small 32-bit operating system written entirely in NASM assembly. Boots from BIOS, switches to protected mode with paging, runs three round-robin tasks driven by the PIT, and gives you a green-on-black VGA shell with persistent filesystem.
+
+Built from scratch on Linux with no libc, no runtime, and no external abstractions.
+```
+                ┌──────────────────────────────────────────────────┐
+                │          Higher-Half Kernel Space (0xC0000000+)  │
+                └─────────────────────────┬────────────────────────┘
+                                          │
+             ┌────────────────────────────┼────────────────────────────┐
+             ▼                            ▼                            ▼
+   ┌──────────────────────┐     ┌──────────────────────┐     ┌──────────────────────┐
+   │  Task 0 (OS Shell)   │     │ Task 1 (Timekeeper)  │     │ Task 2 (Background)  │
+   │  • Interactive CLI   │     │  • 100Hz PIT Tick    │     │  • Bouncing Sprite   │
+   │  • Dynamic Binary    │     │  • Track Boot Epoch  │     │  • Independent State │
+   │    Execution Engine  │     │  • Flip Sync Flags   │     │    Execution Loop    │
+   └──────────┬───────────┘     └──────────┬───────────┘     └──────────┬───────────┘
+              │                            │                            │
+              └────────────────────────────┼────────────────────────────┘
+                                           │
+                                           ▼
+                                ┌──────────────────────┐
+                                │ Array-Based TCB /    │
+                                │   Stack Swapper      │
+                                └──────────────────────┘
+
+```
+```
+$ ls
+bin/  proc/  var/  etc/
+$ cd /proc
+$ cat cpuinfo
+processor      : 0
+vendor_id      : Cyberdyne Systems
+cpu family     : Neural-Net Processor
+model          : T-800 Series 101
+model family   : Skynet
+stepping       : Version 2.4
+flags          : learning infiltration phased-plasma
+```
+
+## Features
+
+- **x86 Bootloader** → **32-bit Protected Mode** → **Paging** → Higher-half kernel at `0xC0100000`
+  - Identity mapping of first 4 MB + kernel low page table (0x00400000–0x007FFFFF)
+  - Heap page tables (3 tables covering 0x00800000–0x013FFFFF)
+  - Virtual memory split: identity map at PDE[0] and higher-half at PDE[768+]
+  
+- **Task Scheduling**: Three round-robin tasks driven by IRQ0 (PIT at configurable frequency)
+  - **Task 0**: Interactive shell (polling-based input)
+  - **Task 1**: Ticker task (tick generator)
+  - **Task 2**: Bounce animation (bouncing)
+
+- **VGA Text Shell** (80×25)
+  - Line history with arrow keys (up/down)
+  - Tab completion for commands
+  - Real-time hardware clock display (Hz, tick count) in banner
+
+- **In-Kernel Virtual Filesystem**
+  - Generated at build time from project directory by `generate-fs.py`
+  - 68-byte fixed-size file records embedded in kernel image
+  - 1024-byte mutable buffers for runtime content
+  - 16 "spare slots" for runtime-created files
+
+- **Persistent Filesystem**
+  - Read/write via `touch`, `write`, `rm`, `mkdir`, `rmdir` commands
+  - Persistence to disk via **PIO ATA** (LBA 256+) — files survive reboot AND kernel rebuilds
+  - Build script automatically backs up and restores the FS region
+
+- **Linux-Style int 0x80 Syscall Interface** (50+ syscalls)
+  - Text output: `putchar`, `print`, `print_n`, `newline`, `cls`
+  - Input: `get_key`, `get_tick`
+  - Filesystem: `stat`, `create`, `write`, `unlink`, `mkdir`, `rmdir`
+  - Memory: `alloc`, `dealloc`, `peek`, `poke`, `read_mem`
+  - Process: `getcwd`, `chdir`, `get_arg`, `ps`, `regdump`
+  - Utilities: `hex2int`, `bin2hex`, `asc2int`, `memdump`, `plot`
+  - Display: `print_hex`, `print_int`, `banner`, `tick`, `hertz`, `bounce`
+
+## Quick Start
+
+Requires: `nasm`, `python3`, `qemu-system-i386`
+
+```bash
+make fullscreen # build + run in QEMU window
+```
+
+## Architecture at a Glance
+
+### **Bootloader** (`bootloader.asm`)
+- Starts in 16-bit real mode.
+- Initializes the stack and segment registers.
+- Enables the A20 line.
+- Using BIOS INT 13h Extensions (AH=42h).
+- Loads the kernel sequentially into a temporary buffer at physical address `0x00020000`.
+- Installs a flat 4 GB Global Descriptor Table (GDT):
+  - CODE_SEG = 0x08
+  - DATA_SEG = 0x10
+- Switches to 32-bit protected mode by setting CR0.PE.
+- Initializes all segment registers and the protected-mode stack.
+- Copies the kernel from the temporary buffer to its final physical load address (`0x00100000`).
+- Transfers execution to the kernel entry point.
+
+### **Kernel** (`kernel.asm`)
+- **Paging Setup** (`page_mapping`)
+  - Identity-maps first 4 MB (PDE[0] → `identity_page_table`)
+  - Maps kernel code+data (PDE[1] → `kernel_low_page_table`, phys 0x00400000–0x007FFFFF)
+  - Sets up 3 heap page tables (PDEs 2–4, PDE[770–772]) for on-demand allocation
+  - Dual-maps kernel in higher half (PDE[768–772]) for virtual addressing
+  - Page directory at `0xC0000000`, page tables follow
+  - All PTE entries OR'd with 0x3 (present | writable)
+
+- **Memory Bitmap** (`page_bitmap`)
+  - 32 KB bitmap tracking 1 GB of 4 KB physical frames
+  - `reserve_kernel_pages()` protects kernel's own pages from allocation
+  - Page-on-demand allocation via `alloc()` syscall
+
+- **Interrupt Handlers**
+  - `build_idt`: Constructs 256-entry IDT
+  - `set_irq0`: PIT timer interrupt (configurable frequency)
+  - `set_irq1`: Keyboard IRQ, feeds into ring buffer (`kbd_buf`)
+  - `set_syscall`: INT 0x80 handler for userland
+  - `pic_remap`: Remaps PIC IRQs to INT 32–47
+
+- **Task Switching** (called on each IRQ0)
+  - Round-robin through 3 tasks
+  - Each task has its own stack (`task0_esp`, `task1_esp`, `task2_esp`)
+  - Context saved/restored via `pushad`/`popad`
+
+- **Shell** (Task 0, `kernel_main` / `.task0_entry`)
+  - Polls for keyboard input
+  - Parses arguments into `argv[]` / `argc`
+  - Banner shows Hz, tick count, system message
+
+- **Display**
+  - VGA framebuffer at `0xC00B8000` (80×25 text cells, 2 bytes each: char + color)
+  - Cursor position tracked in `cursor_pos`
+  - Hardware cursor updated via I/O ports 0x3D4–0x3D5 (CRT controller)
+  - Scrolling when bottom of screen is exceeded
+
+- **Clock** (`hwclock`)
+  - Reads CMOS RTC (port 0x70/0x71)
+  - Computes Unix epoch timestamp
+  - Accounts for leap years (divisible by 4, except centuries unless divisible by 400)
+
+### **Filesystem** (`fs.inc` — auto-generated by `generate-fs.py`)
+- 68-byte fixed-size file records embedded in kernel image
+- Each record: inode number, mode (dir/file), size, name, content pointer
+- 1024-byte mutable content buffers for each file
+- 16 "spare slots" at end for runtime-created files
+- All pointers are embedded offsets (flat, no indirection)
+
+### **Persistence**
+- Modified spare-slot files are written to fixed region at **LBA 256** (`3 sectors per file = 16 × 3 = 48 sectors`)
+- At boot, `load_fs_persist` replays the on-disk files into the spare slots
+- Build script backs up FS region before reassembly, restores after
+- Survives both reboots and kernel rebuilds
+
+### **Userland**
+- Programs assembled as `[bits 32]`, `[org 0x00000000]`, flat binaries
+- Compiled into `bin/<name>` at build time
+- Loaded into memory on first invocation, executed with `call` gate
+
+## File Layout
+
+```
+├── bootloader.asm           # 16→32 bit boot stub
+├── kernel.asm               # kernel + paging + tasks + shell + syscalls
+├── fs.inc                   # auto-generated: embedded filesystem records
+├── generate-fs.py           # walks project dir, emits fs.inc
+├── Makefile                 # make    
+├── commands/                # userland program sources
+│   ├── pwd.asm ls.asm cd.asm cat.asm
+│   ├── touch.asm write.asm rm.asm
+│   ├── mkdir.asm
+│   └── ...
+├── VFS/bin/                     # compiled userland binaries
+├── VFS/proc/                    # content mirror (host-side)
+├── VFS/var/log/                 # content mirror (host-side)
+└── VFS/etc/                     # content mirror (host-side)
+```
+
+## Adding a Program
+
+1. Write `commands/<name>.asm`:
+   ```asm
+   [bits 32]
+   [org 0x00000000]
+   
+   ; your code here
+   ; use only int 0x80 to communicate with kernel
+   
+   mov eax,0
+   int 0x80
+   ```
+
+2. Append `<name>` to the `COMMANDS:=` in the `Makefile`.
+
+3. Binary lands at `VFS/bin/<name>` and is callable by typing `<name>` at the shell prompt.
+
+## int 0x80 Syscall Table
+
+Syscalls run with interrupts off.
+
+| # | Name | Args | Returns |
+|----|------|------|---------|
+| 0 | exit |  | eax |
+| 1 | print | esi = ptr (null-term) | 0 |
+| 2 | print_cr | esi = ptr (CR=13 → newline) | 0 |
+| 3 | newline | — | 0 |
+| 4 | cls | — | VGA cleared |
+| 5 | print_hex | ebx | 0 |
+| 6 | print_int | ebx (decimal) | 0 |
+| 7 | get_key | — | ASCII (0 if empty) |
+| 8 | get_tick | — | PIT tick count (100 Hz) |
+| 9 | shutdown | — | (does not return) |
+| 10 | read_mem | ebx = addr | dword at [addr] |
+| 11 | getcwd | edi = dst | 0 |
+| 12 | chdir | esi = path | 0 / -1 |
+| 13 | list_dir | ebx = idx, edi = dst | type / -1 (writes basename) |
+| 14 | get_arg | ebx = idx, edi = dst | 0 / -1 (writes argv[i]) |
+| 15 | stat | esi = path, edi = info(12B) | 0 / -1 |
+| 16 | print_n | esi = ptr, ecx = n | 0 (`\n`→newline, `\t`→space) |
+| 17 | create | esi = path | 0 / -1 |
+| 18 | write | esi = path, ebx = buf | 0 / -1 |
+| 19 | unlink | esi = path | 0 / -1 |
+| 20 | mkdir | esi = path | 0 / -1 |
+| 21 | rmdir | esi = path | 0 / -1 |
+| 22 | ps | — | current processes |
+| 23 | regdump | — | stack and registers |
+| 24 | alloc | ecx = bytes (+4096) | ptr → heap memory |
+| 25 | dealloc | ebx = ptr | 0 / -1 |
+| 26 | peek | ebx = addr | dword at [addr] |
+| 27 | poke | ebx = addr, ecx = value | 0 |
+| 28 | hex2int | esi → string | eax = integer |
+| 29 | banner | — | print banner |
+| 30 | dydx | — | toggle dydx animation |
+| 31 | bin2hex | eax = integer  | out: HEX |
+| 32 | memdump | esi = addr | out: 64 bytes  |
+| 33 | hexbyte | ebx = byte | print BYTE as hex |
+| 34 | asc2int | esi → string | eax = integer (atoi) |
+| 35 | hertz | — | print CPU Hz in banner |
+| 36 | tick | — | print heartbeat tick |
+| 37 | plot | ebx = x, ecx = y | plot at (x, y) on 80×25 grid |
+| 38 | epoch |                 | ebx=seconds |
+...
+
+## Memory Map (After Paging Active)
+
+```
+0x00000000 – 0x003FFFFF   Physical identity-map (first 4 MB)
+0xC00B8000 – 0xC00B8FA0   VGA text framebuffer (80×25 cells, 2 bytes each)
+0xC0000000 – 0xC03FFFFF   Higher-half identity-map (mirrors physical 0x00000000–0x003FFFFF)
+0xC0400000 – 0xC07FFFFF   Kernel code+data+bss+embedded FS
+0xC0800000 – 0xC1000000   Heap (on-demand paging via alloc)
+```
+
+## Design Philosophy
+
+### Zero Abstraction
+If it is not explicitly written, it does not exist.
+
+### Instruction-Level Control
+Every register, flag, interrupt frame, and memory mapping is visible and direct.
+
+### Hardware-First Engineering
+The kernel is designed around CPU behavior and hardware constraints, not software convention.
+
+---
+
+## Development Status
+
+In irregular development cycles. The project is experimental and intentionally low-level.
+
+---
+
+## Why This Exists
+
+Modern systems hide the machine behind layers of abstraction. This project removes those layers completely.
+
+The goal is not convenience. The goal is understanding:
+
+- How interrupts actually work
+- How paging behaves
+- How context switching happens
+- How hardware is programmed directly
+- How operating systems function beneath modern tooling
+- How the CPU executes machine code, cycle by cycle.
+- How process works
+- How memory (de)allocation works
+---
+
+Best regards,
+
+**Michael Nordstedt**
+
+michael@nordstedt.eu
