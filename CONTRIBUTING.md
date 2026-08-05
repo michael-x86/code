@@ -42,7 +42,7 @@ git checkout -b fix/my-bug
 You'll need:
 
 * **NASM** — assembler
-* **Python 3** — used by `gen_fs.py`
+* **Python 3** — used by `generate-fs.py`
 * **QEMU (qemu-system-i386)** — because rebooting a real machine 400 times gets old
 
 ---
