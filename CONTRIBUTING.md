@@ -133,10 +133,8 @@ Preserve registers whenever appropriate and match the surrounding code style.
 
 ---
 
-## Python (`gen_fs.py`)
+## Python (`generate-fs.py`)
 
-* Follow PEP 8.
-* Comment serialization logic.
 * Document any changes to the filesystem layout.
 * If you modify the 68-byte record format, update the documentation.
 
@@ -243,7 +241,7 @@ Before clicking **Create Pull Request**:
 * [ ] Comments explain *why*, not just *what*.
 * [ ] Commit messages are meaningful.
 * [ ] Documentation was updated if necessary.
-* [ ] No unrelated changes accidentally slipped in.
+* [ ] No unrelated changes "accidentally" slipped in.
 * [ ] You resisted the urge to `jmp $` as a permanent solution.
 
 ---
