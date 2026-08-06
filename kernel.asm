@@ -127,6 +127,7 @@ boot_gdt_desc:
 ; -----------------------------------------
 ; page directory entries
 ; -----------------------------------------
+
 page_mapping:
     lea edi,[page_directory+ebp]
     xor eax,eax
