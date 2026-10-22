@@ -15,6 +15,7 @@ QEMU   := qemu-system-i386
 
 IMG        := os.img
 KERNEL     := kernel.asm
+KMODS      := $(wildcard kernel_*.inc)
 BOOTLOADER := bootloader.asm
 
 # User programs compiled from commands/<name>.asm into VFS/bin/<name>.
@@ -104,8 +105,8 @@ fs.inc: generate-fs.py $(BINS) $(FS_STAMP)
 	@echo "[fs] scanning VFS/bin/ VFS/proc/ VFS/var/log/ VFS/etc/ ..."
 	@$(PYTHON) generate-fs.py VFS fs.inc >/dev/null
 
-# ---- kernel (incbin's fs.inc) ----
-kernel.bin: $(KERNEL) fs.inc
+# ---- kernel (kernel.asm %includes kernel_*.inc and fs.inc) ----
+kernel.bin: $(KERNEL) $(KMODS) fs.inc
 	@echo "[kernel] assembling..."
 	@$(NASM) -f bin $(KERNEL) -o $@
 	@sz=$$(stat -c%s $@); echo "  kernel.bin: $$sz bytes ($$(( ($$sz + 511) / 512 )) sectors)"
