@@ -135,7 +135,7 @@ print_name:
     ret
 
 ; --- Constant Data Area ---
-hdr:      db "PID  NAME               ADDRESS      STATE",13,0
+hdr:      db "PID  NAME               ADDRESS       STATE",13,0
 sep:      db "    ",0
 hexp:     db "0x",0
 lbl0:     db "init splash",0
