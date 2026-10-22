@@ -101,7 +101,7 @@ _start:
 ; -------------------------------------------------------------------------
 msg_usage: db "Usage: kill <pid>",13,0
 msg_prot:  db "Error: Cannot kill critical system tasks (PID 0-2).",13,0
-msg_fail:  db "kill: no such process",13,0
+msg_fail:  db "Error: Kernel failed to kill process (not found).",13,0
 msg_ok:    db "Process terminated successfully.",13,0
 
 section .bss

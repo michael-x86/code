@@ -5,29 +5,8 @@ global start
 bits 32
 
 MAX_PROC equ 8        ; process-table: slots 0-2 base tasks, 3+ spawned
-PROC_NAME_LEN equ 16  ; snapshot for ps
+PROC_NAME_LEN equ 16  ; per-process command name (snapshot for ps)
 PS_REC equ 24         ; sys_ps_info record size: state+vbase+esp+name[16]
-
-; returned by get_key
-KEY_LEFT  equ 0x80
-KEY_RIGHT equ 0x81
-KEY_UP    equ 0x82
-KEY_DOWN  equ 0x83
-
-; - 800x400x32 graphics (QEMU) -
-GFX_W      equ 800
-GFX_H      equ 600
-GFX_PITCH  equ GFX_W*4                 ; bytes per scanline (32bpp)
-GFX_FBSIZE equ GFX_W*GFX_H*4           ; framebuffer byte size
-GFX_PAGES  equ (GFX_FBSIZE+4095)/4096  ; 4KB pages to map the LFB
-LFB_VIRT   equ 0xC1400000              ; virtual base for the LFB (free PDE 773)
-VBE_INDEX  equ 0x01CE                  ; index port
-VBE_DATA   equ 0x01CF                  ; data port
-
-; - VGA mode 0x13 (320x200x256, linear framebuffer at 0xA0000) -
-M13_FB     equ 0xC00A0000              ; framebuffer (phys 0xA0000, identity-mapped)
-M13_W      equ 320
-M13_H      equ 200
 
 start:
     jmp short .init_runtime
@@ -36,37 +15,8 @@ start:
     db "KERN"       
     dd (kern_end-start) 
 
-; Multiboot v1 header (a.out kludge) 
-align 4
-.mb_header:
-    dd 0x1BADB002                         ; magic
-    dd 0x00010000                         ; flags: a.out kludge
-    dd -(0x1BADB002 + 0x00010000)         ; checksum
-    dd .mb_header - 0xC0000000            ; header_addr (physical)
-    dd start     - 0xC0000000             ; load_addr  = 0x00100000
-    dd 0                                  ; load_end_addr (0 = load whole file)
-    dd 0                                  ; bss_end_addr  (0 = don't zero bss)
-    dd start     - 0xC0000000             ; entry_addr  = 0x00100000
-
 .init_runtime:
     cli
-    mov esp,0x00090000       ; temporary physical stack
-
-    call .get_pc
-.get_pc:
-    pop ebp
-    sub ebp,.get_pc          ; ebp = physical_load_addr-virtual_base
-
-    ; GDT
-    lea eax,[boot_gdt+ebp]
-    mov [boot_gdt_desc.base+ebp],eax      ; patch base to physical (paging is off)
-    lea eax,[boot_gdt_desc+ebp]
-    lgdt [eax]
-    lea eax,[.reload+ebp]                 ; far-return into CS=0x08 at physical .reload
-    push dword 0x08
-    push eax
-    retf
-.reload:
     mov ax,0x10     ; DATA_SEG (GDT)
     mov ds,ax
     mov es,ax
@@ -74,7 +24,12 @@ align 4
     mov fs,ax
     mov gs,ax
 
-    ; - physical stack -
+    call .get_pc
+.get_pc:
+    pop ebp
+    sub ebp,.get_pc
+
+    ; --- physical stack ---
     lea esp,[stack_top+ebp] 
     push ebp                 
     pushad
@@ -112,22 +67,9 @@ higher_half:
     mov ebp,esp
     jmp kernel_main
 
-; GRUB's selectors differ. Flat 4 GB, code=0x08 / data=0x10 
-align 8
-boot_gdt:
-    dq 0x0000000000000000        ; null
-    dq 0x00CF9A000000FFFF        ; 0x08 code, ring 0, flat 4 GB
-    dq 0x00CF92000000FFFF        ; 0x10 data, ring 0, flat 4 GB
-boot_gdt_end:
-boot_gdt_desc:
-    dw boot_gdt_end-boot_gdt-1
-.base:
-    dd boot_gdt              
-
 ; -----------------------------------------
 ; page directory entries
 ; -----------------------------------------
-
 page_mapping:
     lea edi,[page_directory+ebp]
     xor eax,eax
@@ -281,7 +223,7 @@ kernel_main:
     lidt [idt_descriptor]
     call pic_remap
     call set_freq       
-    call dydx_init
+    call bounce_init
     call hwclock
 
     mov edi,cwd_buf
@@ -292,11 +234,11 @@ kernel_main:
 
     call load_fs_persist
     call cls
-    call login        
-    call cls
     call sys_banner
     mov eax,80*2
     mov [cursor_pos],eax
+    call newline
+    call prompt
 
     call init_tasks
 
@@ -305,12 +247,6 @@ kernel_main:
     sti   
 
 .task0_entry:
-    cmp byte [banner_mode],0  
-    jne .skip
-    cmp byte [gfx_mode],0      ; no banner while in graphics mode
-    jne .skip
-    cmp byte [mode13],0        ; also in mode 13h
-    jne .skip
     cmp byte [tick_flag],0
     je .skip
     mov byte [tick_flag],0
@@ -327,56 +263,35 @@ kernel_main:
     je .del
     cmp al,9
     je .tab
-    cmp al,KEY_LEFT
-    je .left
-    cmp al,KEY_RIGHT
-    je .right
-    cmp al,KEY_UP
-    je .up
-    cmp al,KEY_DOWN
-    je .down
-    cmp al,32               
-    jb .done
-    call line_insert          ; insert char at the cursor
+    call putchar
+    mov ebx,[cmd_len]
+    cmp ebx,63
+    jae .done
+    mov [cmd_buf+ebx],al
+    inc ebx
+    mov [cmd_len],ebx
     jmp .done
 .enter:
-    mov ebx,[cmd_len]
+    mov ebx,[cmd_len]         
     mov byte [cmd_buf+ebx],0
     call newline
     call save_history
     call parse_args
     call check_bg
     call dispatch_command
-    mov dword [cmd_len],0     ; reset buffer
-    mov dword [cmd_pos],0
+    mov dword [cmd_len],0     ;reset buffer
     mov byte [cmd_buf],0
     call prompt
     jmp .task0_entry
 .tab:
     call tab_complete
+    xor al,al
     jmp .done
 .del:
-    call line_backspace
-    jmp .done
-.left:
-    cmp dword [cmd_pos],0
+    cmp dword [cmd_len],0
     jbe .done
-    dec dword [cmd_pos]
-    call line_setcursor
-    jmp .done
-.right:
-    mov eax,[cmd_pos]
-    cmp eax,[cmd_len]
-    jae .done
-    inc dword [cmd_pos]
-    call line_setcursor
-    jmp .done
-.up:
-    call hist_back
-    jmp .done
-.down:
-    call hist_frwd
-    jmp .done
+    dec dword [cmd_len]
+    call delchar
 .done:
     ; (polling) hlt might cause input lag or freeze.
     jmp .task0_entry
@@ -394,7 +309,7 @@ task1_entry:
 task2_entry:  
     test dword [on_off],1
     jnz .paused
-    call dydx_step
+    call bounce_step
 .paused:
     hlt      ; run when state changes
     jmp task2_entry
@@ -495,7 +410,7 @@ wait_cmos:
     ret
 
 
-bcd2bin:               ; not in use (I'll keep it anyway)
+bcd2bin:               ; currently not in use
     push ebx
     mov bl,al
     shr al,4
@@ -656,6 +571,7 @@ hist_back:
     mul ebx
     mov esi,hist_buf
     add esi,eax
+    call clear_cmdline
     mov edi,cmd_buf
     xor ecx,ecx
 .copy:
@@ -667,8 +583,13 @@ hist_back:
     jmp .copy
 .finish:
     mov [cmd_len],ecx
-    mov [cmd_pos],ecx     ; cursor at end of recalled line
-    call redraw_line
+    mov esi,cmd_buf
+.print:
+    lodsb
+    test al,al
+    jz .done
+    call putchar
+    jmp .print
 .done:
     popad
     ret
@@ -678,15 +599,16 @@ hist_frwd:
     mov eax,[hist_index]
     mov ebx,[hist_count]
     cmp eax,ebx
-    jae .done
+    jae .done         
     inc eax
     mov [hist_index],eax
     cmp eax,ebx
-    je .empty_line
+    je .empty_line    
     mov ecx,64
     mul ecx
     mov esi,hist_buf
     add esi,eax
+    call clear_cmdline
     mov edi,cmd_buf
     xor ecx,ecx
 .copy:
@@ -698,14 +620,16 @@ hist_frwd:
     jmp .copy
 .finish:
     mov [cmd_len],ecx
-    mov [cmd_pos],ecx
-    call redraw_line
-    popad
-    ret
+    mov esi,cmd_buf
+.print:
+    lodsb
+    test al,al
+    jz .done
+    call putchar
+    jmp .print
 .empty_line:
+    call clear_cmdline
     mov dword [cmd_len],0
-    mov dword [cmd_pos],0
-    call redraw_line
 .done:
     popad
     ret
@@ -725,70 +649,53 @@ clear_cmdline:
 ; -------------------------------------
 ; lookup table dispatcher
 ; -------------------------------------
-; every command is a /bin executable.
 dispatch_command:
-    call exec_bin
-    ret
-
-; ---------------------------------------------------------------
-;   Reads "exec.cmd" 
-;   each line as a shell command, in order.
-;   Invoked by the `run` command (syscall 50)/any int 0x80 caller.
-; ---------------------------------------------------------------
-sys_run:
     pushad
-    mov esi,run_file             ; "exec.cmd"
-    mov edi,resolve_buf
-    call fs_resolve              ; resolve_buf = absolute path
-    mov esi,resolve_buf
-    call fs_lookup               ; eax = entry ptr or 0
+    mov esi,cmd_table
+.next_cmd:
+    cmp byte [esi],0
+    je .not_found      ; no command
+    mov ebx,esi        ; table string
+    mov eax,[argc]
     test eax,eax
-    jz .nofile
-    cmp dword [eax+FS_NAME_LEN],1    ; must be a regular file (type 1)
-    jne .nofile
-    mov esi,[eax+FS_NAME_LEN+4]      ; file data ptr
-    mov ecx,[eax+FS_NAME_LEN+8]      ; file size
-    mov [run_ptr],esi
-    mov [run_rem],ecx
-.next_line:
-    mov ecx,[run_rem]
-    test ecx,ecx
-    jz .done
-    mov esi,[run_ptr]
-    mov edi,cmd_buf
-    xor edx,edx                     ; line length so far
-.chars:
-    test ecx,ecx
-    jz .eol
-    mov al,[esi]
-    inc esi
-    dec ecx
-    cmp al,10                       ; \n ends the line
-    je .eol
-    cmp al,13                       ; \r ends the line
-    je .eol
-    cmp edx,63                      ; cap the command line at 63 chars
-    jae .chars
-    mov [edi],al
+    jz .not_found
+    mov edi,[argv]     ; argv[0] = command
+.compare:
+    mov al,[ebx]
+    mov dl,[edi]
+    cmp al,dl
+    jne .skip_it
+    test al,al
+    jz .found
+    inc ebx
     inc edi
-    inc edx
-    jmp .chars
-.eol:
-    mov byte [edi],0                ; null-terminate cmd_buf
-    mov [run_ptr],esi               ; save cursor across the dispatch
-    mov [run_rem],ecx
-    test edx,edx
-    jz .next_line                   ; skip blank lines
-    call parse_args
-    call check_bg
-    call dispatch_command           ; runs it; "command not found" if unknown
-    jmp .next_line
-.nofile:
-    mov esi,run_nofile_msg
-    call print_cr
-.done:
+    jmp .compare
+.skip_it:
+    cmp byte [esi],0
+    je .after_name
+    inc esi
+    jmp .skip_it
+.after_name:
+    inc esi              ; skip 0
+    add esi,4            ; skip dd handler
+    jmp .next_cmd
+.found:
+.find_end:
+    cmp byte [esi],0
+    je .get_addr
+    inc esi
+    jmp .find_end
+.get_addr:
+    inc esi              ; get cmd address 
+    mov eax,[esi]
+    mov [cmd_exec],eax   
     popad
-    xor eax,eax
+    mov eax,[cmd_exec]   
+    call eax             ; execute command
+    ret
+.not_found:
+    popad
+    call exec_bin
     ret
 
 delchar:
@@ -828,116 +735,6 @@ putchar:
     pop edx
     pop edi
     ret
-
-; ---------------------------------------------------------------
-; cmd_buf holds the line, cmd_len its length,
-; cmd_pos the cursor index. 
-; The line is drawn starting at prompt_limit
-; ---------------------------------------------------------------
-
-; repaint the whole command line and place the hardware
-; cursor at prompt_limit+cmd_pos. 
-redraw_line:
-    pushad
-    mov ebx,[prompt_limit]
-    mov edi,0xC00B8000
-    lea edi,[edi+ebx*2]
-    mov ecx,64
-    mov ax,0x0720              ; blank?
-.clear:
-    mov [edi],ax
-    add edi,2
-    loop .clear
-    mov ebx,[prompt_limit]
-    mov edi,0xC00B8000
-    lea edi,[edi+ebx*2]
-    mov esi,cmd_buf
-    mov ecx,[cmd_len]
-    mov ah,0x02               ; same green attribute as putchar
-.paint:
-    test ecx,ecx
-    jz .place
-    mov al,[esi]
-    mov [edi],ax
-    add edi,2
-    inc esi
-    dec ecx
-    jmp .paint
-.place:
-    mov eax,[prompt_limit]
-    add eax,[cmd_pos]
-    mov [cursor_pos],eax
-    call cursor
-    popad
-    ret
-
-; move only the hardware cursor to match cmd_pos.
-; Got no software cursor = Breakouts "undocumented feature"
-line_setcursor:
-    push eax
-    mov eax,[prompt_limit]
-    add eax,[cmd_pos]
-    mov [cursor_pos],eax
-    call cursor
-    pop eax
-    ret
-
-; insert AL at cmd_pos, shifting the tail right, then redraw.
-line_insert:
-    push eax
-    push ecx
-    push edx
-    mov ah,al                 ; stash the char (al is reused below)
-    mov ecx,[cmd_len]
-    cmp ecx,63                ; leave room for the null terminator
-    jae .ret
-    mov edx,[cmd_pos]
-.shift:
-    cmp ecx,edx               ; move buf[i-1]->buf[i] for i=cmd_len..cmd_pos+1
-    jle .put
-    mov al,[cmd_buf+ecx-1]
-    mov [cmd_buf+ecx],al
-    dec ecx
-    jmp .shift
-.put:
-    mov al,ah
-    mov [cmd_buf+edx],al
-    inc dword [cmd_len]
-    inc dword [cmd_pos]
-    call redraw_line
-.ret:
-    pop edx
-    pop ecx
-    pop eax
-    ret
-
-line_backspace:
-    push eax
-    push esi
-    push edi
-    mov esi,[cmd_pos]
-    test esi,esi
-    jz .ret                   ; nothing to the left of the cursor
-    dec dword [cmd_pos]
-    mov edi,[cmd_pos]         ; write index = cmd_pos-1
-    mov esi,edi
-    inc esi                   ; read index = cmd_pos
-.shift:
-    cmp esi,[cmd_len]
-    jae .fin
-    mov al,[cmd_buf+esi]
-    mov [cmd_buf+edi],al
-    inc esi
-    inc edi
-    jmp .shift
-.fin:
-    dec dword [cmd_len]
-    call redraw_line
-.ret:
-    pop edi
-    pop esi
-    pop eax
-    ret
     
 newline: 
     push eax
@@ -970,28 +767,22 @@ prompt:
     mov [prompt_limit],ebx   
     ret
 
-cursor: 
+cursor:
     push eax
     push edx
-    push ebx               
-    mov bx,[cursor_pos]    
+    cmp [cursor_pos],edx
     mov dx,0x3D4
     mov al,0x0F
     out dx,al
-    
     mov dx,0x3D5
-    mov al,bl        
+    mov al,byte[cursor_pos]
     out dx,al
-
     mov dx,0x3D4
     mov al,0x0E
     out dx,al
-    
     mov dx,0x3D5
-    mov al,bh        
+    mov al,byte[cursor_pos+1]
     out dx,al
-
-    pop ebx
     pop edx
     pop eax
     ret
@@ -1013,10 +804,6 @@ print:
     ret
 
 ;---- string,13,0 ----
-;    "Improved ;-)"  
-; The oldest form of 
-; kernel communication
-;---------------------
 print_cr:
     push eax
 .next:
@@ -1031,133 +818,6 @@ print_cr:
     call newline
     jmp .next
 .done:
-    pop eax
-    ret
-
-; ---------------------------------------------------------
-login:
-    pushad
-.attempt:
-    mov esi,login_user_msg
-    call print
-    mov byte [login_echo],1     ; show the username
-    mov edi,login_ubuf
-    call login_readline
-
-    mov esi,login_pass_msg
-    call print
-    mov byte [login_echo],0     ; mask the passwd with '*'
-    mov edi,login_pbuf
-    call login_readline
-
-    mov esi,login_ubuf          ; eax=0 when equal
-    mov edi,login_root
-    call str_eq
-    test eax,eax
-    jnz .bad
-    mov esi,login_pbuf
-    mov edi,login_secret
-    call str_eq
-    test eax,eax
-    jnz .bad
-
-    mov esi,login_ok_msg
-    call print_cr
-    popad
-    ret
-.bad:
-    mov esi,login_bad_msg
-    call print_cr
-    jmp .attempt
-
-;  Echoes each char,
-;  or '*' when [login_echo]=0. 
-login_readline:
-    push ebx
-    push ecx
-    xor ecx,ecx
-.next:
-    call login_getchar           
-    test al,al
-    jz .next
-    cmp al,13
-    je .done
-    cmp al,8
-    je .bs
-    cmp al,32
-    jb .next                       ; ignore other codes
-    cmp ecx,63
-    jae .next                      
-    mov [edi+ecx],al
-    inc ecx
-    cmp byte [login_echo],0
-    jne .echo
-    mov al,'*'
-.echo:
-    call putchar
-    jmp .next
-.bs:
-    test ecx,ecx
-    jz .next
-    dec ecx
-    call login_del
-    jmp .next
-.done:
-    mov byte [edi+ecx],0
-    call newline
-    pop ecx
-    pop ebx
-    ret
-
-login_getchar:
-    push ebx
-.wait:
-    in al,0x64
-    test al,1                      ; output buffer full?
-    jz .wait
-    in al,0x60                     ; scancode
-    mov bl,al
-    cmp bl,0x2A
-    je .son
-    cmp bl,0x36
-    je .son
-    cmp bl,0xAA
-    je .soff
-    cmp bl,0xB6
-    je .soff
-    test bl,0x80                   ; key release -> ignore
-    jnz .wait
-    movzx eax,bl
-    cmp byte [login_shift],0
-    jne .sh
-    mov al,[keymap+eax]
-    jmp .ret
-.sh:
-    mov al,[keymap_shift+eax]
-.ret:
-    pop ebx
-    ret
-.son:
-    mov byte [login_shift],1
-    jmp .wait
-.soff:
-    mov byte [login_shift],0
-    jmp .wait
-
-login_del:
-    push eax
-    push edi
-    mov eax,[cursor_pos]
-    test eax,eax
-    jz .ret
-    dec eax
-    mov [cursor_pos],eax
-    mov edi,0xC00B8000
-    lea edi,[edi+eax*2]
-    mov word [edi],0x0720          ; blank cell (green attr)
-    call cursor
-.ret:
-    pop edi
     pop eax
     ret
 
@@ -1180,8 +840,7 @@ sys_banner:
 cls:                       
     mov edi,0xC00B8000     ; VGA text memory
     mov ecx,80*25/2        ; 80x25 characters
-    ;mov eax,0x07200720    ; green+space
-    mov eax,0x0A200A20     
+    mov eax,0x07200720     ; green+space
     rep stosd
     xor eax,eax
     mov eax,80*3
@@ -1237,27 +896,38 @@ get_key:
     ;mov eax,6
     ;int 0x80
 
-    ; --- arrow keys: return values the shell loop handles them ---
-    cmp al,0x4B            ; left
-    jne .ck_right
-    mov al,KEY_LEFT
+    ; -------------------------
+    ; Back
+    ; -------------------------
+    cmp al,75
+    jne .check_up
+    dec word [cursor_pos]
+    call cursor
+
+.check_up:
+    ; -------------------------
+    ; arrow up
+    ; -------------------------
+    cmp al,0x48
+    jne .check_down
+    call hist_back
+    xor al,al
     ret
-.ck_right:
-    cmp al,0x4D            ; right
-    jne .ck_up
-    mov al,KEY_RIGHT
-    ret
-.ck_up:
-    cmp al,0x48            ; up
-    jne .ck_down
-    mov al,KEY_UP
-    ret
-.ck_down:
-    cmp al,0x50            ; down
+.check_down:
+    ; -------------------------
+    ; arrow down
+    ; -------------------------
+    cmp al,0x50
     jne .translate
-    mov al,KEY_DOWN
+    call hist_frwd
+    xor al,al
     ret
 .translate:
+    ;cmp al,0x01          ; breaks vi
+    ;je  shutdown         ;escape key
+    ; reject invalid scancodes
+    ;cmp al,128
+    ;jae .invalid   ; Work to be done...
     movzx eax,al
     ; -------------------------
     ; choose keymap
@@ -1280,18 +950,12 @@ get_key:
 ; --- The final curtain call    --- 
 ; --- powering down the theater ---
 shutdown:
-    call cls
-    call login     
-    call cls
-    call sys_banner
-    mov eax,80*2
-    mov [cursor_pos],eax
+    cli
+    mov dx,0xF4
+    mov al,0
+    out dx,al
+    hlt
     ret
-    ;cli
-    ;mov dx,0xF4
-    ;mov al,0
-    ;out dx,al
-    ;hlt
 
 ; --- print 8 hex digits at top-right ----
 ; Counting heartbeats of the system clock
@@ -1348,39 +1012,41 @@ find_free_virt:
     push esi
     push edi
     
-    mov ebx,heap_start     
+    mov ebx, heap_start       ; Start searching from the beginning of the heap
 
 .restart_search:
-    ; Calculate proposed end address would be
-    mov eax,ecx              ; ecx = requested page count
-    shl eax,12               ; Convert pages to bytes
-    add eax,ebx              ; eax = proposed end
+    ; Calculate what our proposed end address would be
+    mov eax, ecx              ; ecx = requested page count
+    shl eax, 12               ; Convert pages to bytes
+    add eax, ebx              ; eax = proposed our_end
     
     cmp eax, heap_end
     ja .fail                  ; Out of memory!
-    mov edx,eax              ; edx = proposed end
+    mov edx, eax              ; edx = proposed our_end
 
-    ; EVERY single slot in the table
-    mov esi,alloc_table
-    mov edi,alloc_table_count
+    ; Set up the loop to scan EVERY single slot in the table
+    mov esi, alloc_table
+    mov edi, alloc_table_count
 
 .check_loop:
-    mov eax,[esi]            ; Get the base address of this table entry
-    test eax,eax
-    jz .next_entry           ; If it's 0, the slot is empty, skip it
+    mov eax, [esi]            ; Get the base address of this table entry
+    test eax, eax
+    jz .next_entry            ; If it's 0, the slot is empty, skip it
 
-    push ecx              
-    mov ecx,[esi+4]        
-    shl ecx,12               ; Convert pages to bytes
-    add ecx,eax              ; ecx = entry_end (base + size)
+    ; Calculate the end address of this table entry
+    push ecx                  ; Preserve our requested page count
+    mov ecx, [esi+4]          ; ecx = page count of this entry
+    shl ecx, 12               ; Convert pages to bytes
+    add ecx, eax              ; ecx = entry_end (base + size)
 
-    ; base <= ebx < entry_end
+    ; (base <= ebx < entry_end)
     cmp ebx, eax
     jb .check_condition_2
     cmp ebx, ecx
     jb .overlap_found_pop
 
 .check_condition_2:
+    ; start (eax) inside our region? (ebx <= base < our_end)
     cmp eax, ebx
     jb .no_overlap
     cmp eax, edx
@@ -1390,13 +1056,13 @@ find_free_virt:
     pop ecx                 
 
 .next_entry:
-    add esi,8             
+    add esi, 8                ; Move to next entry slot
     dec edi
-    jnz .check_loop      
+    jnz .check_loop           ; Keep checking until EVERY slot is verified
 
-    ; THE ENTIRE TABLE IS CLEAN!
-    mov eax,ebx              
-    clc                       ; Success
+    ; IF WE REACH HERE, THE ENTIRE TABLE IS CLEAN!
+    mov eax, ebx              ; Return the safe virtual base address in eax
+    clc                       ; Clear carry flag (Success)
     pop edi
     pop esi
     pop edx
@@ -1404,12 +1070,12 @@ find_free_virt:
     ret
 
 .overlap_found_pop:
-    pop ecx                  
-    add ebx, 4096             ; Advance by 1 page
-    jmp .restart_search       ; Start clean scan of the whole table
+    pop ecx                   ; Clean the stack before restarting
+    add ebx, 4096             ; Advance candidate by exactly 1 page
+    jmp .restart_search       ; Start a completely fresh, clean scan of the whole table
 
 .fail:
-    stc                       ; Failure
+    stc                       ; Set carry flag (Failure)
     pop edi
     pop esi
     pop edx
@@ -1467,11 +1133,11 @@ register_allocation:
     pop ecx
     ret
 
-;-----------------------
+; -----------------------
 ; in:
 ;   eax = base
 ;   ebx = page count
-;-----------------------
+; -----------------------
 free_pages:
     push ecx
     push edx
@@ -1506,12 +1172,12 @@ free_pages:
     ret
 
 
-;-------------------
+; -------------------
 ; in:             
 ;   esi: -> string
 ; out: 
 ;   eax: integer    
-;-------------------
+; -------------------
 sys_hex2int:
     xor eax,eax
     xor ebx,ebx
@@ -1557,12 +1223,12 @@ sys_hex2int:
     ret
 
    
-;--------------------
+; --------------------
 ; in:            
 ;   esi -> string 
 ; out:            
 ;   edx integer          
-;--------------------   
+; --------------------   
 sys_asc2int:             
     xor edx, edx
 .loop: 
@@ -1603,7 +1269,7 @@ set_page_used:
 ;------------------------------
 ; in:
 ;   eax = physical page address
-;-----------------------------
+; -----------------------------
 set_page_free:
     push ebx
     push ecx
@@ -1617,7 +1283,7 @@ set_page_free:
     pop ebx
     ret
 
-;------------------------------
+; ------------------------------
 ; out:
 ;   eax = page address
 ;   CF=0 success CF=1 fail
@@ -1626,10 +1292,10 @@ set_page_free:
 ;  each bit tracks one 4 KB page
 ;  8192*32 bits = 262144 pages
 ;  262144*4096  = 1 GB 
-;------------------------------
-;-- Another page in my diary --
-;--   Yazoo 6502 memories    --
-;------------------------------
+; ------------------------------
+; -- Another page in my diary --
+; --      6502 memories       --
+; ------------------------------
 alloc_page:
     push ebx
     push ecx
@@ -1671,15 +1337,15 @@ alloc_page:
     pop ebx
     ret
 
-;------------------------------
+; ------------------------------
 ; in:
 ;   eax = virtual
 ;   ebx = physical
 ;   ecx = flags
-;-----------------------------
+; -----------------------------
 ; Creating the illusion that 
 ;    memory is contiguous
-;-----------------------------
+; -----------------------------
 map_page:
     push edx
     push edi
@@ -1722,8 +1388,8 @@ map_page:
     and edx, 0x03FF        
     or ebx, ecx
     mov [edi+edx*4],ebx
-    invlpg [eax]        ; if CPU had cached 
-                        ; wipe it!
+    invlpg [eax]        ; if CPU had cached an older translation
+                        ; for this virtual address - wipe it!
     clc                          
 .fail:
     pop edi
@@ -1800,7 +1466,7 @@ sys_mem_dump:
     mov ecx,64        ; total bytes
     mov edx,16        ; bytes per line
 .loop:
-    lodsb            
+    lodsb             ; esi ready
     call sys_hex_byte
     mov al,32  
     call putchar
@@ -1813,6 +1479,7 @@ sys_mem_dump:
     popad
     ret
 
+;----------------------------
 ;----------------------------
 ; in:  
 ;  eax=unsigned 32-bit 
@@ -1919,7 +1586,7 @@ echo_cmd:
 ;------------------------------------
 ; Real estate agent for malloc street
 ;------------------------------------
-;   snapshot heap allocation table for heap.
+; sys_heap_info: snapshot the heap allocation table for the userland `heap`.
 ;   ebx = dst buffer (needs 8 + alloc_table_count*4 bytes)
 ;   [dst+0]        = free heap bytes
 ;   [dst+4]        = number of active allocations (n)
@@ -1960,6 +1627,13 @@ sys_heap_info:
     mov eax,-1
     ret
 
+epoch_cmd:
+    mov eax,[boot_epoch]   
+    call print_dec
+    mov eax,3
+    int 0x80
+    ret
+
 print_dec:
     push eax
     push ebx
@@ -1982,7 +1656,7 @@ print_dec:
     test al,al
     jz .done
     movzx ebx,al
-    mov eax,39      ; sys_putchar
+    mov eax,39     
     int 0x80
     inc edi
     jmp .print
@@ -2000,12 +1674,12 @@ print_dec:
 ; Persistence layout: FS region starts at LBA 256.
 ; Each spare slot occupies SECTORS_PER_SLOT sectors.
 ;   sector 0 — 68-byte fs_entry record, zero-padded
-;   sectors 1..4 — FS_CAPACITY (2048) bytes of content
+;   sectors 1..2 — FS_CAPACITY (1024) bytes of content
 ;-----------------------------------------------------
-FS_BASE_LBA       equ 512
-SECTORS_PER_SLOT  equ 5
+FS_BASE_LBA       equ 256
+SECTORS_PER_SLOT  equ 3
 
-; PIO read of ecx sectors from LBA eax into [edi]
+; ata_read - PIO read of ecx sectors from LBA eax into [edi]
 ata_read:
     pushad
     mov ebx,eax                  ; LBA
@@ -2057,7 +1731,7 @@ ata_read:
     popad
     ret
 
-; PIO write of ecx sectors to LBA eax from [esi]
+; ata_write - PIO write of ecx sectors to LBA eax from [esi]
 ata_write:
     pushad
     mov ebx,eax
@@ -2117,11 +1791,12 @@ ata_write:
     popad
     ret
 
-;------------------------------------------------
+;-----------------------------------------------------
 ;   in: 
 ;      eax = fs_entries entry ptr
 ;   writes the slot to disk if it's a spare slot; 
-;------------------------------------------------
+;   no-op otherwise.
+;-----------------------------------------------------
 persist_entry:
     pushad
     ; slot_idx = (eax-fs_entries)/FS_REC_SIZE
@@ -2153,7 +1828,7 @@ persist_entry:
     mov ecx,FS_CAPACITY
     rep movsb
 
-    ; ata_write 3 sectors at FS_BASE_LBA + spare_idx*3 
+    ; --- ata_write 3 sectors at FS_BASE_LBA + spare_idx*3 ---
     mov eax,ebp
     imul eax,SECTORS_PER_SLOT
     add eax,FS_BASE_LBA
@@ -2164,10 +1839,10 @@ persist_entry:
     popad
     ret
 
-;-------------------------------------------
-; called at boot. Reads each spare slot from 
-; disk and restores its entry + content.
-;-------------------------------------------
+;-----------------------------------------------------
+; load_fs_persist - called at boot. Reads each spare
+; slot from disk and restores its entry + content.
+;-----------------------------------------------------
 load_fs_persist:
     pushad
     xor ebx,ebx
@@ -2220,177 +1895,149 @@ load_fs_persist:
     popad
     ret
 
-; -------------------------------------
-;   complete the word under the cursor. 
-;   First /bin later words against the
-;   files/dirs in the current directory.
+; --------------------------------
 tab_complete:
     pushad
-    mov ecx,[cmd_len]
-    test ecx,ecx
-    jz .out
-
-    xor edx,edx                   ; word_start
-    xor ebx,ebx
-.ws:
-    cmp ebx,ecx
-    jae .ws_done
-    cmp byte [cmd_buf+ebx],' '
-    jne .ws_n
-    lea edx,[ebx+1]
-.ws_n:
-    inc ebx
-    jmp .ws
-.ws_done:
-    lea eax,[cmd_buf+edx]
-    mov [tab_pfx],eax    ; prefix pointer
-    mov eax,ecx
-    sub eax,edx
-    mov [tab_pfxlen],eax ; prefix length
-    xor eax,eax
-    test edx,edx
-    setne al             ; mode 1 = argument (word_start > 0), 0 = command
-    mov [tab_mode],al
-
-    ; pass 1: count matches 
-    mov byte [tab_printing],0
-    call tab_scan
-    mov edx,[tab_match_count]
-    test edx,edx
-    jz .out
-    cmp edx,1
-    je .do_complete
-
-    ; --- multiple matches
-    call newline
-    mov byte [tab_printing],1
-    call tab_scan
-    call newline
-    call prompt
-    call redraw_line
-    jmp .out
-
-.do_complete:
-    ; append the part of the match
-    mov esi,[tab_single_ptr]
-    add esi,[tab_pfxlen]
-.cp:
-    mov al,[esi]
-    test al,al
-    jz .cp_sp
-    mov ebx,[cmd_len]
-    cmp ebx,62
-    jae .fin
-    mov [cmd_buf+ebx],al
-    inc dword [cmd_len]
-    inc esi
-    jmp .cp
-.cp_sp:
-    mov ebx,[cmd_len]            
-    cmp ebx,63
-    jae .fin
-    mov byte [cmd_buf+ebx],' '
-    inc dword [cmd_len]
-.fin:
-    mov eax,[cmd_len]
-    mov [cmd_pos],eax
-    call redraw_line
-.out:
-    popad
-    ret
-
-tab_scan:
+    mov ecx, [cmd_len]
+    test ecx, ecx
+    jz .out           
+    ; ---- first pass: count matches, remember last one ----
+    xor edx, edx                  ; edx = match counter
     mov dword [tab_match_count],0
     mov dword [tab_single_ptr],0
-    cmp byte [tab_mode],0
-    jne .args
+    ; --- scan built-in cmd_table ---
+    mov esi,cmd_table
+.bi_loop:
+    cmp byte [esi],0
+    je .bi_done
+    push esi
+    call tab_prefix_match     ; eax=1 match, 0 no match; esi unchanged
+    pop esi
+    test eax, eax
+    jz .bi_next
+    inc edx
+    mov [tab_single_ptr],esi  
+.bi_next:
+    ; skip to end of name (find null)
+.bi_skip:
+    cmp byte [esi],0
+    je .bi_skip_end
+    inc esi
+    jmp .bi_skip
+.bi_skip_end:
+    inc esi                       ; skip null
+    add esi,4                   ; skip dd handler
+    jmp .bi_loop
+.bi_done:
 
-    ; /bin executables 
+    ; --- scan fs_entries for executables (type == 2) ---
     mov esi,fs_entries
     mov ecx,FS_COUNT
-.fe:
+.fs_loop:
     test ecx,ecx
-    jz .ret
+    jz .fs_done
+    ; extract basename from full vpath  "/bin/ls"
     push esi
     push ecx
-    call tab_basename
+    call tab_basename            ; eax = ptr to basename, 0 if not /bin/
     test eax,eax
-    jz .fe_next
+    jz .fs_next
+    ; check type==2 (exec)
     cmp dword [esi+FS_NAME_LEN],2
-    jne .fe_next
-    mov esi,eax
+    jne .fs_next
+    ; prefix match against basename
+    push eax                     ; save basename ptr
+    mov esi,eax                  ; tab_prefix_match reads from esi
     call tab_prefix_match
+    pop esi                      ; esi = basename ptr (name to display)
     test eax,eax
-    jz .fe_next
-    call tab_hit
-.fe_next:
-    pop ecx
-    pop esi
-    add esi,FS_REC_SIZE
-    dec ecx
-    jmp .fe
-.ret:
-    ret
-
-    ; argument mode
-.args:
-    mov esi,fs_entries
-    mov ecx,FS_COUNT
-.ae:
-    test ecx,ecx
-    jz .ret2
-    push esi
-    push ecx
-    mov edi,cwd_buf
-    call basename_if_child    
-    test eax,eax
-    jz .ae_next
-    mov esi,eax
-    call tab_prefix_match
-    test eax,eax
-    jz .ae_next
-    call tab_hit
-.ae_next:
-    pop ecx
-    pop esi
-    add esi,FS_REC_SIZE
-    dec ecx
-    jmp .ae
-.ret2:
-    ret
-
-; record/print a match. esi=null-terminated name.
-tab_hit:
-    inc dword [tab_match_count]
+    jz .fs_next_pop
+    inc edx
     mov [tab_single_ptr],esi
-    cmp byte [tab_printing],0
-    je .ret
-    push esi
-    push eax
-.pr:
+    jmp .fs_next_pop
+.fs_next_pop:
+    pop ecx
+    pop esi
+    add esi,FS_REC_SIZE
+    dec ecx
+    jmp .fs_loop
+.fs_next:
+    pop ecx
+    pop esi
+    add esi,FS_REC_SIZE
+    dec ecx
+    jmp .fs_loop
+.fs_done:
+
+    mov [tab_match_count],edx
+    ; ---- decide what to do ----
+    test edx,edx
+    jz .out                       ; 0 matches do nothing
+
+    cmp edx,1
+    je .do_complete               ; 1 match complete in place
+
+    ; ---- multiple matches: list them ----
+    call newline
+    call tab_print_all_matches
+    call prompt
+    mov esi,cmd_buf
+    mov ecx,[cmd_len]
+.reprint:
+    test ecx,ecx
+    jz .out
+    lodsb
+    call putchar
+    dec ecx
+    jmp .reprint
+
+.do_complete:
+    ; --- append missing suffix from tab_single_ptr ---
+    mov esi,[tab_single_ptr]
+    mov ecx,[cmd_len]
+    ; skip ecx chars of the matched name (the prefix already typed)
+.skip_prefix:
+    test ecx,ecx
+    jz .append_rest
+    cmp byte [esi],0
+    je .out                       ; shouldn't happen
+    inc esi
+    dec ecx
+    jmp .skip_prefix
+.append_rest:
+    ; copy remaining chars of name into cmd_buf and echo them
+.copy_rest:
     mov al,[esi]
     test al,al
-    jz .sp
+    jz .add_space
+    mov ebx,[cmd_len]
+    cmp ebx,62
+    jae .out
+    mov [cmd_buf+ebx],al
+    inc dword [cmd_len]
     call putchar
     inc esi
-    jmp .pr
-.sp:
+    jmp .copy_rest
+.add_space:
+    mov ebx,[cmd_len]
+    cmp ebx,63
+    jae .out
     mov al,' '
+    mov [cmd_buf+ebx],al
+    inc dword [cmd_len]
     call putchar
-    call putchar
-    pop eax
-    pop esi
-.ret:
+.out:
+    popad
     ret
 
 tab_prefix_match:
     push esi
     push edi
     push ecx
-    mov edi,[tab_pfx]
-    mov ecx,[tab_pfxlen]
+    mov edi,cmd_buf
+    mov ecx,[cmd_len]
     test ecx,ecx
-    jz .match             ; empty prefix match all
+    jz .match             ; empty prefix matches everything
 .cmp_loop:
     mov al,[esi]
     mov ah,[edi]
@@ -2451,6 +2098,88 @@ tab_basename:
     xor eax,eax
     ret
 
+; -------------------------------------------------------------
+;  Re-scans both sources and prints every matching name,
+;  separated by two spaces, then a newline.
+; -------------------------------------------------------------
+tab_print_all_matches:
+    ; --- built-ins ---
+    mov esi, cmd_table
+.pbi_loop:
+    cmp byte [esi],0
+    je .pbi_done
+    push esi
+    call tab_prefix_match
+    pop esi
+    test eax,eax
+    jz .pbi_skip
+    ; print name
+    push esi
+.pbi_print:
+    lodsb
+    test al,al
+    jz .pbi_after
+    call putchar
+    jmp .pbi_print
+.pbi_after:
+    ; two spaces as separator
+    mov al,' '
+    call putchar
+    call putchar
+    pop esi
+.pbi_skip:
+.pbi_find_end:
+    cmp byte [esi],0
+    je .pbi_end
+    inc esi
+    jmp .pbi_find_end
+.pbi_end:
+    inc esi                       ; skip null
+    add esi,4                    ; skip dd
+    jmp .pbi_loop
+.pbi_done:
+
+    ; --- fs exec entries ---
+    mov esi,fs_entries
+    mov ecx,FS_COUNT
+.pfs_loop:
+    test ecx,ecx
+    jz .pfs_done
+    push esi
+    push ecx
+    call tab_basename
+    test eax,eax
+    jz .pfs_next
+    cmp dword [esi+FS_NAME_LEN],2
+    jne .pfs_next
+    push eax
+    mov esi, eax
+    call tab_prefix_match
+    pop esi
+    test eax,eax
+    jz .pfs_next
+    ; print basename
+    push esi
+.pfs_print:
+    lodsb
+    test al,al
+    jz .pfs_sep
+    call putchar
+    jmp .pfs_print
+.pfs_sep:
+    mov al,' '
+    call putchar
+    call putchar
+    pop esi
+.pfs_next:
+    pop ecx
+    pop esi
+    add esi,FS_REC_SIZE
+    dec ecx
+    jmp .pfs_loop
+.pfs_done:
+    call newline
+    ret
 
 ; --------------------------------------------
 ; - Building the interrupt handler phonebook -
@@ -2476,18 +2205,22 @@ build_idt:
     ret
 
 set_idt_entry:
+    ; Input: eax = handler address, ebx = entry index, edi = idt base
     push eax
-    push edx                 
-    mov edx,eax
-    mov word [edi+ebx*8+0],dx  ; offset low
-    mov word [edi+ebx*8+2],0x08 
-    mov byte [edi+ebx*8+4],0
-    mov byte [edi+ebx*8+5],10001110b
+    push edx                    ; Preserve edx so we don't clobber caller data
+    
+    mov edx, eax
+    mov word [edi+ebx*8+0], dx  ; offset low
+    mov word [edi+ebx*8+2], 0x08 ; SELECTOR FIX: Changed from 0x80 to 0x08
+    mov byte [edi+ebx*8+4], 0
+    mov byte [edi+ebx*8+5], 10001110b
     shr edx, 16
-    mov word [edi+ebx*8+6],dx  ; offset high
+    mov word [edi+ebx*8+6], dx  ; offset high
+    
     pop edx
-    pop eax             
+    pop eax                     ; Restore registers
     ret
+
 
 page_fault_isr:
     cli
@@ -2496,9 +2229,9 @@ page_fault_isr:
     push eax                
     call page_fault_handler
     add esp,4              
-.Tom_Dooley:
+.hang:
     hlt
-    jmp .Tom_Dooley
+    jmp .hang
 
 page_fault_handler:
     push ebp
@@ -2511,9 +2244,9 @@ page_fault_handler:
     call print_hex_dword
     call newline
     
-    mov edx,0x3333       
+    mov edx,0x3333       ; outer loop (adjust for time)
 .outer:
-    mov ecx,0xFFFF    
+    mov ecx,0xFFFF        ; inner loop
 .inner:
     dec ecx
     jnz .inner
@@ -2554,14 +2287,14 @@ set_irq1:
     mov word [edi+6],ax
     ret
 
-; syscall (int 0x80) 
+;----  syscall (int 0x80)  ----
 set_syscall:
     mov eax,syscall_isr
     mov edi,idt_start+0x80*8
     mov word [edi],ax
     mov word [edi+2],8
     mov byte [edi+4],0
-    mov byte [edi+5],11101110b   ; 32-bit int gate
+    mov byte [edi+5],11101110b   ; present, DPL=3, 32-bit int gate
     shr eax,16
     mov word [edi+6],ax
     ret
@@ -2571,6 +2304,7 @@ set_syscall:
 ;   in : eax = syscall #
 ;        ebx,ecx,edx,esi,edi = args
 ;   out: eax = return value (-1 on bad #)
+;   all other GPRs preserved across the call
 ; ---------------------------------------------------------
 ;  The great gatekeeper of ring 0 
 ; ---------------------------------------------------------
@@ -2583,7 +2317,7 @@ syscall_isr:
     push ecx
     push ebx
     push ebp
-    call [syscall_table+eax*4]
+    call [syscall_table + eax*4]
     pop ebp
     pop ebx
     pop ecx
@@ -2595,7 +2329,7 @@ syscall_isr:
     mov eax,-1
     iretd
 
-;  syscall handlers
+; --- syscall handlers ---
 sys_putchar:                 ; ebx = char
     mov eax,ebx
     call putchar
@@ -2917,52 +2651,9 @@ sys_write:           ; echo [text] > file
     mov eax,-1
     ret
 
-;  esi=path, ebx=buf, ecx=n -> append n bytes to an existing file.
-sys_append:
-    push esi
-    push edi
-    push ebx
-    push ecx
-    mov edi, resolve_buf
-    call fs_resolve
-    mov esi, resolve_buf
-    call fs_lookup
-    test eax, eax
-    jz .err
-    cmp dword [eax+FS_NAME_LEN],1     ; must be a regular file
-    jne .err
-    mov ebx,[eax+FS_NAME_LEN+8]       ; current size = append offset
-    mov ecx,[esp+0]                   ; n
-    mov edx,ebx
-    add edx,ecx
-    cmp edx,FS_CAPACITY               ; size + n must fit
-    ja .err
-    mov esi,[esp+4]                   ; src buffer
-    mov edi,[eax+FS_NAME_LEN+4]       ; data ptr
-    add edi,ebx                       ; + size
-    cld
-    rep movsb
-    mov ecx,[esp+0]
-    add ecx,ebx                       ; new size = old size+n
-    mov [eax+FS_NAME_LEN+8],ecx
-    call persist_entry
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    xor eax,eax
-    ret
-.err:
-    pop ecx
-    pop ebx
-    pop edi
-    pop esi
-    mov eax,-1
-    ret
-
 ;   esi=path -> eax=0/-1
-;   Marks slot free
-;   so it can be reused by a future sys_create.
+;   Marks slot free; keeps the data buffer
+;   in place so it can be reused by a future sys_create.
 sys_unlink:
     push esi
     push edi
@@ -2975,10 +2666,10 @@ sys_unlink:
     jz .err
     cmp dword [eax+FS_NAME_LEN],1
     jne .err
-    mov byte  [eax],0               
-    mov dword [eax+FS_NAME_LEN],0     
-    mov dword [eax+FS_NAME_LEN+8],0  
-    call persist_entry             
+    mov byte  [eax],0                 ; clear path
+    mov dword [eax+FS_NAME_LEN],0     ; type = 0 (free)
+    mov dword [eax+FS_NAME_LEN+8],0   ; size = 0
+    call persist_entry                ; eax = entry ptr
     pop ebx
     pop edi
     pop esi
@@ -3107,6 +2798,7 @@ sys_ps_info:
 .slot:
     cmp ecx,MAX_PROC
     jae .done
+    ; edi = record base = ebx + 8 + slot*PS_REC
     mov eax,ecx
     imul eax,PS_REC
     lea edi,[ebx+8]
@@ -3117,6 +2809,7 @@ sys_ps_info:
     mov [edi+4],edx
     mov edx,[task_esps+ecx*4]
     mov [edi+8],edx
+    ; copy name (PROC_NAME_LEN bytes)
     mov eax,ecx
     shl eax,4                   ; *PROC_NAME_LEN (16)
     lea esi,[proc_name+eax]
@@ -3146,7 +2839,7 @@ sys_ps_info:
 sys_stack_dump:
     pushad
     mov edi,esp
-    add edi,32           ; Skip past of PUSHAD registers!
+    add edi,32           ; Skip past the 32 bytes of PUSHAD registers!
     mov ecx,8
 .loop:
     mov eax, [edi]       
@@ -3347,66 +3040,63 @@ sys_plot:
     ret
 
 sys_epoch:
-    mov eax,[boot_epoch]   
-    call print_dec
-    mov eax,3
-    int 0x80
+    mov ebx,[boot_epoch]
     ret
-
-;--------------------------------------
+ 
+;---------------------------------------------------------------------------
 ; in: 
 ;     ebx = target PID to terminate
 ; out: 
 ;     eax = 0 on success, -1 on failure
-;--------------------------------------
+;---------------------------------------------------------------------------
 sys_kill:
     push ecx
     push edx
     push esi
     push edi
 
-    mov edx,ebx       ; PID from user space
-    cmp edx,MAX_PROC
+    mov edx, ebx             ; edx = target PID from user space
+    cmp edx, MAX_PROC
     jae .failed
     
-    cmp dword [proc_state+edx*4],0
-    je .failed           ; Process is already dead/empty
-
+    cmp dword [proc_state + edx*4], 0
+    je .failed               ; Process is already dead or empty
+    
     cmp edx, 0
     je .failed
 
-    cmp edx, [current_task]  ; Don't kill the caller itself
-    je .failed               
+    cli                      ; Clear interrupts while rewriting page tables
 
-    cli                      ; While rewriting page tables
-
-    mov ebx, [proc_pages+edx*4]  
-    test ebx,ebx
+    ; ---- AUTOMATIC MEMORY CLEANUP CORE ----
+    mov ebx, [proc_pages + edx*4]  
+    test ebx, ebx
     jz .clear_structures        
 
-    mov eax,[proc_vbase+edx*4]  
+    ; Clean up the page table mappings and free physical frames
+    mov eax, [proc_vbase + edx*4]  ;
     push edx
-    call free_pages          ; Unmaps and frees physical frames
+    call free_pages                ; Unmaps and frees physical frames
     pop edx
 
-    mov ecx,alloc_table_count
-    mov edi,alloc_table
-    mov esi,[proc_vbase+edx*4]  
+    ; ---- AUTOMATIC ALLOC_TABLE REMOVAL ----
+    mov ecx, alloc_table_count
+    mov edi, alloc_table
+    mov esi, [proc_vbase + edx*4]  
 .find_slot:
-    cmp [edi],esi
+    cmp [edi], esi
     je .clear_slot
-    add edi,8
+    add edi, 8
     loop .find_slot
     jmp .clear_structures
 
 .clear_slot:
-    mov dword [edi],0          
-    mov dword [edi+4],0       
+    mov dword [edi], 0             ; Erase address entry from heap table
+    mov dword [edi+4], 0           ; Erase page count entry from heap table
 
 .clear_structures:
-    mov dword [proc_vbase+edx*4],0
-    mov dword [proc_pages+edx*4],0
-    mov dword [proc_state+edx*4],0   
+    mov dword [proc_vbase + edx*4],0
+    mov dword [proc_pages + edx*4],0
+    mov dword [proc_state + edx*4],0   
 
     sti                      
     mov eax,0          
@@ -3417,31 +3107,21 @@ sys_kill:
     ret
 
 .failed:
-    mov eax,-1
+    mov eax,-1       
     pop edi
     pop esi
     pop edx
     pop ecx
     ret
 
-sys_detach:
-    mov byte [detach_req],1
-    xor eax,eax
-    ret
-
-sys_banner_flip:
-    call cls
-    xor dword [banner_mode],1
-    ret
-
 ; -------------------------------------------
 ; All work and no play makes Jack a dull boy
 ; -------------------------------------------
-sys_dydx:
+sys_bounce:
     xor dword [on_off],1
     ret
 
-dydx_init:
+bounce_init:
     pusha
     mov word [on_off],1
     mov byte [xpos],40
@@ -3451,34 +3131,33 @@ dydx_init:
     popa
     ret
 
-dydx_step: 
-    call dydx_cls 
-    call dydx_update
-    call dydx_plot
+bounce_step: 
+    call bounce_cls 
+    call bounce_update
+    call bounce_plot
     ret
 
-dydx_plot:
+bounce_plot:
     pusha
     mov al,[xpos]
     mov ah,[ypos]
-    call dydx_calc_offset
+    call bounce_calc_offset
     mov ah,0x04
     mov al,0x07 
     mov [edi],ax
     popa
     ret
 
-
-dydx_cls:
+bounce_cls:
     pusha
     mov al,[xpos]
     mov ah,[ypos]
-    call dydx_calc_offset
+    call bounce_calc_offset
     mov word [edi],0x0720  
     popa
     ret
 
-dydx_update:
+bounce_update:
     pusha
     mov al,[xpos]
     add al,[dltx]
@@ -3495,12 +3174,12 @@ dydx_update:
     mov al,0 
     neg byte [dltx]
 .store_x:
-    mov [xpos], al
+    mov [xpos],al
     mov al,[ypos]
     add al,[dlty]
     cmp al,24
     jg .y_bottom
-    cmp al,0
+    cmp al,2     
     jl .y_top
     jmp .store_y
 .y_bottom:
@@ -3508,14 +3187,14 @@ dydx_update:
     neg byte [dlty]
     jmp .store_y
 .y_top:
-    mov al,0
+    mov al,2 
     neg byte [dlty]
 .store_y:
     mov [ypos],al
     popa
     ret
 
-dydx_calc_offset:
+bounce_calc_offset:
     push ebx
     movzx ebx,ah        
     imul ebx,160        ; y*80*2
@@ -3749,6 +3428,7 @@ fs_resolve:
     pop eax
     ret
 
+; -------------------------
 ; ----- spawn process -----
 exec_bin: 
     cmp dword [argc], 0
@@ -3769,7 +3449,7 @@ exec_bin:
     test al,al
     jnz .cp_cmd
 
-    ; -- FS lookup --
+    ; --- FS lookup ---
     mov esi,path_buf
     call fs_lookup
     test eax,eax
@@ -3777,15 +3457,16 @@ exec_bin:
     cmp dword [eax+FS_NAME_LEN],2   ; type must be 2 (exec)
     jne .nf
 
-    ; save data ptr+size
+    ; --- save data ptr + size ---
     mov esi,[eax+FS_NAME_LEN+4]     ; esi = binary data ptr
     mov ebx,[eax+FS_NAME_LEN+8]     ; ebx = byte count
 
-    ; compute page count (round up) 
+    ; --- compute page count (round up) ---
     mov ecx,ebx
     add ecx,4095
     shr ecx,12                      ; ecx = page count
 
+    ; --- find a free virtual range ---
     push esi
     push ebx
     push ecx
@@ -3795,9 +3476,11 @@ exec_bin:
     pop esi
     jc .oom
      
+    ; --- save vbase and page count for cleanup ---
     mov [exec_vbase],eax
     mov [exec_pages],ecx
 
+    ; --- map pages one by one ---
     push esi                        ; save data src ptr
     push ebx                        ; save byte count
     mov edi,eax                     ; edi = current virt addr
@@ -3831,18 +3514,18 @@ exec_bin:
     pop ecx                         ; byte count
     pop esi                         ; data src
 
-    ; copy binary into mapped region
+    ; --- copy binary into mapped region ---
     mov edi,[exec_vbase]
     cld
     rep movsb
 
-    ; register in alloc_table
+    ; --- register in alloc_table ---
     mov eax,[exec_vbase]
     mov ebx,[exec_pages]
     call register_allocation
     
 
-    ; spawn a process in a free table slot
+    ; --- spawn a process: find a free table slot (3..MAX_PROC-1) ---
     mov ecx,3
 .find_proc:
     cmp ecx,MAX_PROC
@@ -3852,7 +3535,7 @@ exec_bin:
     inc ecx
     jmp .find_proc
 .got_proc:
-    ; snapshot so ps can name the process
+    ; --- snapshot argv[0] into proc_name[slot] so ps can name the process ---
     push esi
     push edi
     push edx
@@ -3876,6 +3559,7 @@ exec_bin:
     pop edi
     pop esi
 
+    ; --- kernel stack top for this slot = proc_stacks + (slot-2)*4096 ---
     mov eax,ecx
     sub eax,2
     shl eax,12
@@ -3885,15 +3569,16 @@ exec_bin:
     call seed_frame                  ; eax = task ESP
     pop ecx
 
+    ; --- fill the process table; activate last so the scheduler
+    ;     never sees a half-built slot ---
     mov [task_esps+ecx*4],eax
     mov ebx,[exec_vbase]
     mov [proc_vbase+ecx*4],ebx
     mov ebx,[exec_pages]
     mov [proc_pages+ecx*4],ebx
-    mov byte [detach_req],0          ; fresh process is not self-backgrounded
     mov dword [proc_state+ecx*4],1
 
-    ; background = announce the job id and return 
+    ; --- background (trailing '&'): announce the job id and return now ---
     cmp dword [bg_flag],0
     je .wait_proc
     mov esi,bg_lbl
@@ -3904,21 +3589,18 @@ exec_bin:
     call print_cr
     ret
 
-    ; foreground =  until the process exits and frees its slot.
-    ; A process can also ask to keep running in the background via sys_detach 
+    ; --- foreground: yield until the process exits and frees its slot, so
+    ;     the shell only redraws the prompt afterward.
+    ;     (ecx survives the timer IRQ, which saves/restores via pushad.) ---
 .wait_proc:
     sti
     hlt
     cmp dword [proc_state+ecx*4],0
-    je .wait_done                    ; process exited
-    cmp byte [detach_req],0
-    je .wait_proc                    ; still running, foreground -> keep waiting
-    mov byte [detach_req],0          ; process backgrounded itself -> release shell
-.wait_done:
+    jne .wait_proc
     ret
 
 .too_many:
-    ; undo the mapping/registration
+    ; no free slot: undo the mapping/registration we just made
     mov eax,[exec_vbase]
     mov ebx,[exec_pages]
     call release_region
@@ -3947,11 +3629,15 @@ exec_bin:
     ret
 
 sys_exit:
+    ; ebx = exit status code (currently ignored) — terminate the running process
     jmp proc_exit
 
 ;------------------------------------
 ; Process-management helpers
 ;------------------------------------
+
+;   Lay a fake interrupt frame (popad+iretd compatible) at a new
+;   task's stack top, so the scheduler can start it like any preempted task.
 ;   in:  
 ;      eax = stack top 
 ;      edx = entry point
@@ -3974,11 +3660,11 @@ seed_frame:
     loop .zero
     ret
 
-; next active slot, round-robin.
+; advance to the next active slot, round-robin.
 ;   in:  
 ;      ecx = current slot
 ;   out: 
-;      ecx = next active slot (slot 0 is always active)
+;      ecx = next active slot (slot 0 is always active, so this terminates)
 next_task:
 .scan:
     inc ecx
@@ -4025,12 +3711,12 @@ proc_trampoline:
     sti                             
     mov eax,[current_task]
     mov eax,[proc_vbase+eax*4]
-    call eax                 ; run binary (ret/int 0x80 -> sys_exit)
+    call eax                         ; run binary (ret/int 0x80 -> sys_exit)
 
-;-----------------------------------
-; Tear down the current process.
+;------------------------------------
+; Tear down the current process give CPU to the next ready task.
 ; Not in use, (test for kill [PID])
-;-----------------------------------
+;------------------------------------
 proc_exit:
     cli
     mov ecx,[current_task]           
@@ -4044,7 +3730,7 @@ proc_exit:
     mov dword [proc_pages+ecx*4],0
     mov dword [proc_state+ecx*4],0   
 
-    ; switch to the next ready task (mirrors irq0's tail) 
+    ; --- switch to the next ready task (mirrors irq0's tail) ---
     call next_task
     mov [current_task],ecx
     mov esp,[task_esps+ecx*4]
@@ -4075,909 +3761,10 @@ irq0:
     popad
     iretd
 
-; -----------------------------------------------------------
-; 800x400x32 graphics mode (Bochs/QEMU VBE dispi+linear FB)
-; -----------------------------------------------------------
-pci_find_vga:
-    push ebx
-    push ecx
-    push edx
-    xor ebx,ebx                      ; device number 0..31
-.scan:
-    mov eax,0x80000000               ; enable | bus 0 | dev<<11 | func 0 | offset 0
-    mov ecx,ebx
-    shl ecx,11
-    or eax,ecx
-    mov dx,0xCF8
-    out dx,eax
-    mov dx,0xCFC
-    in eax,dx
-    cmp eax,0x11111234               ; (device 0x1111 << 16) | vendor 0x1234
-    je .found
-    inc ebx
-    cmp ebx,32
-    jb .scan
-    xor eax,eax                      ; not found
-    jmp .done
-.found:
-    mov eax,0x80000000               ; same device, offset 0x10 (BAR0)
-    mov ecx,ebx
-    shl ecx,11
-    or eax,ecx
-    or eax,0x10
-    mov dx,0xCF8
-    out dx,eax
-    mov dx,0xCFC
-    in eax,dx
-    and eax,0xFFFFFFF0               ; mask BAR flags -> LFB physical base
-.done:
-    pop edx
-    pop ecx
-    pop ebx
-    ret
-
-;   Map the LFB into virtual memory at LFB_VIRT (PDE 773).
-;   Runs once; sets gfx_mapped on success. Leaves flag 0 if no VGA.
-gfx_map_lfb:
-    pushad
-    call pci_find_vga
-    test eax,eax
-    jz .done                         ; no framebuffer -> stay in text mode
-    mov [lfb_phys],eax
-
-    ; PDE[773] -> gfx_page_table (phys = virt - 0xC0000000)
-    mov eax,gfx_page_table
-    sub eax,0xC0000000
-    or eax,3
-    mov [page_directory + 773*4],eax
-
-    ; fill PTEs: gfx_page_table[i] = (lfb_phys + i*4096) | present|rw
-    mov edi,gfx_page_table
-    mov eax,[lfb_phys]
-    or eax,3
-    mov ecx,GFX_PAGES
-.fill:
-    mov [edi],eax
-    add edi,4
-    add eax,4096
-    dec ecx
-    jnz .fill
-
-    mov eax,cr3                      ; flush TLB
-    mov cr3,eax
-    mov byte [gfx_mapped],1
-.done:
-    popad
-    ret
-
-;  800x400x32 linear framebuffer enabled.
-vbe_set:
-    push eax
-    push edx
-    mov dx,VBE_INDEX        ; ENABLE = 0 (disable while reconfiguring)
-    mov ax,4
-    out dx,ax
-    mov dx,VBE_DATA
-    xor ax,ax
-    out dx,ax
-    mov dx,VBE_INDEX        ; XRES
-    mov ax,1
-    out dx,ax
-    mov dx,VBE_DATA
-    mov ax,GFX_W
-    out dx,ax
-    mov dx,VBE_INDEX        ; YRES
-    mov ax,2
-    out dx,ax
-    mov dx,VBE_DATA
-    mov ax,GFX_H
-    out dx,ax
-    mov dx,VBE_INDEX        ; BPP
-    mov ax,3
-    out dx,ax
-    mov dx,VBE_DATA
-    mov ax,32
-    out dx,ax
-    mov dx,VBE_INDEX        ; ENABLE = ENABLED | LFB
-    mov ax,4
-    out dx,ax
-    mov dx,VBE_DATA
-    mov ax,0x41
-    out dx,ax
-    pop edx
-    pop eax
-    ret
-
-;  disable VBE; QEMU reverts to the VGA text mode.
-vbe_off:
-    push eax
-    push edx
-    mov dx,VBE_INDEX
-    mov ax,4
-    out dx,ax
-    mov dx,VBE_DATA
-    xor ax,ax
-    out dx,ax
-    pop edx
-    pop eax
-    ret
-
-;   black.
-gfx_clear:
-    push eax
-    push ecx
-    push edi
-    mov edi,LFB_VIRT
-    xor eax,eax
-    mov ecx,GFX_W*GFX_H
-    rep stosd
-    pop edi
-    pop ecx
-    pop eax
-    ret
-
-;  eax=x, ecx=y, ebx=color (0x00RRGGBB)
-gfx_plot:
-    push edx
-    push edi
-    mov edi,ecx
-    imul edi,GFX_PITCH
-    mov edx,eax
-    shl edx,2
-    add edi,edx
-    add edi,LFB_VIRT
-    mov [edi],ebx
-    pop edi
-    pop edx
-    ret
-
-hires:
-    pushad
-    ;call mandelbrot    
-    call mandel_simd    
-    popad
-    ret
-
-; ------------------------------------------------------------------
-;   Mandelbrot set across the 800x400 LFB using
-;   Q16.16 fixed-point. 
-; ------------------------------------------------------------------
-MAND_W     equ 800               ; render area (an 800x400 (600) bitmap)
-MAND_H     equ 400
-MAND_ITER  equ 128
-MAND_ESC   equ 0x00040000        ; 4.0 in Q16.16 (escape radius^2)
-; view is def at runtime 
-; [-2.5,1.0] x [-0.875,0.875] 
-MAND_STEP0 equ 287         ; scale: 3.5 / 800 (Q16.16), square pixels
-MAND_CX0   equ -49040      ; centre x ~= -0.748
-MAND_CY0   equ 0           ; centre y = 0
-
-mandelbrot:
-    pushad
-    ; top-left corner: x0=cx-(W/2)*step, y0=cy-(H/2)*step
-    mov eax,[mand_step]
-    imul eax,MAND_W/2
-    mov ebx,[mand_cx]
-    sub ebx,eax
-    mov [m_x0],ebx
-    mov eax,[mand_step]
-    imul eax,MAND_H/2
-    mov ebx,[mand_cy]
-    sub ebx,eax
-    mov [m_y0],ebx
-    xor edi,edi               ; py=0
-.row:
-    mov eax,edi               ; ci=y0+py*step
-    imul eax,[mand_step]
-    add eax,[m_y0]
-    mov [m_ci],eax
-    xor esi,esi               ; px=0
-.col:
-    mov eax,esi               ; cr=x0+px*step
-    imul eax,[mand_step]
-    add eax,[m_x0]
-    mov [m_cr],eax
-    mov dword [m_zr],0        ; z=0
-    mov dword [m_zi],0
-    xor ecx,ecx               ; iteration count
-.iter:
-    mov eax,[m_zr]            ; zr2=zr*zr
-    mov ebx,eax
-
-    ; 32-bit signed fixed-point
-    ; eax=(eax*ebx)>>16
-    imul ebx
-    shrd eax,edx,16
-
-    mov [m_zr2],eax
-    mov eax,[m_zi]            ; zi2=zi*zi
-    mov ebx,eax
-
-    imul ebx
-    shrd eax,edx,16
-
-    mov [m_zi2],eax
-    mov eax,[m_zr2]           ; escape if zr2+zi2>4.0
-    add eax,[m_zi2]
-    cmp eax,MAND_ESC
-    jg .escaped
-    mov eax,[m_zr]            ; zi=2*zr*zi+ci 
-    mov ebx,[m_zi]
-
-    imul ebx
-    shrd eax,edx,16
-    
-    shl eax,1
-    add eax,[m_ci]
-    mov ebx,eax               ; hold new zi
-    mov eax,[m_zr2]           ; zr=zr2-zi2+cr
-    sub eax,[m_zi2]
-    add eax,[m_cr]
-    mov [m_zr],eax
-    mov [m_zi],ebx
-    inc ecx
-    cmp ecx,MAND_ITER
-    jl .iter
-    xor ebx,ebx               ; bounded->black
-    jmp .plot
-.escaped:
-    mov eax,ecx               ; color=mandel_colors[iter%MAND_NCOL]
-    xor edx,edx
-    mov ebx,MAND_NCOL
-    div ebx
-    mov ebx,[mandel_colors+edx*4]
-.plot:
-    mov eax,esi               ; x=px
-    mov ecx,edi               ; y=py
-    call gfx_plot
-    inc esi
-    cmp esi,MAND_W
-    jl .col
-    inc edi
-    cmp edi,MAND_H
-    jl .row
-    call corners
-    popad
-    ret
-
-; ---------------------------------------------
-; Mandelbrot view controls (irq1).
-; ---------------------------------------------
-mand_reset:
-    mov dword [mand_cx],MAND_CX0
-    mov dword [mand_cy],MAND_CY0
-    mov dword [mand_step],MAND_STEP0
-    ret
-mand_zoom_in:          ; 0.5 the scale->2x zoom
-    mov eax,[mand_step]
-    shr eax,1
-    cmp eax,1
-    jge .s
-    mov eax,1
-.s:
-    mov [mand_step],eax
-    ret
-mand_zoom_out:         ; *2 the scale, clamp at 4096
-    mov eax,[mand_step]
-    shl eax,1
-    cmp eax,4096
-    jle .s
-    mov eax,4096
-.s:
-    mov [mand_step],eax
-    ret
-; pan by ~100 pixels 
-mand_pan_left:
-    mov eax,[mand_step]
-    imul eax,100
-    sub [mand_cx],eax
-    ret
-mand_pan_right:
-    mov eax,[mand_step]
-    imul eax,100
-    add [mand_cx],eax
-    ret
-mand_pan_up:
-    mov eax,[mand_step]
-    imul eax,100
-    sub [mand_cy],eax
-    ret
-mand_pan_down:
-    mov eax,[mand_step]
-    imul eax,100
-    add [mand_cy],eax
-    ret
-
-; ------------------------------------------------------------------
-;   Turn on SSE (clear CR0.EM, set CR0.MP, set CR4.OSFXSR|OSXMMEXCPT).
-;   Must run at CPL 0. The kernel is otherwise integer-only.
-; ------------------------------------------------------------------
-sse_enable:
-    push eax
-    mov eax,cr0
-    and eax,0xFFFFFFFB          ; clear EM (bit 2)
-    or  eax,0x00000002          ; set MP (bit 1)
-    mov cr0,eax
-    mov eax,cr4
-    or  eax,0x00000600          ; set OSFXSR (9) | OSXMMEXCPT (10)
-    mov cr4,eax
-    pop eax
-    ret
-
-; ------------------------------------------------------------------
-;   Mandelbrot on the 800x400x32 LFB using SSE — 4 pixels per
-;   iteration loop (packed single-precision floats). 
-; ------------------------------------------------------------------
-mandel_simd:
-    pushad
-    call sse_enable
-    xor edi,edi                  ; py=0
-.row:
-    xor esi,esi                  ; px=0 (group of 4)
-.col:
-    cvtsi2ss xmm2,esi            ; cr=xmin+px*step,then bcast+lane offsets
-    mulss xmm2,[sf_step]
-    addss xmm2,[sf_xmin]
-    shufps xmm2,xmm2,0
-    addps xmm2,[sv_lanestep]     ; xmm2=cr for the 4 lanes
-    cvtsi2ss xmm3,edi            ; ci=ymin+py*step (same for all 4 lanes)
-    mulss xmm3,[sf_step]
-    addss xmm3,[sf_ymin]
-    shufps xmm3,xmm3,0           ; xmm3=ci
-    xorps xmm0,xmm0              ; zr=0
-    xorps xmm1,xmm1              ; zi=0
-    xorps xmm4,xmm4              ; iter=0
-    mov ecx,MAND_ITER
-.it:
-    movaps xmm5,xmm0             ; zr2=zr*zr
-    mulps  xmm5,xmm0
-    movaps xmm6,xmm1             ; zi2=zi*zi
-    mulps  xmm6,xmm1
-    movaps xmm7,xmm5             ; mag=zr2+zi2
-    addps  xmm7,xmm6
-    cmpleps xmm7,[sv_four]       ; mask=(mag<=4.0) per lane
-    movmskps eax,xmm7
-    test eax,eax
-    jz .esc                      ; all 4 lanes escaped
-    andps xmm7,[sv_one]          ; iter++ for lanes still bounded
-    addps xmm4,xmm7
-    movaps xmm7,xmm0             ; zi=2*zr*zi+ci 
-    mulps  xmm7,xmm1
-    mulps  xmm7,[sv_two]
-    addps  xmm7,xmm3
-    subps  xmm5,xmm6             ; zr=zr2-zi2+cr
-    addps  xmm5,xmm2
-    movaps xmm0,xmm5
-    movaps xmm1,xmm7
-    dec ecx
-    jnz .it
-.esc:
-    cvttps2dq xmm4,xmm4         ; iteration counts->packed int32
-    movaps [simd_iter_buf],xmm4
-    xor edx,edx                 ; lane=0..3
-.plot:
-    push edx
-    mov eax,[simd_iter_buf+edx*4]
-    cmp eax,MAND_ITER
-    jae .black                  ; never escaped -> interior
-    xor edx,edx
-    mov ecx,MAND_NCOL
-    div ecx                     ; edx=iter%MAND_NCOL
-    mov ebx,[mandel_colors+edx*4]
-    jmp .put
-.black:
-    xor ebx,ebx
-.put:
-    pop edx
-    mov eax,esi                 ; x=px+lane
-    add eax,edx
-    mov ecx,edi                 ; y=py
-    call gfx_plot            
-    inc edx
-    cmp edx,4
-    jb .plot
-    add esi,4                   ; next group of 4 columns
-    cmp esi,MAND_W
-    jl .col
-    inc edi
-    cmp edi,MAND_H
-    jl .row
-    popad
-    ret
-
-; ------------------------
-
-gfx_on:
-    cmp byte [gfx_mapped],1
-    je .ready
-    call gfx_map_lfb
-    cmp byte [gfx_mapped],1
-    jne .fail                       ; mapping failed -> stay in text mode
-.ready:
-    cmp byte [font_saved],0
-    jne .skipfont
-    call vga_save_font           
-.skipfont:
-    call vbe_set
-    call gfx_clear
-    call mand_reset                
-    call hires
-    mov byte [gfx_mode],1
-.fail:
-    ret
-
-;-----------------
-corners:
-    mov eax,400
-    mov ecx,200
-    mov ebx,0x00FF88FF
-    call gfx_plot
-
-    ; Top-Left (White)
-    mov eax,0            ; X = 0
-    mov ecx,0            ; Y = 0
-    mov ebx,0x00FFFFFF   ; Color = White
-    call gfx_plot
-
-    ; Top-Right (Red)
-    mov eax,799          ; X = 799 (Max Width)
-    mov ecx,0            ; Y = 0
-    mov ebx,0x00FF0000   ; Color = Red
-    call gfx_plot
-
-    ; Bottom-Left (Green)
-    mov eax,0            ; X = 0
-    mov ecx,399          ; Y = 399 (Max Height)
-    mov ebx,0x0000FF00   ; Color = Green
-    call gfx_plot
-
-    ; Bottom-Right (Blue)
-    mov eax,799          ; X = 799
-    mov ecx,399          ; Y = 399
-    mov ebx,0x000000FF   ; Color = Blue
-    call gfx_plot
-    ret
-
-;  VGA plane 2 (text font) linearly @ 0xA000.
-vga_plane2_access:
-    push eax
-    push edx
-    mov dx,0x3C4        ; SEQ reset
-    mov al,0x00
-    out dx,al
-    mov dx,0x3C5
-    mov al,0x01
-    out dx,al
-    mov dx,0x3C4        ; map mask=plane 2
-    mov al,0x02
-    out dx,al
-    mov dx,0x3C5
-    mov al,0x04
-    out dx,al
-    mov dx,0x3C4        ; mem mode=ext, sequential, odd/even off
-    mov al,0x04
-    out dx,al
-    mov dx,0x3C5
-    mov al,0x07
-    out dx,al
-    mov dx,0x3C4        ; end reset
-    mov al,0x00
-    out dx,al
-    mov dx,0x3C5
-    mov al,0x03
-    out dx,al
-    mov dx,0x3CE       ; GC read map select = plane 2
-    mov al,0x04
-    out dx,al
-    mov dx,0x3CF
-    mov al,0x02
-    out dx,al
-    mov dx,0x3CE       ; GC mode = 0
-    mov al,0x05
-    out dx,al
-    mov dx,0x3CF
-    mov al,0x00
-    out dx,al
-    mov dx,0x3CE       ; GC misc = map 0xA0000, planar
-    mov al,0x06
-    out dx,al
-    mov dx,0x3CF
-    mov al,0x00
-    out dx,al
-    pop edx
-    pop eax
-    ret
-
-; 8x16 font (plane 2) -> font_save.
-vga_save_font:
-    pushad
-    call vga_plane2_access
-    mov esi,0xC00A0000
-    mov edi,font_save
-    mov ecx,8192/4
-    rep movsd
-    mov byte [font_saved],1
-    popad
-    ret
-
-vga_restore_font:
-    pushad
-    cmp byte [font_saved],0
-    je .done
-    call vga_plane2_access
-    mov esi,font_save
-    mov edi,0xC00A0000
-    mov ecx,8192/4
-    rep movsd
-.done:
-    popad
-    ret
-
-;   VGA controller for 80x25 text (mode 0x03).
-vga_mode3:
-    pushad
-    mov dx,0x3C2            ; Misc Output
-    mov al,0x67
-    out dx,al
-
-    mov esi,vga_seq_m3      ; Sequencer 0..4
-    xor ecx,ecx
-.seq:
-    mov dx,0x3C4
-    mov al,cl
-    out dx,al
-    mov dx,0x3C5
-    lodsb
-    out dx,al
-    inc ecx
-    cmp ecx,5
-    jb .seq
-
-    mov dx,0x3D4           ; clear protect bit
-    mov al,0x11
-    out dx,al
-    mov dx,0x3D5
-    mov al,0x0E
-    out dx,al
-
-    mov esi,vga_crtc_m3   
-    xor ecx,ecx
-.crtc:
-    mov dx,0x3D4
-    mov al,cl
-    out dx,al
-    mov dx,0x3D5
-    lodsb
-    out dx,al
-    inc ecx
-    cmp ecx,0x19
-    jb .crtc
-
-    mov esi,vga_gc_m3    
-    xor ecx,ecx
-.gc:
-    mov dx,0x3CE
-    mov al,cl
-    out dx,al
-    mov dx,0x3CF
-    lodsb
-    out dx,al
-    inc ecx
-    cmp ecx,9
-    jb .gc
-
-    mov dx,0x3DA          ; reset attribute flip-flop
-    in al,dx
-    mov esi,vga_ac_m3     
-    xor ecx,ecx
-.ac:
-    mov dx,0x3C0
-    mov al,cl
-    out dx,al
-    lodsb
-    out dx,al             
-    inc ecx
-    cmp ecx,0x15
-    jb .ac
-    mov dx,0x3C0
-    mov al,0x20           ; re-enable video output, lock palette
-    out dx,al
-    mov dx,0x3C6          ; PEL mask
-    mov al,0xFF
-    out dx,al
-    popad
-    ret
-; What a pain in the...
-vga_seq_m3:  db 0x03,0x00,0x03,0x00,0x02
-vga_crtc_m3: db 0x5F,0x4F,0x50,0x82,0x55,0x81,0xBF,0x1F,0x00,0x4F,0x0D,0x0E
-             db 0x00,0x00,0x00,0x00,0x9C,0x8E,0x8F,0x28,0x1F,0x96,0xB9,0xA3,0xFF
-vga_gc_m3:   db 0x00,0x00,0x00,0x00,0x00,0x10,0x0E,0x00,0xFF
-vga_ac_m3:   db 0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07,0x38,0x39,0x3A,0x3B
-             db 0x3C,0x3D,0x3E,0x3F,0x0C,0x00,0x0F,0x08,0x00
-
-; restore text mode.
-gfx_off:
-    call vbe_off
-    call vga_restore_font   ; repaint the 8x16 text font 
-    call vga_mode3          ; bring back the 80x25 text 
-    mov byte [gfx_mode],0
-    call cls
-    call sys_banner
-    mov eax,80*2
-    mov [cursor_pos],eax
-    call newline
-    call prompt
-    ret
-
-; ESC handler
-gfx_toggle:
-    cmp byte [gfx_mode],0
-    jne .leave
-    call gfx_on
-    ret
-.leave:
-    call gfx_off
-    ret
-
-;--------------------------------------------------------------
-; 320x200x256, linear framebuffer at 0xA0000.
-; The `mode13` command enters mode 13h; the shell keeps running 
-; `setpixel x y c`, `clearpixel x y` and `clear` 
-; work from the (invisible) text prompt.  ;-)
-;--------------------------------------------------------------
-
-vga_mode13:
-    pushad
-    mov dx,0x3C2               ; Misc Output
-    mov al,0x63
-    out dx,al
-
-    mov esi,vga_seq_m13        ; Sequencer 0..4
-    xor ecx,ecx
-.seq:
-    mov dx,0x3C4
-    mov al,cl
-    out dx,al
-    mov dx,0x3C5
-    lodsb
-    out dx,al
-    inc ecx
-    cmp ecx,5
-    jb .seq
-
-    mov dx,0x3D4              ; unlock CRTC 0-7
-    mov al,0x11
-    out dx,al
-    mov dx,0x3D5
-    mov al,0x0E
-    out dx,al
-
-    mov esi,vga_crtc_m13       ; CRTC 0..0x18
-    xor ecx,ecx
-.crtc:
-    mov dx,0x3D4
-    mov al,cl
-    out dx,al
-    mov dx,0x3D5
-    lodsb
-    out dx,al
-    inc ecx
-    cmp ecx,0x19
-    jb .crtc
-
-    mov esi,vga_gc_m13         ; Graphics Controller 0..8
-    xor ecx,ecx
-.gc:
-    mov dx,0x3CE
-    mov al,cl
-    out dx,al
-    mov dx,0x3CF
-    lodsb
-    out dx,al
-    inc ecx
-    cmp ecx,9
-    jb .gc
-
-    mov dx,0x3DA             ; reset attribute flip-flop
-    in al,dx
-    mov esi,vga_ac_m13       ; Attribute Controller 0..0x14
-    xor ecx,ecx
-.ac:
-    mov dx,0x3C0
-    mov al,cl
-    out dx,al
-    lodsb
-    out dx,al
-    inc ecx
-    cmp ecx,0x15
-    jb .ac
-    mov dx,0x3C0
-    mov al,0x20              ; unblank
-    out dx,al
-
-    call m13_palette
-    popad
-    ret
-; Me made a typo? ;-)
-vga_seq_m13:  db 0x03,0x01,0x0F,0x00,0x0E
-vga_crtc_m13: db 0x5F,0x4F,0x50,0x82,0x54,0x80,0xBF,0x1F,0x00,0x41,0x00,0x00
-              db 0x00,0x00,0x00,0x00,0x9C,0x8E,0x8F,0x28,0x40,0x96,0xB9,0xA3
-              db 0xFF
-vga_gc_m13:   db 0x00,0x00,0x00,0x00,0x00,0x40,0x05,0x0F,0xFF
-vga_ac_m13:   db 0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A
-              db 0x0B,0x0C,0x0D,0x0E,0x0F,0x41,0x00,0x0F,0x00,0x00
-
-;   256-entry RGB332 palette to the DAC.
-;   index bits RRRGGGBB -> 
-;   0x00 black, 0xFF white, 0xE0 red, 0x1C green, 0x03 blue.
-m13_palette:
-    push eax
-    push ecx
-    push edx
-    mov dx,0x3C8           ; DAC write index
-    xor al,al
-    out dx,al              ; start at colour 0
-    mov dx,0x3C9           ; DAC data
-    xor ecx,ecx
-.loop:
-    mov eax,ecx            ; red   = ((i>>5)&7)*9  (0..63)
-    shr eax,5
-    and eax,7
-    imul eax,eax,9
-    out dx,al
-    mov eax,ecx            ; green = ((i>>2)&7)*9
-    shr eax,2
-    and eax,7
-    imul eax,eax,9
-    out dx,al
-    mov eax,ecx            ; blue  = (i&3)*21
-    and eax,3
-    imul eax,eax,21
-    out dx,al
-    inc ecx
-    cmp ecx,256
-    jb .loop
-    pop edx
-    pop ecx
-    pop eax
-    ret
-
-; fill the framebuffer with color 0
-m13_clear:
-    push eax
-    push ecx
-    push edi
-    mov edi,M13_FB
-    xor eax,eax
-    mov ecx,M13_W*M13_H/4
-    rep stosd
-    pop edi
-    pop ecx
-    pop eax
-    ret
-
-;   set one pixel.  eax = x (0..319), ecx = y (0..199), bl = color.
-m13_plot:
-    push edi
-    imul edi,ecx,M13_W       ; y*320
-    add edi,eax              ; + x
-    add edi,M13_FB
-    mov [edi],bl
-    pop edi
-    ret
-
-;   filled red disc centred on the screen 
-;   Scans the bounding box and plots where dx*dx+dy*dy <= r*r.
-M13_CX equ M13_W/2
-M13_CY equ M13_H/2
-M13_R  equ 30
-m13_test_circle:
-    pushad
-    mov esi,-M13_R              ; dy
-.yloop:
-    mov edi,-M13_R              ; dx
-.xloop:
-    mov eax,edi
-    imul eax,edi                ; dx*dx
-    mov ebx,esi
-    imul ebx,esi                ; dy*dy
-    add eax,ebx
-    cmp eax,M13_R*M13_R         ; inside the disc?
-    jg .next
-    mov eax,M13_CX
-    add eax,edi                 ; x=cx+dx
-    mov ecx,M13_CY
-    add ecx,esi                 ; y=cy+dy
-    mov bl,0xE0                 ; RGB332 red
-    call m13_plot
-.next:
-    inc edi
-    cmp edi,M13_R
-    jle .xloop
-    inc esi
-    cmp esi,M13_R
-    jle .yloop
-    popad
-    ret
-
-;   Save current 256-entry DAC palette
-;   (R,G,B x 256 = 768 bytes)
-vga_save_dac:
-    pushad
-    mov dx,0x3C7            ; DAC read index
-    xor al,al
-    out dx,al               ; start reading at color 0
-    mov dx,0x3C9            ; DAC data
-    mov edi,dac_save
-    mov ecx,768
-.loop:
-    in al,dx
-    mov [edi],al
-    inc edi
-    dec ecx
-    jnz .loop
-    popad
-    ret
-
-; write back into the DAC palette.
-vga_restore_dac:
-    pushad
-    mov dx,0x3C8           ; DAC write index
-    xor al,al
-    out dx,al              ; start writing at color 0
-    mov dx,0x3C9           ; DAC data
-    mov esi,dac_save
-    mov ecx,768
-.loop:
-    mov al,[esi]
-    out dx,al
-    inc esi
-    dec ecx
-    jnz .loop
-    popad
-    call gfx_off  ;Well... it worked...
-    ret
-
-;   enter mode 13h from text mode with a black screen. 
-mode13_on:
-    cmp byte [gfx_mode],0    ; only from text mode, not from 800x400
-    jne .ret
-    cmp byte [mode13],0      ; already in mode 13h?
-    jne .ret
-    cmp byte [font_saved],0
-    jne .skipfont
-    call vga_save_font       
-.skipfont:
-    call vga_save_dac         
-    call vga_mode13
-    call m13_clear
-    call m13_test_circle   
-    mov byte [mode13],1
-.ret:
-    ret
-
-;  restore the text console & its palette.
-mode13_off:
-    call vga_restore_font
-    call vga_mode3
-    call vga_restore_dac     
-    mov byte [mode13],0
-    call cls
-    call sys_banner
-    mov eax,80*2
-    mov [cursor_pos],eax
-    call newline
-    call prompt
-    ret
-
 irq1:
     pushad
     in al,0x60
     mov bl,al
-    cmp bl,0x01              ; ESC -> 800x400 graphics toggle
-    je .esc
-    cmp bl,41   ;0x3F        ; § -> mode 13h toggle
-    je .pnd
     cmp bl,0x2A
     je .shift_on
     cmp bl,0x36
@@ -4988,64 +3775,11 @@ irq1:
     je .shift_off
     test bl,0x80
     jnz .done
-    cmp byte [gfx_mode],0   ; 800x400 graphics: keys Mandelbrot view
-    jne .gfxkeys
     mov eax,[kbd_head]
     mov [kbd_buf+eax],bl
     inc eax
     and eax,255
     mov [kbd_head],eax
-    jmp .done
-
-; Mandelbrot zoom/pan 
-.gfxkeys:
-    cmp bl,0x4B             ; Left
-    je .g_left
-    cmp bl,0x4D             ; Right
-    je .g_right
-    cmp bl,0x48             ; Up
-    je .g_up
-    cmp bl,0x50             ; Down
-    je .g_down
-    cmp bl,12 ;0x4E         ; keypad +
-    je .g_zin
-    cmp bl,53 ;0x4A         ; keypad -
-    je .g_zout
-    cmp bl,0x13             ; R -> reset view
-    je .g_reset
-    jmp .done               ; any other key: ignore
-.g_left:
-    call mand_pan_left
-    jmp .g_render
-.g_right:
-    call mand_pan_right
-    jmp .g_render
-.g_up:
-    call mand_pan_up
-    jmp .g_render
-.g_down:
-    call mand_pan_down
-    jmp .g_render
-.g_zin:
-    call mand_zoom_in
-    jmp .g_render
-.g_zout:
-    call mand_zoom_out
-    jmp .g_render
-.g_reset:
-    call mand_reset
-.g_render:
-    call mandelbrot
-    jmp .done
-.esc:
-    cmp byte [mode13],0     ; ESC does nothing while in mode 13h
-    jne .done
-    call gfx_toggle
-    jmp .done
-.pnd:
-    cmp byte [mode13],0     
-    je .done
-    call mode13_off
     jmp .done
 .shift_on:
     mov byte [kbd_shift],1
@@ -5091,100 +3825,59 @@ pic_remap:
     out 0x21,al
     out 0xA1,al
 
-    pop ax              ; AL = Slave mask, AH = Master mask
+    pop ax               ; AL = Slave mask, AH = Master mask
     out 0xA1,al         ; Restore Slave mask
     mov al,ah           ; Put Master mask back into AL
     out 0x21,al         ; Restore Master mask
     popa
     ret
 
-;   set the PIT timer frequency from the command line.
-;   Reads argv[1] (decimal Hz); clamps to 10..2000, default 100
-;   Returns eax = Hz.
-sys_setfreq:
+freq_cmd:
+    push eax
     push ecx
     push edx
     push esi
 
-    mov edx,100
+    mov edx,100      
     mov eax,[argc]
     cmp eax,2
-    jl .set_pit
+    jl .set_pit      
 
     mov esi,[argv+4]
-    call sys_asc2int 
+    call sys_asc2int     
 
-    cmp edx,10
+    cmp edx,10          
     jl .use_default
-    cmp edx,2000
+    cmp edx,2000        
     jg .use_default
     jmp .set_pit
+
 .use_default:
-    mov edx,100
+    mov edx,100      
+
 .set_pit:
-    mov [hz],edx
-    mov ecx,edx
-    mov eax,1193182
-    xor edx,edx
-    div ecx                      ; eax  divisor=1193182/hz
-    mov ecx,eax
-    mov al,0x36
+    mov [hz],edx  
+    mov ecx,edx       
+    xor edx,edx       
+    mov eax,1193182     
+    div ecx         
+    
+    mov ecx,eax            
+    mov al,0x36      
     out 0x43,al
-    mov al,cl                    ; divisor low byte
+
+    ; --- Send Low Byte ---
+    mov al,cl        
     out 0x40,al
-    mov al,ch                    ; divisor high byte
+
+    ; --- Send High Byte ---
+    mov al,ch         
     out 0x40,al
-    mov eax,[hz]                 ; return the frequency set
+
     pop esi
     pop edx
     pop ecx
-    ret
-
-;   VGA mode 13h (mode13 command). 
-;   F5 or § returns to text mode?
-sys_mode13:
-    call mode13_on
-    xor eax,eax
-    ret
-
-;   plot one pixel in mode 13h.
-;   ebx = x (0..319), ecx = y (0..199), edx = color (RGB332 index).
-sys_setpixel:
-    cmp byte [mode13],0
-    je .done
-    cmp ebx,M13_W
-    jae .done
-    cmp ecx,M13_H
-    jae .done
-    mov eax,ebx                  ; m13_plot x in eax
-    mov bl,dl                    ; colour in bl 
-    call m13_plot                ; eax=x, ecx=y, bl=colour
-.done:
-    xor eax,eax
-    ret
-
-;   clear one pixel in mode 13h.
-sys_clearpixel:
-    cmp byte [mode13],0
-    je .done
-    cmp ebx,M13_W
-    jae .done
-    cmp ecx,M13_H
-    jae .done
-    mov eax,ebx                  ; x in eax
-    xor bl,bl                    ; color 0
-    call m13_plot
-.done:
-    xor eax,eax
-    ret
-
-; cls the mode-13h framebuffer to black.
-sys_gclear:
-    cmp byte [mode13],0
-    je .done
-    call m13_clear
-.done:
-    xor eax,eax
+    pop eax
     ret
 
 set_freq:
@@ -5216,67 +3909,15 @@ esp_lbl db "ESP: ",0
 section .data
 
 tick_flag    db 0
-tick_count   dd 0
-tick_div     dd 0
-cursor_pos   dd 0
+tick_count   dd 0      
+tick_div     dd 0     
+cursor_pos   dd 0 
 prompt_limit dd 0
-cmd_pos      dd 0      
-gfx_mode     db 0      ; 0 = text mode, 1 = 800x400 graphics
-mode13       db 0      ; 1 = VGA mode 0x13 (320x200x256) active
-gfx_mapped   db 0     
-banner_mode  db 0     
-lfb_phys     dd 0      
-
-mandel_colors:
-    dd 0x00000764
-    dd 0x00001E96
-    dd 0x000048C8
-    dd 0x000082D8
-    dd 0x0000C0E0
-    dd 0x0020E0B0
-    dd 0x0060F070
-    dd 0x00A8F840
-    dd 0x00E0F020
-    dd 0x00F8C000
-    dd 0x00F88800
-    dd 0x00F04800
-    dd 0x00D01030
-    dd 0x00A00880
-    dd 0x006018C0
-    dd 0x004008A0
-mandel_colors_end:
-MAND_NCOL equ (mandel_colors_end - mandel_colors) / 4
-
-; --- Mandelbrot view (Q16.16)
-mand_cx   dd -49040
-mand_cy   dd 0
-mand_step dd 287
-
-font_saved   db 0  
-
-; mandel_simd (SSE) constants: packed single floats
-align 16
-sv_lanestep dd 0.0, 0.004375, 0.00875, 0.013125  ; step * [0,1,2,3]
-sv_four     dd 4.0, 4.0, 4.0, 4.0                ; escape radius^2
-sv_two      dd 2.0, 2.0, 2.0, 2.0
-sv_one      dd 1.0, 1.0, 1.0, 1.0
-sf_xmin     dd -2.5
-sf_ymin     dd -0.875
-sf_step     dd 0.004375      ; 3.5/800 = 1.75/400 (square)
-    
-
-login_user_msg db "Login: ",0
-login_pass_msg db "Password: ",0
-login_ok_msg   db "Access granted",13,0
-login_bad_msg  db "Login incorrect",13,0
-login_root     db "aug6",0       ;NEVER AGAIN!
-login_secret   db "1945",0
-login_shift    db 0     
-login_echo     db 0              ;1=echo, 0=mask *
 
 ;--- buffers ---
 kbd_head     dd 0
 kbd_tail     dd 0
+; kbd_buf in .bss
 
 out_mem         db "OUT OF MEMORY - KEEP DREAMING",13,0
 too_many_msg    db 13,"too many processes",13,0
@@ -5293,8 +3934,6 @@ bad_free_msg    db "invalid allocation",13,0
 pf_msg          db 13,"PAGE FAULT",13,0
 pf_addr         db "ADDRESS: 0x",0
 command_nf_msg   db 13,"command not found",13,0
-run_file         db "exec.cmd",0
-run_nofile_msg   db "exec.cmd not found",13,0
 
 hz                     dd 100,0
 kernel_phys_start_var: dd 0
@@ -5316,13 +3955,15 @@ exec_pages   dd 0
 
 argc         dd 0
 argv times 16 dd 0
-bg_flag      dd 0    ; 1 = exec_bin in background (trailing '&')
-detach_req   db 0    ; 1 = running process to self-background (sys_detach)
+bg_flag      dd 0          ; 1 = exec_bin in background (trailing '&')
 
 cmd_len      dd 0
+cmd_exec     dd 0
+; cmd_buf in .bss
 
 section .data
 current_task:  dd 0
+; --- process table (slot 0-2 = base tasks, 3+ = spawned /bin binaries) ---
 task_esps:                           ; saved kernel ESP per process
     task0_esp: dd 0
     task1_esp: dd 0
@@ -5334,13 +3975,15 @@ proc_vbase:                          ; binary virtual base, for cleanup (0 = non
     dd 0, 0, 0, 0, 0, 0, 0, 0
 proc_pages:                          ; binary page count, for cleanup (0 = none)
     dd 0, 0, 0, 0, 0, 0, 0, 0
-proc_name:                           ; for ps
+proc_name:                           ; snapshot of argv[0] per slot (for ps)
     times MAX_PROC*PROC_NAME_LEN db 0
 
 hist_count  dd 0
 hist_index  dd 0
+; hist_buf in .bss
 
 ;---- INTERRUPT DESC TABLE ----
+; idt_start/idt_end -> .bss
 idt_descriptor:
             dw idt_end-idt_start-1
             dd idt_start
@@ -5377,7 +4020,7 @@ syscall_table:
     dd sys_poke          ; 27: in = <address> <value> 
     dd sys_hex2int       ; 28: in = esi out = eax
     dd sys_banner        ; 29: print banner
-    dd sys_dydx          ; 30: Test
+    dd sys_bounce        ; 30: c64 style.
     dd sys_out_hex       ; 31: in = eax out=print hex word 
     dd sys_mem_dump      ; 32: in = esi -> address. out: print 64 bytes 
     dd sys_hex_byte      ; 33: print hex byte
@@ -5385,20 +4028,11 @@ syscall_table:
     dd sys_hertz         ; 35: print current hertz
     dd sys_tick          ; 36: print heartbeats
     dd sys_plot          ; 37: set block at ecx edx 
-    dd sys_epoch         ; 38: out: prints unixtime 
+    dd sys_epoch         ; 38: out: ebx = seconds 
     dd sys_putchar       ; 39: ebx = char
     dd sys_kill          ; 40: ebx = PID to terminate
     dd sys_reg_dump      ; 41: print regs
     dd sys_heap_info     ; 42: ebx = dst -> heap alloc table snapshot
-    dd sys_detach        ; 43: background the calling process (return to prompt)
-    dd sys_setfreq       ; 44: set PIT frequency from argv[1] (Hz)
-    dd sys_banner_flip   ; 45: Test
-    dd sys_mode13        ; 46: enter VGA mode 13h
-    dd sys_setpixel      ; 47: ebx=x ecx=y edx=colour -> plot pixel
-    dd sys_clearpixel    ; 48: ebx=x ecx=y -> clear pixel
-    dd sys_gclear        ; 49: clear the mode-13h framebuffer
-    dd sys_run           ; 50: run commands from exec.cmd one by one
-    dd sys_append        ; 51: esi=path,ebx=buf,ecx=n -> append to a file
 SYSCALL_COUNT equ ($-syscall_table)/4
 
 ;---- Keycode -> ASCII Convertion ----
@@ -5440,6 +4074,18 @@ keymap_shift:
     db ':'
     times 256-($-keymap_shift) db 0
 
+; --------------------------------------------------
+; format: db "command",0 
+;         dd address 
+; final   db 0
+; --------------------------------------------------
+cmd_table:
+    db "frequency",0
+    dd freq_cmd
+    db "epoch",0
+    dd epoch_cmd
+    db 0          ; end of internals
+
 ;---- in-kernel virtual filesystem ----
 %include "fs.inc"
 
@@ -5451,18 +4097,10 @@ alignb 16
 
 tab_match_count  resd 1
 tab_single_ptr   resd 1
-tab_pfx          resd 1   
-tab_pfxlen       resd 1   
-tab_mode         resb 1   
-tab_printing     resb 1    
 
 alignb 4
 kbd_buf          resb 256
-login_ubuf       resb 64
-login_pbuf       resb 64
 cmd_buf          resb 64
-run_ptr          resd 1        ; exec.cmd read cursor
-run_rem          resd 1        ; exec.cmd bytes remaining
 hist_buf         resb 32*64
 dir_buf          resb 512
 
@@ -5472,7 +4110,7 @@ resolve_buf      resb 128
 path_buf         resb 128
 tmp_dst          resd 1
 tmp_left         resd 1
-persist_buf      resb 2560    ; 5 sectors: metadata+2048 Bytes
+persist_buf      resb 1536    ; 3 sectors: metadata+1024 B content
 
 alignb 8
 idt_start:
@@ -5495,7 +4133,7 @@ task2_stack:
 task2_stack_top:
 
 alignb 16
-proc_stacks:        ; stacks for spawned processes (slots 3..MAX_PROC-1)
+proc_stacks:                 ; stacks for spawned processes (slots 3..MAX_PROC-1)
     resb (MAX_PROC-3)*4096
 proc_stacks_top:
 
@@ -5503,7 +4141,7 @@ proc_stacks_top:
 ;---- STACK ----
 alignb 16
 stack_bottom:
-    resb 16384      ; 16 KB stack  (256 bytes in C64)
+    resb 16384      ; 16 KB stack
 stack_top:
 
 alignb 4096
@@ -5529,31 +4167,6 @@ heap_page_table_1:
 alignb 4096
 heap_page_table_2:
     resd 1024
-
-alignb 4096
-gfx_page_table:            ; maps the 800x400 LFB at LFB_VIRT (PDE 773)
-    resd 1024
-
-alignb 4
-m_zr  resd 1               ; Mandelbrot Q16.16 working values
-m_zi  resd 1
-m_cr  resd 1
-m_ci  resd 1
-m_zr2 resd 1
-m_zi2 resd 1
-m_x0  resd 1               ; view tlc (derived from centre/scale)
-m_y0  resd 1
-
-
-alignb 16   
-simd_iter_buf resd 4       ; 4 packed iteration counts (movaps target)
-
-alignb 4
-font_save:                 ; VGA text font (plane 2, 8 KB)
-    resb 8192
-
-dac_save:                  ; text-mode DAC palette (256*RGB)
-    resb 768
 
 alignb 4
 heap_start:

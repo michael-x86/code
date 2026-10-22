@@ -7,7 +7,8 @@ _start:
     pop ebp           
     sub ebp,.get_base     
 
+    ;lea esi,[ebp+help_lbl]
+    
     mov eax,24               ; sys_alloc
     int 0x80
-    mov eax,0             
-    int 0x80
+    ret
