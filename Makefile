@@ -14,7 +14,7 @@ PYTHON := python3
 QEMU   := qemu-system-i386
 
 IMG        := os.img
-KERNEL     := kernel.asm
+KERNEL     := kernel.inc
 BOOTLOADER := bootloader.asm
 
 # User programs compiled from commands/<name>.asm into VFS/bin/<name>.
@@ -28,7 +28,7 @@ BINS     := $(addprefix VFS/bin/,$(COMMANDS))
 
 MAX_PROG := 4096          # hard size cap per user program (bytes)
 
-# Embedded-FS persistence region — MUST match generate-fs.py and kernel.asm.
+# Embedded-FS persistence region — MUST match generate-fs.py and kernel.inc.
 FS_BASE_LBA         := 512
 FS_SPARE_COUNT      := 32
 FS_SECTORS_PER_SLOT := 5
@@ -77,7 +77,7 @@ $(FS_STAMP): Makefile
 	@printf '%s\n' \
 	    "MemTotal:         33554432 kB" \
 	    "MemFree:           8388608 kB" \
-	    "MemAvailable:     16777216 kB" \
+	    "MemAvailable:      16777216 kB" \
 	    "Buffers:           1048576 kB" \
 	    "Cached:            4194304 kB" \
 	    "SwapCached:              0 kB" \
