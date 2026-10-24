@@ -272,6 +272,7 @@ reserve_kernel_pages:
     ret
 
 %include "kmain.inc"
+%include "kterm.inc"
 section .bss
 ;----------------------------
 alignb 16
