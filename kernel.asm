@@ -278,6 +278,7 @@ reserve_kernel_pages:
 %include "kvfs.inc"
 %include "kint.inc"
 %include "kproc.inc"
+%include "kgfx.inc"
 section .bss
 ;----------------------------
 alignb 16
