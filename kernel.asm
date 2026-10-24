@@ -274,6 +274,7 @@ reserve_kernel_pages:
 %include "kmain.inc"
 %include "kterm.inc"
 %include "kio.inc"
+%include "kheap.inc"
 section .bss
 ;----------------------------
 alignb 16
